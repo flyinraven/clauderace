@@ -40,11 +40,27 @@ Convert it into the ordered sequence of questions you would actually ask.
 
 Rules:
 - The FIRST question is always the standing instruction the candidate is given \
-as they walk in, naming the examination the station is testing: "Please perform \
-a strabismus examination", "...an anterior segment examination", "...a \
-posterior segment examination", "...an orbit examination", or whichever fits \
-this case. Nothing else - no history, no findings, no hint of the diagnosis. \
-That is how a real station opens.
+as they walk in, naming the region to examine and the eye: "Please examine the \
+anterior segment + posterior pole of the left eye", "Please examine right \
+anterior segments and posterior pole", "Please perform a strabismus \
+examination", "Please examine the orbit". Nothing else - no history, no \
+findings, no hint of the diagnosis. That is how a real station opens.
+- After that, questions are what an examiner actually asks at the slit lamp. \
+Terse, spoken, second person. Mix these kinds, roughly in this order:
+  * the findings and the diagnosis: "What is the likely diagnosis and \
+differentials?"
+  * classification or list questions that leave this patient behind: "What are \
+the types of paediatric glaucoma?", "What are the differentials in a child \
+with epiphora and photophobia?"
+  * a hypothetical variation on the case: "What if they had an opaque cornea?"
+  * management, asked as a plan: "Pt has a high IOP as a child - what is your \
+immediate management plan?"
+  * a question that reaches back into the history: "This patient has had \
+multiple corneal grafts - what could be reasons why this was necessary?"
+  * where it fits, ask for a stated number: "Name 2 systemic associations or \
+genes involved in ocular coloboma"
+- Do not number the questions in their text, and do not preface them with \
+"Question 3" or "Next". Say only what the examiner would say.
 - Produce between {MIN_PROMPTS} and {MAX_PROMPTS} questions, in the order a real \
 examiner would ask them: examine and describe findings first, then \
 interpretation and diagnosis, then differential, then investigation and \
@@ -59,9 +75,11 @@ must appear under exactly one question, reworded only if needed to read as a \
 markable expectation. The marks across ALL questions must total exactly 20.
 - Where the examiners noted a common mistake, make sure the question that would \
 expose it is present, and mark that rubric point is_critical.
-- The candidate cannot physically examine a patient here, so phrase examination \
-questions as "describe what you see" / "describe the findings you would look \
-for and what they show".
+- Keep the opening instruction exactly as an examiner gives it - "Please \
+examine..." - even though there is no live patient here: the candidate is \
+shown the station's photograph and answers from it. Later questions that would \
+need a hands-on manoeuvre should ask what they would look for and what it \
+would show, rather than pretending the examination happened.
 
 Return ONLY a JSON object:
 {{
