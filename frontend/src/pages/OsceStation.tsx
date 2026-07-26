@@ -180,6 +180,9 @@ export default function OsceStation() {
   /** Finish this answer and move on; the upload runs in the background. */
   const nextPrompt = useCallback(async () => {
     if (!prompt) return
+    // Same reason as in begin(): stopping the recorder is async, and iOS stops
+    // treating this as a gesture once we await.
+    speech.unlock()
     const captured = await rec.stop()
     const isLast = index + 1 >= prompts.length
 
@@ -211,7 +214,7 @@ export default function OsceStation() {
       await load()
       setStage('review')
     }
-  }, [prompt, rec, index, prompts.length, uploadAnswer, load])
+  }, [prompt, rec, speech, index, prompts, uploadAnswer, load])
 
   // Time is up: capture whatever was being said and go to review.
   useEffect(() => {
@@ -242,6 +245,8 @@ export default function OsceStation() {
 
   const begin = async () => {
     if (!sittingId) return
+    // Must happen before any await, while the tap still counts as a gesture.
+    speech.unlock()
     const ok = await rec.requestAccess()
     if (!ok) return
     await api(`/osce/sittings/${sittingId}/begin`, { method: 'POST' })
@@ -353,6 +358,21 @@ export default function OsceStation() {
                   As the examiner would. Each question is spoken first, then recording
                   starts — so your answer never picks up the examiner's voice.
                 </span>
+                <span className="mt-1 block text-xs text-slate-500">
+                  On iPhone, take the side switch off silent — it mutes web audio.
+                  Tap below to check you can hear it.
+                </span>
+                <button
+                  type="button"
+                  className="mt-1.5 text-xs font-medium text-clinical-700 underline"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    speech.unlock()
+                    void speech.speak('Sound check. You should be able to hear this.')
+                  }}
+                >
+                  🔊 Test the sound
+                </button>
               </span>
             </label>
           )}
@@ -403,13 +423,24 @@ export default function OsceStation() {
                   variant="ghost"
                   size="sm"
                   title="Hear the question again"
-                  onClick={() => void speech.speak(prompt.text)}
+                  onClick={() => {
+                    // A direct tap, so no unlock dance is needed here.
+                    speech.unlock()
+                    void speech.speak(prompt.text)
+                  }}
                   disabled={speech.speaking}
                 >
-                  {speech.speaking ? 'Speaking…' : 'Repeat'}
+                  {speech.speaking ? 'Speaking…' : '🔊 Read aloud'}
                 </Button>
               )}
             </div>
+
+            {speech.supported && speech.enabled && !speech.everSpoke && (
+              <p className="mt-2 text-xs text-amber-700">
+                No sound yet? On iPhone the side switch mutes this — flick it off silent,
+                then press <strong>Read aloud</strong>.
+              </p>
+            )}
 
             <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
               <div className="flex items-center gap-3">

@@ -21,7 +21,9 @@ export function useSpeech() {
     () => (localStorage.getItem(ENABLED_KEY) ?? 'true') === 'true',
   )
   const [speaking, setSpeaking] = useState(false)
+  const [everSpoke, setEverSpoke] = useState(false)
   const current = useRef<SpeechSynthesisUtterance | null>(null)
+  const unlocked = useRef(false)
 
   useEffect(() => {
     setSupported(typeof window !== 'undefined' && 'speechSynthesis' in window)
@@ -38,9 +40,32 @@ export function useSpeech() {
   }, [])
 
   /**
-   * Speak `text`, resolving when it finishes. Must be called from a gesture
-   * handler on iOS. Resolves immediately when disabled or unsupported, so
-   * callers can always await it.
+   * Unlock the speech engine. MUST be called synchronously inside a tap
+   * handler, before any `await`.
+   *
+   * iOS only honours speak() when the call is still inside the gesture that
+   * triggered it. Any intervening await - asking for the microphone, hitting
+   * the API - ends that window, and WebKit then drops every later utterance
+   * silently: the page thinks it is speaking and nothing is heard. Speaking a
+   * single silent utterance while the gesture is still live unlocks synthesis
+   * for the rest of the session, after which async calls work normally.
+   */
+  const unlock = useCallback(() => {
+    if (unlocked.current || !('speechSynthesis' in window)) return
+    try {
+      const primer = new SpeechSynthesisUtterance(' ')
+      primer.volume = 0
+      window.speechSynthesis.speak(primer)
+      unlocked.current = true
+    } catch {
+      /* nothing to do - speak() will simply stay silent */
+    }
+  }, [])
+
+  /**
+   * Speak `text`, resolving when it finishes. Call `unlock()` from the gesture
+   * first. Resolves immediately when disabled or unsupported, so callers can
+   * always await it.
    */
   const speak = useCallback(
     (text: string): Promise<void> => {
@@ -65,16 +90,22 @@ export function useSpeech() {
           resolve()
         }
 
+        // Only claim to be speaking once the engine actually starts. Setting
+        // it optimistically made the UI report "Speaking..." while iOS had
+        // silently dropped the utterance, which is worse than saying nothing.
+        utterance.onstart = () => {
+          setSpeaking(true)
+          setEverSpoke(true)
+        }
         utterance.onend = finish
         utterance.onerror = finish
 
-        // Safety net: iOS occasionally never fires onend for a long utterance,
+        // Safety net: iOS sometimes never fires onend for a long utterance,
         // which would leave the station stuck before recording starts.
         const ceiling = Math.max(4000, text.length * 90)
         window.setTimeout(finish, ceiling)
 
         current.current = utterance
-        setSpeaking(true)
         window.speechSynthesis.speak(utterance)
       })
     },
@@ -83,5 +114,5 @@ export function useSpeech() {
 
   useEffect(() => cancel, [cancel])
 
-  return { supported, enabled, setEnabled, speaking, speak, cancel }
+  return { supported, enabled, setEnabled, speaking, everSpoke, speak, unlock, cancel }
 }
