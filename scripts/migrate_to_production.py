@@ -37,7 +37,6 @@ from app.models import Base  # noqa: E402
 
 # Order matters: parents before children.
 TABLE_ORDER = [
-    "users",
     "settings",
     "curriculum_standards",
     "images",
@@ -54,19 +53,63 @@ TABLE_ORDER = [
 ]
 
 # Local-only operational data.
+#
+# `users` is skipped deliberately: the production app creates its administrator
+# from BOOTSTRAP_ADMIN_EMAIL on first boot, which takes id 1, so copying local
+# accounts collides. Accounts are cheap to recreate; the bank is not.
 SKIP_ALWAYS = {
-    "jobs", "ai_calls", "error_log", "alembic_version",
+    "users", "jobs", "ai_calls", "error_log", "alembic_version",
     "exam_sessions", "answers", "grades", "session_results",
     "osce_sessions", "osce_responses", "osce_grades", "osce_results",
     "osce_circuits", "audio_clips", "invites",
 }
 
+# Because users are not migrated, any column pointing at a local user id would
+# dangle. All of them are nullable, so they are blanked on the way across -
+# "who uploaded this" is not worth breaking a migration over.
+USER_REFERENCE_COLUMNS = {
+    "created_by_id", "uploaded_by_id", "updated_by_id", "used_by_id",
+}
 
-def copy_table(src: Session, dst: Session, table, batch: int = 200) -> int:
+# Likewise when the original PDFs are left behind: "which upload did this come
+# from" is provenance, not content, and questions stand on their own without it.
+DOCUMENT_REFERENCE_COLUMNS = {"source_document_id"}
+
+
+def clear_target(dst: Session, tables: dict) -> None:
+    """Empty the tables we are about to fill.
+
+    A migration that dies partway through - a dropped connection, an oversized
+    batch - leaves some tables populated, and the re-run then collides on
+    primary keys. Clearing first makes the script safe to run repeatedly.
+    Only reached once the caller has confirmed the target holds no questions,
+    so there is no real content to lose.
+    """
+    for name in reversed(TABLE_ORDER):
+        table = tables.get(name)
+        if table is not None:
+            dst.execute(table.delete())
+    dst.commit()
+
+
+def copy_table(
+    src: Session, dst: Session, table, batch: int = 25, blank_documents: bool = True
+) -> int:
     rows = src.execute(select(table)).mappings().all()
     if not rows:
         return 0
-    payload = [dict(r) for r in rows]
+
+    droppable = set(USER_REFERENCE_COLUMNS)
+    if blank_documents:
+        droppable |= DOCUMENT_REFERENCE_COLUMNS
+    blank = droppable & set(table.columns.keys())
+    payload = []
+    for row in rows:
+        record = dict(row)
+        for column in blank:
+            record[column] = None
+        payload.append(record)
+
     for start in range(0, len(payload), batch):
         dst.execute(insert(table), payload[start : start + batch])
     dst.commit()
@@ -124,6 +167,9 @@ def main() -> int:
             print("Migrating again would duplicate them. Clear it first if that is intended.")
             return 1
 
+        if not args.dry_run:
+            clear_target(dst, tables)
+
         total = 0
         for name in TABLE_ORDER:
             if name in SKIP_ALWAYS:
@@ -140,7 +186,9 @@ def main() -> int:
                 print(f"  {name:24s} would copy {count}")
                 continue
 
-            copied = copy_table(src, dst, table)
+            copied = copy_table(
+                src, dst, table, blank_documents=not args.include_documents
+            )
             reset_sequences(dst, table)
             total += copied
             print(f"  {name:24s} copied {copied}")

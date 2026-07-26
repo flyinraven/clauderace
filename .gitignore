@@ -12,14 +12,20 @@ venv/
 *.db-wal
 *.db-shm
 .env
-.env.local
+.env.*
+!.env.example
+!.env.production.example
 .fernet_key
+*.pem
+id_ed25519*
+id_rsa*
 
 # Node
 node_modules/
 dist/
 .vite/
 *.local
+*.tsbuildinfo
 
 # Editors / OS
 .vscode/
@@ -30,3 +36,7 @@ Thumbs.db
 # Scratch
 tmp/
 scratch/
+
+# NOTE: this file lists patterns to ignore - it is itself tracked and pushed to
+# GitHub. Never put secrets here. They belong in backend/.env.production, which
+# the `.env.*` rule above excludes.
