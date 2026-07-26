@@ -61,6 +61,18 @@ multiple corneal grafts - what could be reasons why this was necessary?"
 genes involved in ocular coloboma"
 - Do not number the questions in their text, and do not preface them with \
 "Question 3" or "Next". Say only what the examiner would say.
+
+A real station, as written by the examiner who ran it - match this register:
+  "Please perform anterior segment examination for both eyes and perform \
+retinoscopy for the right eye only. His right pupil has been dilated."
+  "What is the presumed diagnosis?"
+  "How would you confirm the diagnosis?"
+  "What would be your general management of this patient if he was new to \
+your practice?"
+  "What are the criteria for keratoconus progression?"
+  "What are the risk factors for developing keratoconus? Name 4."
+  "If spectacle corrected vision is unsatisfactory and he is intolerant of \
+RGP, what are the other management options?"
 - Produce between {MIN_PROMPTS} and {MAX_PROMPTS} questions, in the order a real \
 examiner would ask them: examine and describe findings first, then \
 interpretation and diagnosis, then differential, then investigation and \
