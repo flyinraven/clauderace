@@ -112,9 +112,19 @@ def list_stations(user: CurrentUser, db: DbSession) -> list[StationSummary]:
 
 
 @router.post("/stations/build-prompts", status_code=status.HTTP_202_ACCEPTED)
-def build_prompts(admin: AdminUser, db: DbSession) -> dict[str, Any]:
-    """Turn flat stations into timed examiner question sequences."""
-    ids = stations_needing_prompts(db)
+def build_prompts(admin: AdminUser, db: DbSession, force: bool = False) -> dict[str, Any]:
+    """Turn flat stations into timed examiner question sequences.
+
+    `force` rebuilds stations that already have prompts. Needed when the way a
+    station opens changes: the wording is baked in at build time, so existing
+    stations keep the old opening until they are built again.
+    """
+    if force:
+        ids = list(
+            db.execute(select(OsceStation.id).order_by(OsceStation.id)).scalars().all()
+        )
+    else:
+        ids = stations_needing_prompts(db)
     if not ids:
         raise HTTPException(status_code=400, detail="Every station already has prompts")
     job = create_job(

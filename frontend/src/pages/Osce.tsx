@@ -125,9 +125,14 @@ export default function Osce() {
     }
   }
 
-  const prepareStations = async () => {
+  const prepareStations = async (force = false) => {
+    if (force && !confirm(`Rebuild the examiner questions for all ${stations.length} station(s)?
+
+Every station is rewritten from its rubric, so existing stations pick up the standing opening instruction. Marking already recorded is untouched, but it was given against the old wording.`)) {
+      return
+    }
     try {
-      const result = await api<{ job_id: number }>('/osce/stations/build-prompts', {
+      const result = await api<{ job_id: number }>(`/osce/stations/build-prompts${force ? '?force=true' : ''}`, {
         method: 'POST',
       })
       setPrepJob(result.job_id)
@@ -182,8 +187,13 @@ export default function Osce() {
             </Button>
           )}
           {user?.role === 'admin' && notReady > 0 && (
-            <Button variant="secondary" onClick={prepareStations}>
+            <Button variant="secondary" onClick={() => prepareStations()}>
               Prepare {notReady} station(s)
+            </Button>
+          )}
+          {user?.role === 'admin' && stations.length > 0 && (
+            <Button variant="ghost" onClick={() => prepareStations(true)}>
+              Rebuild all questions
             </Button>
           )}
           <Button onClick={startCircuit} loading={busy} disabled={ready.length === 0}>
