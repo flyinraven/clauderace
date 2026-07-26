@@ -251,6 +251,12 @@ class OsceStation(TimestampMixin, Base):
     case_summary: Mapped[str | None] = mapped_column(Text)
     aims: Mapped[list[str] | None] = mapped_column(JSON)
     patient_history: Mapped[str | None] = mapped_column(Text)
+
+    # All a candidate sees before they start: "An elderly woman", "A young boy".
+    # The full history names the diagnosis often enough that showing it hands
+    # over the answer, so it is withheld until the result alongside the signs.
+    patient_demographic: Mapped[str | None] = mapped_column(String(120))
+
     findings: Mapped[str | None] = mapped_column(Text)
     diagnosis: Mapped[str | None] = mapped_column(Text)
 

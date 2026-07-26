@@ -423,8 +423,11 @@ def get_sitting(session_id: int, user: CurrentUser, db: DbSession) -> dict[str, 
             "id": station.id,
             "subspecialty": station.subspecialty,
             "title": station.title,
-            "case_summary": station.case_summary,
-            "patient_history": station.patient_history,
+            # Neither the case summary nor the history is shown: both name or
+            # strongly imply the diagnosis. The candidate gets the patient in
+            # front of them, the examiner's opening question, and the image -
+            # which is what a real station gives them.
+            "patient_demographic": station.patient_demographic,
             "findings_given": given,
             "findings_pending_split": station.findings_split_status != "complete",
             "figures": figures,
@@ -642,6 +645,8 @@ def sitting_result(session_id: int, user: CurrentUser, db: DbSession) -> dict[st
             "title": station.title,
             "diagnosis": station.diagnosis,
             # Safe to reveal now the candidate has answered.
+            "case_summary": station.case_summary,
+            "patient_history": station.patient_history,
             "findings": station.findings,
             "findings_elicited": station.findings_elicited,
             "common_mistakes": station.common_mistakes,

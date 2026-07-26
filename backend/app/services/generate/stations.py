@@ -78,6 +78,9 @@ Return ONLY a JSON object:
   "subspecialty": "one of the nine",
   "case_summary": "one or two sentences of what the station presents",
   "aims": [string],
+  "patient_demographic": "all the candidate sees before starting - age band and
+                          sex only, e.g. 'An elderly woman', 'A young boy'.
+                          It must NOT hint at the diagnosis",
   "patient_history": "age, sex, presenting history and relevant background",
   "findings_given": "the measurements the examiner states",
   "findings_elicited": "the signs the candidate must find",
@@ -193,6 +196,7 @@ def generate_station(
         case_summary=_clean(data.get("case_summary")),
         aims=_string_list(data.get("aims")) or None,
         patient_history=_clean(data.get("patient_history")),
+        patient_demographic=_clean(data.get("patient_demographic")),
         findings="\n".join(x for x in [given, elicited] if x) or None,
         findings_given=given,
         findings_elicited=elicited,

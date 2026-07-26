@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api/client'
 import { useImage } from '../hooks/useImage'
 import { useRecorder } from '../hooks/useRecorder'
+import { useSpeech } from '../hooks/useSpeech'
 import { formatDuration } from '../hooks/useExamClock'
 import { Alert, Badge, Button, Card, Loading, Textarea, cx } from '../components/ui'
 
@@ -31,8 +32,9 @@ interface Sitting {
     id: number
     subspecialty: string | null
     title: string | null
-    case_summary: string | null
-    patient_history: string | null
+    // All you get before you start: "An elderly woman". The case summary and
+    // full history are withheld until the result - they name the diagnosis.
+    patient_demographic: string | null
     // Only what an examiner would state aloud. The signs you must elicit are
     // withheld until the result.
     findings_given: string | null
@@ -104,6 +106,7 @@ export default function OsceStation() {
   const [submitting, setSubmitting] = useState(false)
 
   const rec = useRecorder()
+  const speech = useSpeech()
   const autoAdvanced = useRef(false)
 
   const load = useCallback(async () => {
@@ -196,7 +199,12 @@ export default function OsceStation() {
     }
 
     if (!isLast) {
+      const next = prompts[index + 1]
       setIndex(index + 1)
+      // Ask the question first, then start recording. Speaking while the mic
+      // is live would put the examiner's voice into the candidate's answer.
+      // This runs inside the button's gesture handler, which iOS requires.
+      if (next) await speech.speak(next.text)
       await rec.start()
     } else {
       rec.release()
@@ -237,7 +245,11 @@ export default function OsceStation() {
     const ok = await rec.requestAccess()
     if (!ok) return
     await api(`/osce/sittings/${sittingId}/begin`, { method: 'POST' })
-    await load()
+    const data = await api<Sitting>(`/osce/sittings/${sittingId}`)
+    setSitting(data)
+    setRemaining(data.clock.seconds_remaining)
+    const first = data.prompts[0]
+    if (first) await speech.speak(first.text)
     await rec.start()
   }
 
@@ -326,6 +338,25 @@ export default function OsceStation() {
               interrupts you mid-station.
             </p>
           </div>
+
+          {speech.supported && (
+            <label className="mt-4 flex items-start gap-3 rounded-lg border border-slate-200 p-3">
+              <input
+                type="checkbox"
+                checked={speech.enabled}
+                onChange={(e) => speech.setEnabled(e.target.checked)}
+                className="mt-1 h-4 w-4 rounded border-slate-300 text-clinical-600 focus:ring-clinical-500"
+              />
+              <span className="text-sm">
+                <span className="font-medium text-slate-800">Read the questions aloud</span>
+                <span className="mt-0.5 block text-xs text-slate-500">
+                  As the examiner would. Each question is spoken first, then recording
+                  starts — so your answer never picks up the examiner's voice.
+                </span>
+              </span>
+            </label>
+          )}
+
           <div className="mt-4">
             <Button onClick={begin}>Allow microphone &amp; start</Button>
           </div>
@@ -334,16 +365,10 @@ export default function OsceStation() {
 
       {!notStarted && stage === 'sitting' && prompt && (
         <>
-          <Card title="The case">
-            <p className="prose-clinical">{sitting.station.case_summary}</p>
-            {sitting.station.patient_history && (
-              <div className="mt-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  History
-                </p>
-                <p className="prose-clinical mt-1">{sitting.station.patient_history}</p>
-              </div>
-            )}
+          <Card title="The patient">
+            <p className="text-lg text-slate-900">
+              {sitting.station.patient_demographic ?? 'A patient is seated in front of you.'}
+            </p>
             {sitting.station.findings_given && (
               <div className="mt-3">
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -362,8 +387,8 @@ export default function OsceStation() {
             )}
 
             <p className="mt-3 text-xs text-slate-500">
-              Everything else is for you to elicit and describe — the clinical signs are
-              deliberately withheld until your result.
+              Everything else is for you to elicit — the history and clinical signs are
+              deliberately withheld until your result, as they would be with a real patient.
             </p>
           </Card>
 
@@ -371,7 +396,20 @@ export default function OsceStation() {
             title={`Question ${prompt.label} of ${prompts.length}`}
             actions={<Badge tone="slate">{prompt.marks} marks</Badge>}
           >
-            <p className="text-lg font-medium text-slate-900">{prompt.text}</p>
+            <div className="flex items-start gap-3">
+              <p className="flex-1 text-lg font-medium text-slate-900">{prompt.text}</p>
+              {speech.supported && speech.enabled && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  title="Hear the question again"
+                  onClick={() => void speech.speak(prompt.text)}
+                  disabled={speech.speaking}
+                >
+                  {speech.speaking ? 'Speaking…' : 'Repeat'}
+                </Button>
+              )}
+            </div>
 
             <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
               <div className="flex items-center gap-3">
