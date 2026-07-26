@@ -407,8 +407,9 @@ class AIClient:
         except (KeyError, IndexError, TypeError) as exc:
             raise AIError(f"Unexpected response shape: {json.dumps(data)[:500]}") from exc
 
+        reason = (choice or {}).get("finish_reason")
+
         if not text.strip():
-            reason = (choice or {}).get("finish_reason")
             if reason == "length":
                 raise AIError(
                     "Model returned no content and stopped on the token limit. For "
@@ -417,6 +418,17 @@ class AIClient:
                     "'Google reasoning effort' in Admin > Settings."
                 )
             raise AIError(f"Model returned empty content (finish_reason={reason!r}).")
+
+        # A response cut off at the limit is almost always unparseable JSON.
+        # Saying so beats letting it surface as "not a JSON object", which
+        # sends you looking for a prompt problem that is not there.
+        if reason == "length" and force_json:
+            raise AIError(
+                f"Model hit the {max_tokens}-token output limit before finishing, "
+                f"so its JSON is truncated. Raise 'Max output tokens' in "
+                f"Admin > Settings - long questions with many sub-questions need "
+                f"more room."
+            )
 
         usage = data.get("usage") or {}
         return AIResponse(

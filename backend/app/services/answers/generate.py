@@ -162,8 +162,14 @@ def generate_model_answer(
         figures.append((figure, image))
 
     content = _build_prompt(question, parts, figures)
+
+    # Budget output by question size. A 20-mark SEQ with seven sub-questions
+    # needs several times the room of a 2-mark VSAQ, and a key truncated at the
+    # limit comes back as unparseable JSON rather than a partial answer.
+    budget = max(4000, 1500 * len(parts) + 400 * int(question.total_marks or 0))
     data = client.complete_json(
-        task="model_answer", system=SYSTEM_PROMPT, user=content, job_id=job_id
+        task="model_answer", system=SYSTEM_PROMPT, user=content,
+        max_tokens=min(budget, 32000), job_id=job_id,
     )
     if not isinstance(data, dict):
         raise ValueError("Model answer response was not a JSON object")
