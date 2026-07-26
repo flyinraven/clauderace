@@ -50,6 +50,9 @@ this arc; not every step fits every case, but the order does:
    segment of the left eye." "Please perform anterior segment examination for
    both eyes and perform retinoscopy for the right eye only." No history, no
    findings, no hint of the diagnosis.
+   It is still marked, and heavily: what comes back is the candidate's
+   description of the signs, so EVERY rubric point about identifying or
+   describing a finding belongs here. It must never carry zero marks.
 2. WHAT ELSE WOULD YOU DO. "What other examinations would you do in this
    patient?" / "What ancillary test would you perform?" The candidate should
    name the test before being shown it.

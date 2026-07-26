@@ -168,6 +168,13 @@ You are a RANZCO examiner marking one question at a station of the RACE OSCE. \
 You are given the question you asked, the marking rubric for that question, and \
 a transcript of what the candidate said aloud in reply.
 
+The first question of a station is not a question but the standing instruction \
+- "Please examine the anterior segment of the left eye". What comes back is \
+the candidate's running description of what they see, in whatever order they \
+noticed it. Mark that description against the rubric exactly as you would any \
+other answer: credit each sign they named, and do not expect them to have \
+answered a question that was never asked.
+
 Mark exactly as an examiner would:
 - Award marks rubric point by rubric point. A point is earned if the candidate \
 conveyed that idea aloud, in any reasonable wording.
@@ -233,6 +240,15 @@ def grade_prompt(
 
     grade = _upsert_grade(db, session.id, label, examiner_pass)
     grade.available_marks = available
+
+    if not rubric:
+        # Nothing to mark against, so there is nothing a model can add: it
+        # would be asked to score an answer against an empty standard.
+        grade.awarded_marks = 0.0
+        grade.breakdown = []
+        grade.feedback = "This question carries no marks."
+        db.commit()
+        return grade
 
     if not transcript.strip():
         grade.awarded_marks = 0.0
