@@ -1,18 +1,26 @@
 # SiteGround / Apache configuration for the RACE Exam Simulator front end.
 
 # --- Single-page app routing ---------------------------------------------
-# React Router owns the URLs. Without this, refreshing on /osce or opening a
-# deep link returns a 404 because no such file exists on disk.
+# React Router owns the URLs, so /osce and /exams must serve index.html rather
+# than being looked up on disk.
+#
+# FallbackResource is used in preference to a mod_rewrite block: on this host
+# mod_rewrite rules are silently ignored inside .htaccess (headers below apply
+# fine, rewrites never fire), which left every deep link returning 403.
+# FallbackResource is mod_dir and does the same job in one line.
+Options -MultiViews
+DirectoryIndex index.html
+FallbackResource /index.html
+
+# Kept as a fallback for any host where mod_rewrite does work and mod_dir's
+# FallbackResource is unavailable. Harmless when FallbackResource has already
+# handled the request.
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /
-
-  # Never rewrite a real file or directory.
-  RewriteCond %{REQUEST_FILENAME} -f [OR]
-  RewriteCond %{REQUEST_FILENAME} -d
-  RewriteRule ^ - [L]
-
-  RewriteRule ^ index.html [L]
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule . /index.html [L]
 </IfModule>
 
 # --- Caching --------------------------------------------------------------
