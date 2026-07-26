@@ -21,6 +21,7 @@ from app.models import (
     ExaminerFeedback,
     Figure,
     Image,
+    OsceFigure,
     OsceStation,
     Question,
     QuestionPart,
@@ -314,6 +315,9 @@ def _persist_station(
         station_number=data.get("station_number") or block.number,
         subspecialty=data.get("subspecialty") or normalise_subspecialty(data.get("title")),
         title=data.get("title"),
+        # Without this a station opens with the generic "A patient is seated in
+        # front of you", which tells the candidate nothing about who to expect.
+        patient_demographic=data.get("patient_demographic"),
         case_summary=data.get("case_summary"),
         aims=data.get("aims") or None,
         patient_history=data.get("patient_history"),
@@ -330,8 +334,34 @@ def _persist_station(
         status=STATUS_REVIEW,
     )
     db.add(station)
+    db.flush()
+    _attach_station_figures(db, source, block, station)
     db.commit()
     return station.id
+
+
+def _attach_station_figures(
+    db: Session, source: SourceDocument, block: Block, station: OsceStation
+) -> None:
+    """Show the report's own clinical photographs at the station.
+
+    A station without an image cannot test visual recognition at all, and the
+    OSCE deck carries the real photograph the candidates were shown. Dropping
+    it and searching the web for a lookalike would be strictly worse: these
+    are already faithful, and need no vision check or approval.
+    """
+    for position, extracted in enumerate(block.images):
+        record = _get_or_create_image(db, extracted, source.id)
+        db.add(
+            OsceFigure(
+                station_id=station.id,
+                image_id=record.id,
+                position=position,
+                caption=extracted.caption or extracted.label,
+                verification_status="verified",
+                is_approved=True,
+            )
+        )
 
 
 __all__ = ["JOB_INGEST_DOCUMENT", "handle_ingest_document"]

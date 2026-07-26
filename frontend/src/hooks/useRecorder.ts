@@ -147,6 +147,25 @@ export function useRecorder() {
     }
   }, [requestAccess])
 
+  /**
+   * Suspend capture while the examiner's voice is playing, so it never lands
+   * in the candidate's answer. Pausing rather than stopping keeps the single
+   * recording intact - a stop would end the take and split the answer in two.
+   */
+  const pause = useCallback(() => {
+    if (recorderRef.current?.state === 'recording') {
+      recorderRef.current.pause()
+      setRecording(false)
+    }
+  }, [])
+
+  const resume = useCallback(() => {
+    if (recorderRef.current?.state === 'paused') {
+      recorderRef.current.resume()
+      setRecording(true)
+    }
+  }, [])
+
   const stop = useCallback(async (): Promise<Recording | null> => {
     const recorder = recorderRef.current
     if (!recorder || recorder.state === 'inactive') {
@@ -172,7 +191,9 @@ export function useRecorder() {
   /** Release the mic. Call when leaving the station. */
   const release = useCallback(() => {
     stopMeter()
-    recorderRef.current?.state === 'recording' && recorderRef.current.stop()
+    // Not just 'recording' - a recorder paused for the examiner's voice is
+    // still holding the mic.
+    recorderRef.current?.state !== 'inactive' && recorderRef.current?.stop()
     recorderRef.current = null
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
@@ -183,5 +204,8 @@ export function useRecorder() {
 
   useEffect(() => release, [release])
 
-  return { supported, permission, recording, level, error, requestAccess, start, stop, release }
+  return {
+    supported, permission, recording, level, error,
+    requestAccess, start, pause, resume, stop, release,
+  }
 }

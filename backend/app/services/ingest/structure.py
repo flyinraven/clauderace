@@ -87,12 +87,20 @@ motility notation).
 discrete, markable expectations a competent candidate should demonstrate. \
 Rubric marks must total exactly 20.
 - Each station lasts 9 minutes.
+- "patient_demographic" is the single line the candidate sees before the \
+station begins: age band and sex, nothing else. Age bands: "A child", "A young \
+boy", "A young girl", "A teenage boy", "A teenage girl", "A young man", "A \
+young woman", "A middle-aged man", "A middle-aged woman", "An elderly man", \
+"An elderly woman". It must give away nothing else - no symptoms, diagnosis, \
+history, surgery, spectacles or head posture. "An elderly woman" is right; \
+"An elderly woman with a head tilt" is wrong.
 
 Return ONLY a JSON object of this shape:
 {{
   "station_number": number | null,
   "title": string | null,
   "subspecialty": one of the nine subspecialties, or null,
+  "patient_demographic": string | null,
   "case_summary": string | null,
   "aims": [string],
   "patient_history": string | null,
@@ -304,6 +312,7 @@ def normalise_osce(data: dict[str, Any], block: Block) -> dict[str, Any]:
         "station_number": _coerce_int(data.get("station_number")) or block.number,
         "title": _clean_str(data.get("title")),
         "subspecialty": subspecialty,
+        "patient_demographic": _clean_str(data.get("patient_demographic")),
         "case_summary": _clean_str(data.get("case_summary")),
         "aims": _string_list(data.get("aims")),
         "patient_history": _clean_str(data.get("patient_history")),

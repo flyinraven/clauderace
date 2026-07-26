@@ -177,6 +177,21 @@ export default function OsceStation() {
     [sittingId],
   )
 
+  /**
+   * Read the current question again. The mic is live by this point, so it is
+   * paused for the duration: otherwise the synthesised voice is recorded and
+   * transcribed as though the candidate had said it.
+   */
+  const repeatPrompt = useCallback(async () => {
+    if (!prompt) return
+    rec.pause()
+    try {
+      await speech.speak(prompt.text)
+    } finally {
+      rec.resume()
+    }
+  }, [prompt, rec, speech])
+
   /** Finish this answer and move on; the upload runs in the background. */
   const nextPrompt = useCallback(async () => {
     if (!prompt) return
@@ -299,11 +314,20 @@ export default function OsceStation() {
       <div className="sticky top-0 z-20 -mx-4 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
+            {/* Title and subspecialty both give the game away - "Oculoplastics
+                & Orbit" narrows the differential before the candidate has
+                looked at the patient. Held back until the result, like the
+                case summary and history. */}
             <p className="text-sm font-semibold text-slate-900">
-              {sitting.station.title ?? sitting.station.subspecialty ?? 'OSCE station'}
+              {stage === 'review'
+                ? sitting.station.title ?? sitting.station.subspecialty ?? 'OSCE station'
+                : 'OSCE station'}
             </p>
             <p className="text-xs text-slate-500">
-              {sitting.station.subspecialty} · {sitting.station.total_marks} marks
+              {stage === 'review' && sitting.station.subspecialty
+                ? `${sitting.station.subspecialty} · `
+                : ''}
+              {sitting.station.total_marks} marks
               {sitting.is_timed ? ' · 9 minutes' : ' · untimed'}
             </p>
           </div>
@@ -426,7 +450,7 @@ export default function OsceStation() {
                   onClick={() => {
                     // A direct tap, so no unlock dance is needed here.
                     speech.unlock()
-                    void speech.speak(prompt.text)
+                    void repeatPrompt()
                   }}
                   disabled={speech.speaking}
                 >

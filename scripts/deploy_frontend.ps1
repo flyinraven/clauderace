@@ -74,4 +74,11 @@ if ($IdentityFile) { $dotArgs += @("-i", $IdentityFile) }
 $dotArgs += @((Join-Path $dist ".htaccess"), $target)
 & scp @dotArgs
 
+# scp creates assets/ as 700, which Apache cannot traverse - every bundle 404s
+# and the site loads blank. Put the web-readable bits back.
+$sshArgs = @("-p", $SshPort)
+if ($IdentityFile) { $sshArgs += @("-i", $IdentityFile) }
+$sshArgs += @("$SshUser@$SshHost", "cd $RemotePath && chmod 755 . assets && chmod 644 index.html .htaccess assets/*")
+& ssh @sshArgs
+
 Write-Host "Deployed. Check https://exam.txglobal.com.au" -ForegroundColor Green
