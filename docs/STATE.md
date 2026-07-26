@@ -30,8 +30,9 @@ then `scp` the contents of `frontend/dist` (including `.htaccess`) to
 - 4 published papers (Papers 1–4)
 - 78 OSCE stations, all with examiner prompts: 24 generated and 54 ingested
   from three past OSCE reports (2025 Sem 1, 2025 Sem 2, 2026 Sem 1)
-- 57 stations show a live image, all web-sourced and vision-checked; the 18
-  from 2025 Semester 1 are awaiting an image run
+- 75 of 78 stations show a live image, all web-sourced and vision-checked.
+  Every station has its findings split into given (acuity, pressure) and
+  elicited
 - 6 full 9-station circuits with no repeats
 
 ## AI routing
@@ -66,6 +67,15 @@ Total spend to date: roughly $7.
   after 30 days.
 - **No synthetic clinical images.** AI-generated fundus photos look convincing
   and are anatomically wrong.
+- **Station question design comes from real examiner handouts.** The RANZCO
+  reports record aims, findings, diagnosis and pass requirements but never the
+  questions, so the arc in `osce/prompts.py` was taken from mock-exam handouts
+  the user holds outside this system: standing instruction, ancillary test
+  before the image, differentials by number, the examiner then stating the
+  diagnosis so later marks do not depend on earlier ones, management, an
+  evolving hypothetical, then straight knowledge. Those handouts are reference
+  only - the user does not want that content imported, and it carries patient
+  names, dates of birth and MRNs.
 - **The OSCE reports carry no clinical photographs.** The 2025 Semester 1 deck
   is 115 pages holding four distinct images: a slide background on 94 pages,
   two more pieces of furniture on 19 each, and a banner on the cover and back.
@@ -134,9 +144,7 @@ session expensive - filter to the lines that matter.
 
 Nothing is blocking. Open items, roughly in order of value:
 
-1. **Source images for the 2025 Semester 1 stations** - 18 of them, plus the
-   3 long-standing gaps. Station images > Source images.
-2. **Re-test a station on the phone** — read-aloud, and whether the last
+1. **Re-test a station on the phone** — read-aloud, and whether the last
    answer's transcript now lands. Both were fixed but only the first has been
    confirmed by the user.
 3. **Daily circuit** builder works but has never been run through a real
