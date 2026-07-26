@@ -259,8 +259,11 @@ export default function QuestionBank() {
         <Loading />
       ) : !page || page.items.length === 0 ? (
         <EmptyState title="No questions found">
+          {/* The bank holds written questions only. OSCE stations have their
+              own structure and their own page, and looking for them here is
+              the likeliest reason an admin sees nothing. */}
           {user?.role === 'admin'
-            ? 'Upload an examiners’ report under Documents to populate the bank.'
+            ? 'This bank holds written questions (SEQ and VSAQ). OSCE stations live under OSCE. If the bank is empty, upload an examiners’ report under Documents.'
             : 'Nothing has been published yet.'}
         </EmptyState>
       ) : (

@@ -55,6 +55,9 @@ class StationSummary(BaseModel):
     title: str | None
     case_summary: str | None
     exam_period: str | None
+    # "past_paper" or "generated" - the list marks which, because a circuit
+    # mixes the two and it is not otherwise apparent which you are sitting.
+    source: str | None
     total_marks: int
     prompt_count: int = 0
     prompts_status: str
@@ -79,6 +82,7 @@ def list_stations(user: CurrentUser, db: DbSession) -> list[StationSummary]:
                 title=station.title,
                 case_summary=station.case_summary,
                 exam_period=station.exam_period,
+                source=station.source,
                 total_marks=station.total_marks,
                 prompt_count=len(station.prompts or []),
                 prompts_status=station.prompts_status,

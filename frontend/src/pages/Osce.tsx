@@ -12,6 +12,7 @@ interface Station {
   title: string | null
   case_summary: string | null
   exam_period: string | null
+  source: string | null
   total_marks: number
   prompt_count: number
   prompts_status: string
@@ -199,6 +200,14 @@ export default function Osce() {
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
+                  {/* Past-paper stations carry the sitting they came from;
+                      generated ones never do. Both are worth practising, but
+                      only one is what the examiners actually asked. */}
+                  {station.source === 'past_paper' ? (
+                    <Badge tone="green">Past paper</Badge>
+                  ) : (
+                    <Badge tone="violet">Generated</Badge>
+                  )}
                   {station.attempted && <Badge tone="slate">Attempted</Badge>}
                   {station.prompts_status !== 'complete' ? (
                     <Badge tone="amber">Not ready</Badge>

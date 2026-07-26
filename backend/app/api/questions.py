@@ -10,7 +10,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 
 from app.api.deps import AdminUser, CurrentUser, DbSession
-from app.constants import STATUS_APPROVED, STATUS_ARCHIVED, STATUS_DRAFT, STATUS_REVIEW
+from app.constants import (
+    QUESTION_SEQ,
+    QUESTION_VSAQ,
+    STATUS_APPROVED,
+    STATUS_ARCHIVED,
+    STATUS_DRAFT,
+    STATUS_REVIEW,
+)
 from app.models import (
     Figure,
     Image,
@@ -507,7 +514,10 @@ def filter_options(user: CurrentUser, db: DbSession) -> dict[str, Any]:
     ]
     return {
         "subspecialties": SUBSPECIALTIES,
-        "question_types": ["SEQ", "VSAQ", "OSCE"],
+        # OSCE stations are not questions - they live in osce_stations with
+        # their own prompts and findings, and are browsed from the OSCE page.
+        # Offering the type here only ever returned an empty bank.
+        "question_types": [QUESTION_SEQ, QUESTION_VSAQ],
         "statuses": sorted(VALID_STATUSES),
         "sources": ["past_paper", "generated", "manual"],
         "exam_periods": sorted(periods),

@@ -125,5 +125,14 @@ Nothing is blocking. Open items, roughly in order of value:
    nine-station sitting.
 4. **Written papers** have been sat once end-to-end; the OSCE has been sat for
    a single station. Neither has had a full user run.
-5. SMTP is unconfigured, so invites are copied by hand. Fine for a few users.
-6. No backup routine. SiteGround has PostgreSQL backups - worth switching on.
+5. **Sit one past sitting (deferred - raise once the OSCE work is done).**
+   Asked for on 26 Jul 2026 and parked to conserve AI credits for the OSCE.
+   Wanted: pick "2026 Semester 1" and sit Papers 1-4 built from that exam's
+   own 18 SEQs in the 5/4/5/4 split, topped up with generated VSAQs and
+   labelled plainly so it is obvious which parts are authentic.
+   Needs an `exam_period` filter on `assemble_paper()` plus the matching
+   dropdown in the Question bank, which the API already returns options for
+   but the UI never rendered. The reports contain no VSAQs, so real ones for
+   a given sitting will never exist.
+6. SMTP is unconfigured, so invites are copied by hand. Fine for a few users.
+7. No backup routine. SiteGround has PostgreSQL backups - worth switching on.
