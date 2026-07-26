@@ -420,6 +420,41 @@ def clear_attempts(station_id: int, user: CurrentUser, db: DbSession) -> dict[st
     return {"cleared": len(sittings)}
 
 
+@router.get("/stations/{station_id}/preview")
+def preview_station(station_id: int, admin: AdminUser, db: DbSession) -> dict[str, Any]:
+    """The whole station as written, for reviewing it without sitting it.
+
+    Admin only, and deliberately so: this is every question with its marking
+    rubric and the diagnosis, which is exactly what a candidate must not see.
+    """
+    station = db.get(OsceStation, station_id)
+    if station is None:
+        raise HTTPException(status_code=404, detail="Station not found")
+
+    return {
+        "id": station.id,
+        "title": station.title,
+        "subspecialty": station.subspecialty,
+        "exam_period": station.exam_period,
+        "source": station.source,
+        "patient_demographic": station.patient_demographic,
+        "findings_given": station.findings_given,
+        "findings_elicited": station.findings_elicited,
+        "diagnosis": station.diagnosis,
+        "total_marks": station.total_marks,
+        "prompts": [
+            {
+                "label": p.get("label") or chr(ord("A") + i),
+                "text": p.get("text"),
+                "seconds": p.get("seconds"),
+                "marks": sum(pt.get("marks", 0) for pt in (p.get("rubric") or [])),
+                "rubric": p.get("rubric") or [],
+            }
+            for i, p in enumerate(station.prompts or [])
+        ],
+    }
+
+
 @router.post("/sittings/{session_id}/begin")
 def begin_sitting(session_id: int, user: CurrentUser, db: DbSession) -> dict[str, Any]:
     sitting = _load_sitting(db, session_id, user)

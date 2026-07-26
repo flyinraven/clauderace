@@ -23,6 +23,32 @@ interface Station {
   last_attempt_at: string | null
 }
 
+interface RubricPoint {
+  text: string
+  marks: number
+  is_critical: boolean
+}
+
+interface PreviewPrompt {
+  label: string
+  text: string
+  seconds: number | null
+  marks: number
+  rubric: RubricPoint[]
+}
+
+interface StationPreview {
+  id: number
+  title: string | null
+  subspecialty: string | null
+  patient_demographic: string | null
+  findings_given: string | null
+  findings_elicited: string | null
+  diagnosis: string | null
+  total_marks: number
+  prompts: PreviewPrompt[]
+}
+
 interface Circuit {
   id: number
   title: string
@@ -47,6 +73,9 @@ export default function Osce() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [prepJob, setPrepJob] = useState<number | null>(null)
+  // Reviewing what a station asks should not cost nine minutes of sitting it.
+  const [openId, setOpenId] = useState<number | null>(null)
+  const [preview, setPreview] = useState<StationPreview | null>(null)
 
   const { job } = useJob(prepJob)
 
@@ -122,6 +151,21 @@ export default function Osce() {
       load()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not clear the attempts')
+    }
+  }
+
+  const togglePreview = async (stationId: number) => {
+    if (openId === stationId) {
+      setOpenId(null)
+      setPreview(null)
+      return
+    }
+    setOpenId(stationId)
+    setPreview(null)
+    try {
+      setPreview(await api<StationPreview>(`/osce/stations/${stationId}/preview`))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load the station')
     }
   }
 
@@ -260,7 +304,8 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
         ) : (
           <ul className="divide-y divide-slate-100">
             {stations.map((station) => (
-              <li key={station.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+              <li key={station.id} className="py-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <p className="font-medium text-slate-800">
                     {station.title ?? station.case_summary?.slice(0, 70) ?? `Station ${station.station_number}`}
@@ -307,7 +352,62 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
                       Practise
                     </Button>
                   )}
+                  {user?.role === 'admin' && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      title="Read the questions without sitting the station"
+                      onClick={() => togglePreview(station.id)}
+                    >
+                      {openId === station.id ? 'Hide' : 'Review'}
+                    </Button>
+                  )}
                 </div>
+                </div>
+
+                {openId === station.id && (
+                  <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                    {!preview ? (
+                      <Loading label="Loading station…" />
+                    ) : (
+                      <div className="space-y-3 text-sm">
+                        <p className="text-slate-600">
+                          <span className="font-medium text-slate-800">Shown at the start:</span>{' '}
+                          {preview.patient_demographic ?? '(no demographic)'}
+                          {preview.findings_given ? ` — ${preview.findings_given}` : ' — no given findings'}
+                        </p>
+                        <ol className="space-y-3">
+                          {preview.prompts.map((p) => (
+                            <li key={p.label} className="rounded-md border border-slate-200 bg-white p-3">
+                              <p className="font-medium text-slate-900">
+                                {p.label}. {p.text}
+                              </p>
+                              <p className="mt-0.5 text-xs text-slate-500">
+                                {p.marks} marks{p.seconds ? ` · ${p.seconds}s` : ''}
+                              </p>
+                              <ul className="mt-2 space-y-1 text-xs text-slate-600">
+                                {p.rubric.map((pt, i) => (
+                                  <li key={i}>
+                                    • {pt.text} <span className="text-slate-400">({pt.marks})</span>
+                                    {pt.is_critical && (
+                                      <span className="ml-1 font-medium text-red-600">critical</span>
+                                    )}
+                                  </li>
+                                ))}
+                              </ul>
+                            </li>
+                          ))}
+                        </ol>
+                        {preview.diagnosis && (
+                          <p className="text-slate-600">
+                            <span className="font-medium text-slate-800">Diagnosis:</span>{' '}
+                            {preview.diagnosis}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </li>
             ))}
           </ul>
