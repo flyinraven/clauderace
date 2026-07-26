@@ -509,9 +509,9 @@ export default function OsceStation() {
       {stage === 'review' && (
         <>
           <Alert tone="info" title="Check the transcripts before marking">
-            Speech recognition sometimes mishears ophthalmic terms. Correct anything wrong
-            here — you are only fixing what you actually said, and it stops a
-            transcription error costing you marks.
+            Speech recognition mishears ophthalmic terms, and on a quiet recording it can
+            invent whole sentences. Delete anything you did not say and correct anything
+            wrong — what is here is exactly what gets marked.
           </Alert>
 
           {prompts.map((p) => {
@@ -522,9 +522,14 @@ export default function OsceStation() {
                   <p className="text-sm text-slate-500">Transcribing…</p>
                 )}
                 {p.transcription_status === 'failed' && (
-                  <Alert tone="warning">
+                  <Alert tone="error">
                     Transcription failed: {p.transcription_error ?? 'unknown error'}. You can
                     type what you said below.
+                  </Alert>
+                )}
+                {p.transcription_status === 'complete' && p.transcription_error && (
+                  <Alert tone="warning" title="This may not be what you said">
+                    {p.transcription_error}
                   </Alert>
                 )}
                 <Textarea

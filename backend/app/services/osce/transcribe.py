@@ -45,21 +45,39 @@ MIME_MAP = {
 MAX_INLINE_BYTES = 18 * 1024 * 1024
 
 TRANSCRIBE_PROMPT = """\
-Transcribe this audio verbatim. It is an ophthalmology trainee answering an \
-examiner's question aloud in a mock RANZCO OSCE, so expect clinical \
-terminology: drug names, eponyms (Krukenberg spindle, Vogt striae, \
-Hutchinson's sign), abbreviations spoken as letters (IOP, OCT, FFA, RAPD, \
-PCIOL), and Snellen acuities said as "six over twelve" which you should write \
-as 6/12.
+Transcribe the speech in this audio, word for word.
 
-Rules:
-- Write exactly what was said. Do not summarise, correct, complete or improve \
-the answer, and do not add anything that was not spoken.
-- Use standard clinical spelling for terms you recognise.
-- If a stretch is genuinely inaudible, write [inaudible].
-- If there is no speech at all, return an empty string.
+You are a transcriber, not an assistant. You have no knowledge of what the \
+speaker was asked or what a good answer would contain, and you must not use \
+any such knowledge if you think you do.
 
-Return ONLY the transcript text, with no preamble or commentary."""
+Absolute rules:
+- Write ONLY words you can actually hear. Never infer, complete, expand, \
+correct, summarise or improve.
+- If the audio is silent, too quiet, or contains no intelligible speech, \
+return an empty string. Returning nothing is always better than guessing.
+- If you can hear only a few words, transcribe only those few words. A short \
+recording must produce a short transcript.
+- Never continue a sentence the speaker did not finish.
+- Mark unclear stretches [inaudible] rather than filling them in.
+
+The speaker is a doctor, so spell medical terms you clearly hear using \
+standard clinical spelling, and write spoken visual acuities in the usual \
+notation (\"six over twelve\" becomes 6/12). This applies only to words you \
+actually hear - it is not a licence to introduce medical content.
+
+Return ONLY the transcript text, with no preamble, commentary or explanation."""
+
+# Conversational speech runs at roughly 2.5 words per second and even a fast
+# talker rarely sustains 3.5. Beyond that the transcript contains more than the
+# recording could hold, so it was invented rather than heard.
+MAX_WORDS_PER_SECOND = 3.5
+MIN_FLAGGED_WORDS = 20
+MIN_AUDIO_BYTES = 2000
+# Used only when the browser did not report a duration: compressed speech is
+# comfortably above 8 kB/s, so this under-estimates length and therefore only
+# ever makes the check more forgiving.
+ASSUMED_BYTES_PER_SECOND = 8000
 
 
 def _retry_after_seconds(response: httpx.Response) -> float:
@@ -242,6 +260,43 @@ def _transcribe_via_google(
     return text.strip()
 
 
+def looks_hallucinated(
+    text: str, duration_ms: int | None, audio_bytes: int | None = None
+) -> str | None:
+    """Return a reason if a transcript is too long for the audio it came from.
+
+    Audio models fill silence with plausible invention rather than returning
+    nothing, and a fabricated answer attributed to the candidate is worse than
+    no transcript at all - it would be marked as though they had said it.
+
+    Falls back to estimating length from the file size when the browser did not
+    report a duration, so the check cannot be silently disabled by a missing
+    field.
+    """
+    words = len(text.split())
+    if words < MIN_FLAGGED_WORDS:
+        return None
+
+    if duration_ms and duration_ms > 0:
+        seconds = duration_ms / 1000
+        source = "of audio"
+    elif audio_bytes:
+        seconds = audio_bytes / ASSUMED_BYTES_PER_SECOND
+        source = "of audio (estimated from file size)"
+    else:
+        return None
+
+    if seconds <= 0 or words <= seconds * MAX_WORDS_PER_SECOND:
+        return None
+
+    return (
+        f"{words} words were transcribed from {seconds:.0f} seconds {source} - "
+        f"about {words / seconds:.1f} words a second. That is faster than anyone "
+        f"speaks, so some of this was probably invented rather than heard. "
+        f"Delete anything you did not say before submitting."
+    )
+
+
 def transcribe_response(db: Session, response: OsceResponse) -> str:
     """Transcribe a stored response, then release its audio.
 
@@ -257,6 +312,17 @@ def transcribe_response(db: Session, response: OsceResponse) -> str:
         db.commit()
         return ""
 
+    # A clip this small holds no speech. Sending it invites the model to invent
+    # an answer rather than admit it heard nothing.
+    if len(clip.data) < MIN_AUDIO_BYTES:
+        response.transcript = ""
+        response.transcription_status = "complete"
+        response.transcription_error = (
+            "The recording was empty or near-silent, so nothing was transcribed."
+        )
+        db.commit()
+        return ""
+
     try:
         text = transcribe_audio(db, clip.data, clip.content_type, store)
     except AIError as exc:
@@ -265,9 +331,13 @@ def transcribe_response(db: Session, response: OsceResponse) -> str:
         db.commit()
         raise
 
+    suspicious = looks_hallucinated(
+        text, response.duration_ms or clip.duration_ms, clip.size_bytes
+    )
+
     response.transcript = text
     response.transcription_status = "complete"
-    response.transcription_error = None
+    response.transcription_error = suspicious
 
     if not store.get_bool("osce.retain_audio", False):
         clip.data = None
