@@ -134,7 +134,43 @@ def _finalise(ctx: JobContext, source: SourceDocument, kind: str) -> bool:
     ctx.set_result(created=created, kind=kind)
     ctx.set_message(source.status_detail)
     _BLOCK_CACHE.pop(source.id, None)
+
+    if kind == "osce" and result.get("station_ids"):
+        _queue_prompt_build(ctx, result["station_ids"])
     return True
+
+
+def _queue_prompt_build(ctx: JobContext, station_ids: list[int]) -> None:
+    """Chain the prompt build onto the ingest.
+
+    An ingested station arrives flat - tasks and a rubric, but none of the
+    turn-taking examiner questions a sitting needs, so it shows as "Not ready"
+    until someone remembers to press Build prompts. Every ingest has needed it,
+    so it is not really a separate decision.
+    """
+    from app.services.jobs.runner import create_job
+    from app.services.osce.prompts import JOB_BUILD_OSCE_PROMPTS
+
+    pending = [
+        s.id
+        for s in ctx.db.execute(
+            select(OsceStation).where(
+                OsceStation.id.in_(station_ids),
+                OsceStation.prompts_status.in_(["none", "failed"]),
+            )
+        ).scalars().all()
+    ]
+    if not pending:
+        return
+    job = create_job(
+        ctx.db,
+        JOB_BUILD_OSCE_PROMPTS,
+        payload={"station_ids": pending},
+        created_by_id=ctx.job.created_by_id,
+        total_steps=len(pending),
+        message=f"Preparing {len(pending)} station(s)",
+    )
+    logger.info("Queued prompt build job %s for %d station(s)", job.id, len(pending))
 
 
 def _clear_previous_output(db: Session, source_document_id: int) -> None:
