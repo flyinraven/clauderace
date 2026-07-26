@@ -101,6 +101,41 @@ def build_prompts(admin: AdminUser, db: DbSession) -> dict[str, Any]:
     return {"job_id": job.id, "station_count": len(ids)}
 
 
+class GenerateStationsRequest(BaseModel):
+    """Top every subspecialty up to `target` stations, or request specific counts."""
+
+    target_per_subspecialty: int = Field(default=6, ge=1, le=30)
+    per_subspecialty: dict[str, int] | None = None
+    difficulty: str | None = None
+
+
+@router.post("/stations/generate", status_code=status.HTTP_202_ACCEPTED)
+def generate_stations(
+    payload: GenerateStationsRequest, admin: AdminUser, db: DbSession
+) -> dict[str, Any]:
+    from app.services.generate import JOB_GENERATE_STATIONS, thin_subspecialties
+
+    wanted = payload.per_subspecialty or thin_subspecialties(
+        db, payload.target_per_subspecialty
+    )
+    wanted = {k: v for k, v in wanted.items() if v > 0}
+    if not wanted:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Every subspecialty already has at least "
+                   f"{payload.target_per_subspecialty} stations.",
+        )
+
+    total = sum(wanted.values())
+    job = create_job(
+        db, JOB_GENERATE_STATIONS,
+        payload={"per_subspecialty": wanted, "difficulty": payload.difficulty},
+        created_by_id=admin.id, total_steps=total,
+        message=f"Generating {total} station(s)",
+    )
+    return {"job_id": job.id, "plan": wanted, "total": total}
+
+
 @router.post("/stations/split-findings", status_code=status.HTTP_202_ACCEPTED)
 def split_findings_endpoint(admin: AdminUser, db: DbSession) -> dict[str, Any]:
     """Separate findings an examiner states from signs the candidate must find."""
