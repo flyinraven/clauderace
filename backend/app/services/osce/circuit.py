@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import random
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -91,11 +92,16 @@ def compute_station_clock(
 def build_circuit(
     db: Session, user_id: int, station_count: int = 9, scheduled_for: date | None = None
 ) -> OsceCircuit:
-    """Pick one station per subspecialty, preferring ones not yet attempted.
+    """Pick one station per subspecialty from those this candidate has not sat.
 
     Repeating a station the candidate already knows the answer to teaches
-    recall of that case rather than clinical reasoning, so unseen stations are
-    always drawn first.
+    recall of that case rather than clinical reasoning, so an attempted station
+    is never drawn again. Clearing the attempt puts it back in the pool - that
+    is the deliberate "let me sit this one again", and it is per candidate:
+    attempts are counted for this user only.
+
+    A short circuit is better than a padded one. If there are not enough unseen
+    stations left, the caller gets what there is and can say so.
     """
     attempted = set(
         db.execute(
@@ -103,13 +109,17 @@ def build_circuit(
         ).scalars().all()
     )
 
-    ready = db.execute(
-        select(OsceStation).where(OsceStation.prompts_status == "complete")
-    ).scalars().all()
+    ready = [
+        s
+        for s in db.execute(
+            select(OsceStation).where(OsceStation.prompts_status == "complete")
+        ).scalars().all()
+        if s.id not in attempted
+    ]
     if not ready:
         raise ValueError(
-            "No stations are ready. Ingest an OSCE report and build the examiner "
-            "prompts first."
+            "No unsat stations are left. Clear an attempt from the OSCE page to "
+            "sit a station again, or ingest another OSCE report."
         )
 
     by_subspecialty: dict[str, list[OsceStation]] = defaultdict(list)
@@ -121,18 +131,19 @@ def build_circuit(
         pool = by_subspecialty.get(name) or []
         if not pool:
             continue
-        unseen = [s for s in pool if s.id not in attempted]
-        candidates = unseen or pool
-        chosen.append(min(candidates, key=lambda s: (s.id in attempted, s.id)))
+        # Random rather than lowest id: taking the lowest handed every
+        # candidate the same circuit and worked through the bank in ingestion
+        # order, so the newest stations were always sat last.
+        chosen.append(random.choice(pool))
         if len(chosen) >= station_count:
             break
 
-    # Top up from anywhere if some subspecialties have no ready station.
+    # Top up from anywhere if some subspecialties have no unsat station left.
     if len(chosen) < station_count:
         picked = {s.id for s in chosen}
-        for station in sorted(ready, key=lambda s: (s.id in attempted, s.id)):
-            if station.id in picked:
-                continue
+        spare = [s for s in ready if s.id not in picked]
+        random.shuffle(spare)
+        for station in spare:
             chosen.append(station)
             picked.add(station.id)
             if len(chosen) >= station_count:

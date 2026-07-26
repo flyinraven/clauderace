@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.deps import AdminUser, CurrentUser, DbSession
 from app.constants import ROLE_ADMIN
@@ -62,16 +62,27 @@ class StationSummary(BaseModel):
     prompt_count: int = 0
     prompts_status: str
     attempted: bool = False
+    # This candidate's attempts only - one user's practice must not close a
+    # station off for anyone else.
+    attempt_count: int = 0
+    last_attempt_at: datetime | None = None
 
 
 @router.get("/stations", response_model=list[StationSummary])
 def list_stations(user: CurrentUser, db: DbSession) -> list[StationSummary]:
     stations = db.execute(select(OsceStation).order_by(OsceStation.id)).scalars().all()
-    attempted = set(
-        db.execute(
-            select(OsceSession.station_id).where(OsceSession.user_id == user.id)
-        ).scalars().all()
-    )
+    counts = {
+        station_id: (n, last)
+        for station_id, n, last in db.execute(
+            select(
+                OsceSession.station_id,
+                func.count(OsceSession.id),
+                func.max(OsceSession.created_at),
+            )
+            .where(OsceSession.user_id == user.id)
+            .group_by(OsceSession.station_id)
+        ).all()
+    }
     out = []
     for station in stations:
         out.append(
@@ -86,7 +97,9 @@ def list_stations(user: CurrentUser, db: DbSession) -> list[StationSummary]:
                 total_marks=station.total_marks,
                 prompt_count=len(station.prompts or []),
                 prompts_status=station.prompts_status,
-                attempted=station.id in attempted,
+                attempted=station.id in counts,
+                attempt_count=counts.get(station.id, (0, None))[0],
+                last_attempt_at=counts.get(station.id, (0, None))[1],
             )
         )
     return out
@@ -353,6 +366,25 @@ def start_sitting(
     db.commit()
     db.refresh(sitting)
     return {"id": sitting.id, "station_id": station.id}
+
+
+@router.delete("/stations/{station_id}/attempts", status_code=status.HTTP_200_OK)
+def clear_attempts(station_id: int, user: CurrentUser, db: DbSession) -> dict[str, int]:
+    """Forget this candidate's attempts at a station so it can be sat again.
+
+    Circuits never repeat a station that has been attempted, so this is how a
+    candidate deliberately asks for one back. Only their own sittings go: the
+    station stays closed for everyone else who has sat it.
+    """
+    sittings = db.execute(
+        select(OsceSession).where(
+            OsceSession.station_id == station_id, OsceSession.user_id == user.id
+        )
+    ).scalars().all()
+    for sitting in sittings:
+        db.delete(sitting)
+    db.commit()
+    return {"cleared": len(sittings)}
 
 
 @router.post("/sittings/{session_id}/begin")

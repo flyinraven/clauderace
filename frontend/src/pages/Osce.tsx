@@ -17,6 +17,8 @@ interface Station {
   prompt_count: number
   prompts_status: string
   attempted: boolean
+  attempt_count: number
+  last_attempt_at: string | null
 }
 
 interface Circuit {
@@ -92,6 +94,21 @@ export default function Osce() {
     }
   }
 
+  /** Forget my attempts at a station, putting it back in the circuit pool. */
+  const clearAttempts = async (station: Station) => {
+    const label = station.title ?? `Station ${station.station_number ?? station.id}`
+    const n = station.attempt_count
+    if (!confirm(`Clear ${n} attempt${n === 1 ? '' : 's'} at "${label}"?\n\nThe sitting and its marking are deleted, and circuits can pick this station again.`)) {
+      return
+    }
+    try {
+      await api(`/osce/stations/${station.id}/attempts`, { method: 'DELETE' })
+      load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not clear the attempts')
+    }
+  }
+
   const prepareStations = async () => {
     try {
       const result = await api<{ job_id: number }>('/osce/stations/build-prompts', {
@@ -148,8 +165,9 @@ export default function Osce() {
 
       {ready.length > 0 && unattempted.length < 9 && (
         <Alert tone="info">
-          {unattempted.length} station(s) you haven't attempted remain. Circuits will start
-          reusing stations you've already seen — generate more for fresh material.
+          {unattempted.length} station(s) you haven't sat remain, so the next circuit will be
+          shorter than nine. Circuits never repeat a station you've sat — clear a station's
+          attempts below to sit it again, or add more stations.
         </Alert>
       )}
 
@@ -208,7 +226,26 @@ export default function Osce() {
                   ) : (
                     <Badge tone="violet">Generated</Badge>
                   )}
-                  {station.attempted && <Badge tone="slate">Attempted</Badge>}
+                  {/* Circuits skip attempted stations, so the count is not
+                      trivia - it is the reason a station stopped appearing,
+                      and clearing it is how you ask for it back. */}
+                  {station.attempted && (
+                    <>
+                      <Badge tone="slate">
+                        {station.attempt_count > 1
+                          ? `Sat ${station.attempt_count}×`
+                          : 'Sat'}
+                      </Badge>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        title="Forget my attempts so circuits can pick this station again"
+                        onClick={() => clearAttempts(station)}
+                      >
+                        Clear
+                      </Button>
+                    </>
+                  )}
                   {station.prompts_status !== 'complete' ? (
                     <Badge tone="amber">Not ready</Badge>
                   ) : (
