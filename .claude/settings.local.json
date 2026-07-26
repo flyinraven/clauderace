@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(python --version)",
+      "PowerShell(py --version)",
+      "WebSearch",
+      "WebFetch(domain:www.siteground.com)"
+    ]
+  }
+}

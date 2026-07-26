@@ -1,0 +1,30 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-clinical-50: #eef6ff;
+  --color-clinical-100: #d9ebff;
+  --color-clinical-200: #bcdcff;
+  --color-clinical-300: #8ec7ff;
+  --color-clinical-400: #59a7ff;
+  --color-clinical-500: #3384fb;
+  --color-clinical-600: #1d63f0;
+  --color-clinical-700: #164ddc;
+  --color-clinical-800: #1840b2;
+  --color-clinical-900: #1a3a8c;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-slate-50 text-slate-900 antialiased;
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Long clinical stems and model answers read better with generous measure. */
+.prose-clinical {
+  @apply text-[15px] leading-relaxed text-slate-700 whitespace-pre-wrap;
+}

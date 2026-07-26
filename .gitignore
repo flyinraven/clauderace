@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Local database and secrets
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.local
+.fernet_key
+
+# Node
+node_modules/
+dist/
+.vite/
+*.local
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Scratch
+tmp/
+scratch/

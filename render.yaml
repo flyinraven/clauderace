@@ -1,0 +1,46 @@
+# Render Blueprint. Create the service from this file rather than by hand:
+# Render Dashboard -> New -> Blueprint -> pick this repository.
+#
+# Only the frontend is hosted on SiteGround; this is the API. The database is
+# also on SiteGround, because Render's free PostgreSQL expires after 30 days.
+services:
+  - type: web
+    name: race-exam-api
+    runtime: python
+    # Closest free region to Australia and New Zealand.
+    region: singapore
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: false
+
+      # Connection string for the SiteGround PostgreSQL database. Set this in
+      # the dashboard; it contains the password so it must not live in git.
+      #   postgresql+psycopg://USER:PASSWORD@HOST:5432/DBNAME
+      - key: DATABASE_URL
+        sync: false
+
+      # Signs login tokens. Rotating it just logs everyone out.
+      - key: SECRET_KEY
+        generateValue: true
+
+      # Encrypts the API keys held in the settings table. This must be set by
+      # hand and NEVER regenerated: Render's disk is ephemeral, and a new key
+      # makes every stored API key permanently unreadable.
+      - key: SETTINGS_ENCRYPTION_KEY
+        sync: false
+
+      # Creates the administrator account on first boot.
+      - key: BOOTSTRAP_ADMIN_EMAIL
+        sync: false
+      - key: BOOTSTRAP_ADMIN_PASSWORD
+        sync: false
+
+      - key: CORS_ORIGINS
+        value: https://exam.txglobal.com.au,https://www.exam.txglobal.com.au
