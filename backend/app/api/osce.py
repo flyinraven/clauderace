@@ -368,6 +368,23 @@ def start_sitting(
     return {"id": sitting.id, "station_id": station.id}
 
 
+@router.delete("/attempts", status_code=status.HTTP_200_OK)
+def clear_all_attempts(user: CurrentUser, db: DbSession) -> dict[str, int]:
+    """Forget every attempt this candidate has made, across all stations.
+
+    Testing a station counts as sitting it, which then hides it from circuits.
+    Rather than clearing a dozen stations one at a time after a test run, wipe
+    the lot. Only this candidate's sittings go.
+    """
+    sittings = db.execute(
+        select(OsceSession).where(OsceSession.user_id == user.id)
+    ).scalars().all()
+    for sitting in sittings:
+        db.delete(sitting)
+    db.commit()
+    return {"cleared": len(sittings)}
+
+
 @router.delete("/stations/{station_id}/attempts", status_code=status.HTTP_200_OK)
 def clear_attempts(station_id: int, user: CurrentUser, db: DbSession) -> dict[str, int]:
     """Forget this candidate's attempts at a station so it can be sat again.

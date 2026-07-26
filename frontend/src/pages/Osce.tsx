@@ -109,6 +109,20 @@ export default function Osce() {
     }
   }
 
+  /** Wipe every attempt, for when a run of tests has hidden real stations. */
+  const clearAllAttempts = async () => {
+    const total = stations.reduce((sum, s) => sum + s.attempt_count, 0)
+    if (!confirm(`Clear all ${total} attempt(s) across ${attemptedCount} station(s)?\n\nEvery sitting and its marking is deleted, and all stations return to the circuit pool.`)) {
+      return
+    }
+    try {
+      await api('/osce/attempts', { method: 'DELETE' })
+      load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not clear the attempts')
+    }
+  }
+
   const prepareStations = async () => {
     try {
       const result = await api<{ job_id: number }>('/osce/stations/build-prompts', {
@@ -125,6 +139,7 @@ export default function Osce() {
   const ready = stations.filter((s) => s.prompts_status === 'complete')
   const notReady = stations.length - ready.length
   const unattempted = ready.filter((s) => !s.attempted)
+  const attemptedCount = stations.filter((s) => s.attempted).length
 
   return (
     <div className="space-y-6">
@@ -137,6 +152,11 @@ export default function Osce() {
           </p>
         </div>
         <div className="flex gap-2">
+          {attemptedCount > 0 && (
+            <Button variant="ghost" onClick={clearAllAttempts}>
+              Reset {attemptedCount} sat station(s)
+            </Button>
+          )}
           {user?.role === 'admin' && notReady > 0 && (
             <Button variant="secondary" onClick={prepareStations}>
               Prepare {notReady} station(s)
