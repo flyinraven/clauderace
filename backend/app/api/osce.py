@@ -442,6 +442,20 @@ def preview_station(station_id: int, admin: AdminUser, db: DbSession) -> dict[st
         "findings_elicited": station.findings_elicited,
         "diagnosis": station.diagnosis,
         "total_marks": station.total_marks,
+        # Unapproved ones are included too, with their status: reviewing a
+        # station is exactly when you want to see an image that is not showing.
+        "figures": [
+            {
+                "id": f.id,
+                "image_id": f.image_id,
+                "caption": f.caption,
+                "position": f.position,
+                "is_approved": f.is_approved,
+                "verification_status": f.verification_status,
+            }
+            for f in sorted(station.figures, key=lambda f: f.position)
+            if f.image_id
+        ],
         "prompts": [
             {
                 "label": p.get("label") or chr(ord("A") + i),

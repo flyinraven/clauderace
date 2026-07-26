@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import { useJob } from '../hooks/useJob'
+import { useImage } from '../hooks/useImage'
 import { Alert, Badge, Button, Card, EmptyState, Loading, ProgressBar } from '../components/ui'
 
 interface Station {
@@ -37,6 +38,36 @@ interface PreviewPrompt {
   rubric: RubricPoint[]
 }
 
+interface PreviewFigure {
+  id: number
+  image_id: number | null
+  caption: string | null
+  is_approved: boolean
+  verification_status: string
+}
+
+/** The station's clinical image, as the candidate would be shown it. */
+function PreviewFigureView({ figure }: { figure: PreviewFigure }) {
+  const { url, error } = useImage(figure.image_id)
+  return (
+    <figure className="overflow-hidden rounded-md border border-slate-200 bg-white">
+      {url ? (
+        <img src={url} alt={figure.caption ?? 'Clinical image'} className="w-full" />
+      ) : (
+        <div className="p-4 text-xs text-slate-500">{error ?? 'Loading image…'}</div>
+      )}
+      <figcaption className="border-t border-slate-100 px-3 py-2 text-xs text-slate-500">
+        {figure.caption ?? 'No caption'}
+        {!figure.is_approved && (
+          <span className="ml-2 font-medium text-amber-700">
+            not approved ({figure.verification_status}) — the candidate will not see this
+          </span>
+        )}
+      </figcaption>
+    </figure>
+  )
+}
+
 interface StationPreview {
   id: number
   title: string | null
@@ -47,6 +78,7 @@ interface StationPreview {
   diagnosis: string | null
   total_marks: number
   prompts: PreviewPrompt[]
+  figures: PreviewFigure[]
 }
 
 interface Circuit {
@@ -376,6 +408,17 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
                           {preview.patient_demographic ?? '(no demographic)'}
                           {preview.findings_given ? ` — ${preview.findings_given}` : ' — no given findings'}
                         </p>
+                        {preview.figures.length === 0 ? (
+                          <p className="text-xs text-amber-700">
+                            This station has no image — there is nothing for the candidate to look at.
+                          </p>
+                        ) : (
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            {preview.figures.map((f) => (
+                              <PreviewFigureView key={f.id} figure={f} />
+                            ))}
+                          </div>
+                        )}
                         <ol className="space-y-3">
                           {preview.prompts.map((p) => (
                             <li key={p.label} className="rounded-md border border-slate-200 bg-white p-3">
