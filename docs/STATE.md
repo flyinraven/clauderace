@@ -28,8 +28,10 @@ then `scp` the contents of `frontend/dist` (including `.htaccess`) to
 - 36 SEQs + 63 VSAQs, 250 sub-questions, **every one has a marking key**
 - 822 marking key points, 65 examiner feedback records
 - 4 published papers (Papers 1–4)
-- 60 OSCE stations, all with examiner prompts and split findings
-- 57 stations show a live image (46 faithful, 11 representative)
+- 78 OSCE stations, all with examiner prompts: 24 generated and 54 ingested
+  from three past OSCE reports (2025 Sem 1, 2025 Sem 2, 2026 Sem 1)
+- 57 stations show a live image, all web-sourced and vision-checked; the 18
+  from 2025 Semester 1 are awaiting an image run
 - 6 full 9-station circuits with no repeats
 
 ## AI routing
@@ -64,6 +66,12 @@ Total spend to date: roughly $7.
   after 30 days.
 - **No synthetic clinical images.** AI-generated fundus photos look convincing
   and are anatomically wrong.
+- **The OSCE reports carry no clinical photographs.** The 2025 Semester 1 deck
+  is 115 pages holding four distinct images: a slide background on 94 pages,
+  two more pieces of furniture on 19 each, and a banner on the cover and back.
+  Station pages have no images and no vector drawings. Ingestion attaches a
+  report's own figures where they exist, but every station image in production
+  is web-sourced and vision-checked. Do not re-ingest hoping for images.
 
 ## Recent changes (most recent last)
 
@@ -82,6 +90,16 @@ Total spend to date: roughly $7.
 - Questions are read aloud using the browser's own speech synthesis - free, no
   API. iOS needs `speech.unlock()` called synchronously inside the tap before
   any await, or WebKit drops the utterance silently.
+- Ingested stations get their demographic line from the structuring pass, and
+  the ingest queues the prompt build itself. Both used to be run by hand after
+  every upload, and a station without them is unusable.
+- The sitting header no longer names the title or subspecialty; "Oculoplastics
+  & Orbit" narrowed the differential before the candidate had looked. Revealed
+  with the result.
+- Repeating a question pauses the mic, so the synthesised examiner voice is no
+  longer recorded and transcribed as the candidate's own answer.
+- `deploy_frontend.ps1` chmods after upload: scp creates `assets/` as 700,
+  which Apache cannot traverse, and the site loads blank.
 - Transcription no longer primes the model with expected clinical content,
   which was making it fabricate whole answers from quiet audio. Backstops:
   tiny clips are never sent, and transcripts above 3.5 words/second are
@@ -116,11 +134,11 @@ session expensive - filter to the lines that matter.
 
 Nothing is blocking. Open items, roughly in order of value:
 
-1. **Re-test a station on the phone** — read-aloud, and whether the last
+1. **Source images for the 2025 Semester 1 stations** - 18 of them, plus the
+   3 long-standing gaps. Station images > Source images.
+2. **Re-test a station on the phone** — read-aloud, and whether the last
    answer's transcript now lands. Both were fixed but only the first has been
    confirmed by the user.
-2. **Three stations have no image** (Fuchs with DMEK, homonymous hemianopia,
-   thyroid restrictive strabismus). "Reject & find another" will retry them.
 3. **Daily circuit** builder works but has never been run through a real
    nine-station sitting.
 4. **Written papers** have been sat once end-to-end; the OSCE has been sat for
