@@ -40,3 +40,6 @@ scratch/
 # NOTE: this file lists patterns to ignore - it is itself tracked and pushed to
 # GitHub. Never put secrets here. They belong in backend/.env.production, which
 # the `.env.*` rule above excludes.
+
+# Database dumps - 30 MB each, and they contain everything.
+backups/
