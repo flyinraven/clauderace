@@ -57,9 +57,11 @@ def test_attempts_are_per_candidate(db: Session) -> None:
     for station_id in circuit.station_ids:
         sit(db, 1, station_id)
 
-    # A different candidate has sat nothing, so every station is still open.
-    other = build_circuit(db, user_id=2, station_count=3)
-    assert set(other.station_ids) & set(circuit.station_ids)
+    # A different candidate has sat nothing, so every station is still open to
+    # them. Asked for all 12, they get all 12 - including the ones user 1 sat.
+    other = build_circuit(db, user_id=2, station_count=12)
+    assert set(circuit.station_ids) <= set(other.station_ids)
+    assert len(other.station_ids) == 12
 
 
 def test_clearing_an_attempt_returns_the_station(db: Session) -> None:
