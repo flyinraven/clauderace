@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 from typing import Any
 
 from sqlalchemy import func, select
@@ -217,16 +218,40 @@ def generate_station(
     return station.id
 
 
+# Words too generic to distinguish one station from another.
+_STOPWORDS = {
+    "the", "and", "with", "from", "syndrome", "right", "left", "eye", "eyes",
+    "of", "a", "an", "post", "following", "secondary", "chronic", "acute",
+    "bilateral", "unilateral", "disease", "total",
+}
+
+
+def _signature(text: str | None) -> set[str]:
+    return {
+        w for w in re.findall(r"[a-z]{4,}", (text or "").lower())
+        if w not in _STOPWORDS
+    }
+
+
 def _is_duplicate(db: Session, title: str, diagnosis: str | None) -> bool:
-    for candidate in (title, diagnosis):
-        if not candidate:
+    """Reject a station that repeats one already in the bank.
+
+    Exact title matching is not enough - "Total Limbal Stem Cell Deficiency
+    Following Chemical Injury" and "Limbal Stem Cell Deficiency following
+    Chemical Injury, Right Eye" are the same case to a candidate. Overlap of
+    the distinctive words catches those.
+    """
+    new = _signature(title) | _signature(diagnosis)
+    if not new:
+        return False
+
+    for existing_title, existing_diagnosis in db.execute(
+        select(OsceStation.title, OsceStation.diagnosis)
+    ).all():
+        old = _signature(existing_title) | _signature(existing_diagnosis)
+        if not old:
             continue
-        hit = db.execute(
-            select(OsceStation.id).where(
-                func.lower(OsceStation.title) == candidate.strip().lower()
-            )
-        ).first()
-        if hit:
+        if len(new & old) / len(new | old) > 0.55:
             return True
     return False
 
@@ -264,6 +289,16 @@ def handle_generate_stations(ctx: JobContext) -> bool:
         return True
 
     subspecialty = plan[index]
+
+    # Advance the cursor and commit BEFORE generating, not after. The job
+    # runner is at-least-once: if the database connection drops between the
+    # station being saved and the cursor moving on, the step re-runs and the
+    # bank gains a duplicate. Claiming the step up front makes it at-most-once
+    # instead, so a dropped connection costs one station rather than creating a
+    # near-identical twin - and generating another is trivial.
+    ctx.cursor_set(index=index + 1)
+    ctx.db.commit()
+
     try:
         station_id = generate_station(
             ctx.db, AIClient(ctx.db), subspecialty,
@@ -282,7 +317,6 @@ def handle_generate_stations(ctx: JobContext) -> bool:
         failed.append(subspecialty)
         ctx.set_result(failed=failed)
 
-    ctx.cursor_set(index=index + 1)
     ctx.advance(1, f"Stations: {index + 1} of {len(plan)}")
     return index + 1 >= len(plan)
 
