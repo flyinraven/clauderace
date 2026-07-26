@@ -282,6 +282,13 @@ def grade_prompt(
     return grade
 
 
+def _examiner_passes(db: Session) -> tuple[int, ...]:
+    """Shared with the written papers - see app.services.grading.grade."""
+    from app.services.grading.grade import _examiner_passes as passes
+
+    return passes(db)
+
+
 def _upsert_grade(db: Session, session_id: int, label: str, examiner_pass: int) -> OsceGrade:
     existing = db.execute(
         select(OsceGrade)
@@ -332,7 +339,7 @@ def handle_grade_osce_session(ctx: JobContext) -> bool:
     transcript = response.marking_text if response else ""
 
     client = AIClient(ctx.db)
-    for examiner_pass in (1, 2):
+    for examiner_pass in _examiner_passes(ctx.db):
         try:
             grade_prompt(
                 ctx.db, client, session, station, prompt, transcript, examiner_pass,

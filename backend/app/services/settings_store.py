@@ -219,6 +219,14 @@ SETTING_SPECS: list[SettingSpec] = [
 
     # --- Exam behaviour ---------------------------------------------------
     SettingSpec(
+        "grading.examiner_passes", 1, "Examiner passes per answer", "exam",
+        help_text="The real exam is marked by two examiners, and running two "
+                  "passes reproduces that - including flagging where they "
+                  "disagree. It also doubles the cost of every paper. One pass "
+                  "is the sensible default for solo revision; set 2 when you "
+                  "want the disagreement signal.",
+    ),
+    SettingSpec(
         "exam.auto_grade_on_submit", True, "Grade automatically on submit", "exam",
     ),
     SettingSpec(

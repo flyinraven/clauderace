@@ -181,6 +181,19 @@ def grade_part(
     return grade
 
 
+def _examiner_passes(db: Session) -> tuple[int, ...]:
+    """Which examiner passes to run.
+
+    Two passes reproduce the real exam's double marking and reveal where
+    examiners would disagree, at exactly double the cost. One is the sensible
+    default for solo revision.
+    """
+    from app.services.settings_store import SettingsStore
+
+    count = max(1, min(2, SettingsStore(db).get_int("grading.examiner_passes", 1)))
+    return tuple(range(1, count + 1))
+
+
 def _upsert_grade(db: Session, session_id: int, part_id: int, examiner_pass: int) -> Grade:
     existing = db.execute(
         select(Grade)
@@ -238,7 +251,7 @@ def handle_grade_session(ctx: JobContext) -> bool:
         text = answer.text if answer else ""
 
         client = AIClient(ctx.db)
-        for examiner_pass in (1, 2):
+        for examiner_pass in _examiner_passes(ctx.db):
             try:
                 grade_part(
                     ctx.db, client, session, part, question, text, examiner_pass,

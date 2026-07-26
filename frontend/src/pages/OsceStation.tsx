@@ -178,16 +178,24 @@ export default function OsceStation() {
   const nextPrompt = useCallback(async () => {
     if (!prompt) return
     const captured = await rec.stop()
+    const isLast = index + 1 >= prompts.length
+
     if (captured) {
-      void uploadAnswer(
+      const upload = uploadAnswer(
         prompt.label,
         prompt.index,
         captured.blob,
         captured.mimeType,
         captured.durationMs,
       )
+      // Mid-station the upload overlaps the next answer, which is the point.
+      // On the LAST answer it must be awaited: otherwise loading the review
+      // screen races the upload and the final response has not been created
+      // yet, so it silently shows no transcript.
+      if (isLast) await upload
     }
-    if (index + 1 < prompts.length) {
+
+    if (!isLast) {
       setIndex(index + 1)
       await rec.start()
     } else {
@@ -212,6 +220,17 @@ export default function OsceStation() {
       setStage('review')
     })()
   }, [remaining, stage, sitting, rec, prompt, uploadAnswer, load])
+
+  // Transcription runs in the background, so the review screen polls until
+  // every answer has come back. Without this the last one - queued moments
+  // before the screen opened - stays blank until manually refreshed.
+  useEffect(() => {
+    if (stage !== 'review' || !sitting) return
+    const pending = sitting.prompts.some((p) => p.transcription_status === 'pending')
+    if (!pending) return
+    const timer = window.setInterval(() => void load(), 4000)
+    return () => window.clearInterval(timer)
+  }, [stage, sitting, load])
 
   const begin = async () => {
     if (!sittingId) return
