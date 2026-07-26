@@ -65,6 +65,28 @@ Total spend to date: roughly $7.
 - **No synthetic clinical images.** AI-generated fundus photos look convincing
   and are anatomically wrong.
 
+## Recent changes (most recent last)
+
+- Marking-key token budget scales with question size; a flat 8000 truncated a
+  six-part SEQ's JSON. All 250 sub-questions now have keys.
+- OSCE station generator added. 60 stations, 6 per subspecialty, 6 full
+  circuits. Dedupe compares distinctive words, not exact titles. Generation
+  claims its step before working, so a dropped connection loses a station
+  rather than duplicating one.
+- Images auto-approve and can be rejected with an automatic replacement search
+  that skips everything already turned down.
+- `grading.examiner_passes` defaults to 1.
+- Stations show only `patient_demographic` ("An elderly woman"), the first
+  examiner prompt, and the image. Case summary and history are revealed with
+  the result.
+- Questions are read aloud using the browser's own speech synthesis - free, no
+  API. iOS needs `speech.unlock()` called synchronously inside the tap before
+  any await, or WebKit drops the utterance silently.
+- Transcription no longer primes the model with expected clinical content,
+  which was making it fabricate whole answers from quiet audio. Backstops:
+  tiny clips are never sent, and transcripts above 3.5 words/second are
+  flagged before marking.
+
 ## Known issues
 
 - **SiteGround PostgreSQL drops long-lived connections.** Seen twice during
@@ -81,16 +103,27 @@ Total spend to date: roughly $7.
   Corrected by hand; cause not established. If images appear as "not showing",
   this is it.
 
+## Working effectively in a new session
+
+Read this file first, then work from the code. Avoid re-running the expensive
+discovery: the PDFs are already ingested, the bank is already built, and
+`git log` carries the reasoning for every decision.
+
+Keep tool output small. Long tracebacks and full-file dumps are what make a
+session expensive - filter to the lines that matter.
+
 ## Next up
 
-**Restructure the station presentation so it gives nothing away.** Currently a
-station shows a full patient history, which hands the candidate the diagnosis.
-It should show only:
+Nothing is blocking. Open items, roughly in order of value:
 
-1. Demographics — child / adult / elderly, male / female
-2. The opening instruction — "examine the anterior segment", "assess the squint"
-3. The image
-
-Everything else is elicited. This needs a new field (or a rewrite of
-`patient_history`) across all 60 stations, a change to the station generator
-prompt, and a change to what `GET /osce/sittings/{id}` returns.
+1. **Re-test a station on the phone** — read-aloud, and whether the last
+   answer's transcript now lands. Both were fixed but only the first has been
+   confirmed by the user.
+2. **Three stations have no image** (Fuchs with DMEK, homonymous hemianopia,
+   thyroid restrictive strabismus). "Reject & find another" will retry them.
+3. **Daily circuit** builder works but has never been run through a real
+   nine-station sitting.
+4. **Written papers** have been sat once end-to-end; the OSCE has been sat for
+   a single station. Neither has had a full user run.
+5. SMTP is unconfigured, so invites are copied by hand. Fine for a few users.
+6. No backup routine. SiteGround has PostgreSQL backups - worth switching on.
