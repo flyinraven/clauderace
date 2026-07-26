@@ -329,5 +329,10 @@ class OsceFigure(TimestampMixin, Base):
     match_confidence: Mapped[float | None] = mapped_column(Float)
     is_approved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # Source URLs the user has already rejected for this station. A replacement
+    # search skips them, so asking for another image never returns the same one.
+    rejected_urls: Mapped[list[str] | None] = mapped_column(JSON)
+    rejection_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
     station: Mapped[OsceStation] = relationship(back_populates="figures")
     image: Mapped[Image | None] = relationship()

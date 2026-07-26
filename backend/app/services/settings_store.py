@@ -165,6 +165,13 @@ SETTING_SPECS: list[SettingSpec] = [
                   "protection against a runaway batch. Set 0 to disable.",
     ),
     SettingSpec("imagesearch.auto_attach", True, "Auto-attach best match", "images"),
+    SettingSpec(
+        "imagesearch.auto_approve", True, "Show images without waiting for approval",
+        "images",
+        help_text="On: a verified image appears at its station straight away, and "
+                  "you reject the ones that are wrong. Off: nothing is shown until "
+                  "you approve it, which means stations start with no image at all.",
+    ),
     SettingSpec("imagesearch.results_per_query", 6, "Candidates per query", "images"),
 
     # --- Email ------------------------------------------------------------

@@ -14,6 +14,7 @@ from app.api.deps import AdminUser, CurrentUser, DbSession
 from app.constants import ROLE_ADMIN
 from app.models import (
     AudioClip,
+    Image,
     OsceCircuit,
     OsceFigure,
     OsceGrade,
@@ -174,6 +175,7 @@ class StationFigureOut(BaseModel):
     verification_notes: str | None
     match_confidence: float | None
     is_approved: bool
+    rejection_count: int = 0
 
 
 @router.get("/figures", response_model=list[StationFigureOut])
@@ -194,9 +196,57 @@ def approve_figure(figure_id: int, admin: AdminUser, db: DbSession, approved: bo
     db.commit()
 
 
+@router.post("/figures/{figure_id}/reject", status_code=status.HTTP_202_ACCEPTED)
+def reject_figure_image(
+    figure_id: int, admin: AdminUser, db: DbSession, find_replacement: bool = True
+) -> dict[str, Any]:
+    """Reject the current image and, by default, go and find another.
+
+    The rejected source URL is remembered so a replacement search cannot hand
+    back the same picture.
+    """
+    from app.services.osce.station_images import JOB_SOURCE_STATION_IMAGES
+
+    figure = db.get(OsceFigure, figure_id)
+    if figure is None:
+        raise HTTPException(status_code=404, detail="Figure not found")
+
+    rejected = list(figure.rejected_urls or [])
+    if figure.image_id:
+        image = db.get(Image, figure.image_id)
+        if image and image.source_url and image.source_url not in rejected:
+            rejected.append(image.source_url)
+
+    figure.rejected_urls = rejected
+    figure.rejection_count = (figure.rejection_count or 0) + 1
+    figure.image_id = None
+    figure.is_approved = False
+    figure.verification_status = "rejected"
+    figure.verification_notes = (
+        f"Rejected by the administrator ({figure.rejection_count} so far)."
+    )
+    db.commit()
+
+    job_id = None
+    if find_replacement:
+        job = create_job(
+            db, JOB_SOURCE_STATION_IMAGES,
+            payload={"station_ids": [figure.station_id]},
+            created_by_id=admin.id, total_steps=1,
+            message="Finding a replacement image",
+        )
+        job_id = job.id
+
+    return {
+        "figure_id": figure.id,
+        "rejected_so_far": len(rejected),
+        "job_id": job_id,
+    }
+
+
 @router.delete("/figures/{figure_id}/image", status_code=status.HTTP_204_NO_CONTENT)
 def detach_figure_image(figure_id: int, admin: AdminUser, db: DbSession) -> None:
-    """Reject an unsuitable image, leaving the station image-less."""
+    """Remove an image and leave the station without one."""
     figure = db.get(OsceFigure, figure_id)
     if figure is None:
         raise HTTPException(status_code=404, detail="Figure not found")

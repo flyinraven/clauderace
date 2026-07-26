@@ -14,6 +14,7 @@ interface StationFigure {
   verification_notes: string | null
   match_confidence: number | null
   is_approved: boolean
+  rejection_count: number
 }
 
 interface Station {
@@ -68,18 +69,33 @@ export default function StationImages() {
     load()
   }
 
-  const reject = async (figure: StationFigure) => {
-    if (!confirm('Remove this image? The station will have no image until one is sourced again.'))
-      return
-    await api(`/osce/figures/${figure.id}/image`, { method: 'DELETE' })
-    load()
+  // Rejecting remembers the source URL, so the replacement search cannot hand
+  // back the same picture.
+  const reject = async (figure: StationFigure, findReplacement: boolean) => {
+    setError(null)
+    try {
+      const result = await api<{ job_id: number | null }>(
+        `/osce/figures/${figure.id}/reject?find_replacement=${findReplacement}`,
+        { method: 'POST' },
+      )
+      if (result.job_id) setJobId(result.job_id)
+      load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not reject the image')
+    }
   }
 
   const shown = useMemo(() => {
     if (filter === 'all') return figures
     if (filter === 'approved') return figures.filter((f) => f.is_approved)
     if (filter === 'rejected') return figures.filter((f) => !f.image_id)
-    return figures.filter((f) => f.image_id && !f.is_approved)
+    // "Needs a look" surfaces the ones most likely to be wrong first: anything
+    // representative rather than faithful, or scraped in near the threshold.
+    return figures.filter(
+      (f) =>
+        f.image_id &&
+        (f.verification_status === 'representative' || (f.match_confidence ?? 1) < 0.78),
+    )
   }, [figures, filter])
 
   if (loading) return <Loading label="Loading station images…" />
@@ -101,11 +117,13 @@ export default function StationImages() {
 
       {error && <Alert tone="error">{error}</Alert>}
 
-      <Alert tone="warning" title="A machine passed these; you decide">
-        Each image was checked by a vision model against the station's own signs, which
-        reliably removes diagrams, veterinary photos and marketing images. It is far less
-        reliable about whether the image shows <em>this</em> patient's specific sign. Nothing
-        is shown to a candidate until you approve it.
+      <Alert tone="info" title="Images are live by default">
+        Each was checked by a vision model against its station's own signs, which reliably
+        removes diagrams, veterinary photos and marketing images — but is far less reliable
+        about whether it shows <em>this</em> patient's particular sign. So they appear at
+        their stations straight away and you reject the wrong ones.{' '}
+        <strong>Reject &amp; find another</strong> remembers what you turned down and goes
+        looking again, so you never see the same picture twice.
       </Alert>
 
       {job && ['pending', 'running'].includes(job.status) && (
@@ -121,11 +139,11 @@ export default function StationImages() {
             type="button"
             onClick={() => setFilter(value)}
             className={cx(
-              'rounded-lg px-3 py-1.5 text-sm font-medium capitalize transition',
+              'rounded-lg px-3 py-1.5 text-sm font-medium transition',
               filter === value ? 'bg-clinical-600 text-white' : 'bg-slate-100 text-slate-600',
             )}
           >
-            {value === 'rejected' ? 'no image' : value}
+            {{ pending: 'Needs a look', approved: 'Live', rejected: 'No image', all: 'All' }[value]}
           </button>
         ))}
       </div>
@@ -141,7 +159,8 @@ export default function StationImages() {
               station={stations[figure.station_id]}
               onApprove={() => setApproved(figure, true)}
               onUnapprove={() => setApproved(figure, false)}
-              onReject={() => reject(figure)}
+              onRejectAndReplace={() => reject(figure, true)}
+              onRejectOnly={() => reject(figure, false)}
             />
           ))}
         </div>
@@ -155,13 +174,15 @@ function FigureCard({
   station,
   onApprove,
   onUnapprove,
-  onReject,
+  onRejectAndReplace,
+  onRejectOnly,
 }: {
   figure: StationFigure
   station?: Station
   onApprove: () => void
   onUnapprove: () => void
-  onReject: () => void
+  onRejectAndReplace: () => void
+  onRejectOnly: () => void
 }) {
   const { url } = useImage(figure.image_id)
   const [zoomed, setZoomed] = useState(false)
@@ -237,20 +258,29 @@ function FigureCard({
             </div>
           </dl>
 
-          <div className="mt-4 flex gap-2">
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button size="sm" onClick={onRejectAndReplace}>
+              Reject &amp; find another
+            </Button>
+            <Button size="sm" variant="secondary" onClick={onRejectOnly}>
+              Reject, leave empty
+            </Button>
             {figure.is_approved ? (
-              <Button size="sm" variant="secondary" onClick={onUnapprove}>
-                Withdraw approval
+              <Button size="sm" variant="ghost" onClick={onUnapprove}>
+                Hide from station
               </Button>
             ) : (
-              <Button size="sm" onClick={onApprove}>
-                Approve for use
+              <Button size="sm" variant="ghost" onClick={onApprove}>
+                Show at station
               </Button>
             )}
-            <Button size="sm" variant="ghost" onClick={onReject}>
-              Reject image
-            </Button>
           </div>
+          {figure.rejection_count > 0 && (
+            <p className="mt-2 text-xs text-slate-500">
+              {figure.rejection_count} image(s) already rejected for this station — the
+              search skips them.
+            </p>
+          )}
         </>
       ) : (
         <>

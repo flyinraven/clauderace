@@ -196,6 +196,10 @@ def source_image_for_station(
     rejections: list[str] = []
     best_representative: tuple[float, Any, Any, dict[str, Any]] | None = None
 
+    # Never offer back an image the user has already turned down.
+    already_rejected = set(figure.rejected_urls or [])
+    auto_approve = store.get_bool("imagesearch.auto_approve", True)
+
     # Work specific -> broad, stopping at the first faithful match. A
     # representative hit found early is held in reserve rather than accepted
     # immediately, in case a later query turns up something faithful.
@@ -211,6 +215,8 @@ def source_image_for_station(
             continue
 
         for candidate in candidates:
+            if candidate.image_url in already_rejected:
+                continue
             downloaded = download_candidate(candidate)
             if downloaded is None:
                 continue
@@ -227,7 +233,7 @@ def source_image_for_station(
 
             if tier == "faithful" and confidence >= MIN_MATCH_CONFIDENCE:
                 return _attach(db, figure, candidate, downloaded, verdict, "faithful",
-                               confidence, query, len(rejections))
+                               confidence, query, len(rejections), auto_approve)
 
             if tier == "representative" and confidence >= MIN_REPRESENTATIVE_CONFIDENCE:
                 if best_representative is None or confidence > best_representative[0]:
@@ -241,7 +247,8 @@ def source_image_for_station(
     if best_representative is not None:
         confidence, candidate, downloaded, verdict = best_representative
         return _attach(db, figure, candidate, downloaded, verdict, "representative",
-                       confidence, figure.search_query or queries[0], len(rejections))
+                       confidence, figure.search_query or queries[0], len(rejections),
+                       auto_approve)
 
     figure.image_id = None
     figure.verification_status = "rejected"
@@ -264,6 +271,7 @@ def _attach(
     confidence: float,
     query: str,
     rejected: int,
+    auto_approve: bool = True,
 ) -> dict[str, Any]:
     # OsceFigure exposes the same `image_id` the writer sets, so the
     # deduplicate-and-store path is reused as-is.
@@ -278,8 +286,11 @@ def _attach(
     figure.verification_notes = notes or None
     figure.match_confidence = confidence
     figure.search_query = query
-    # Always requires the administrator's eye before a candidate sees it.
-    figure.is_approved = False
+    # Vision verification has already discarded diagrams, wrong modalities and
+    # unrelated pathology, so a verified image is shown straight away and the
+    # user rejects the ones that are wrong. Holding everything back for
+    # approval means stations start with no image at all, which is worse.
+    figure.is_approved = auto_approve
     db.commit()
     return {
         "attached": True, "tier": tier, "query": query,
