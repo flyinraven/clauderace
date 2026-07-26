@@ -39,6 +39,12 @@ You are given a station's case, findings, diagnosis and its 20-mark rubric. \
 Convert it into the ordered sequence of questions you would actually ask.
 
 Rules:
+- The FIRST question is always the standing instruction the candidate is given \
+as they walk in, naming the examination the station is testing: "Please perform \
+a strabismus examination", "...an anterior segment examination", "...a \
+posterior segment examination", "...an orbit examination", or whichever fits \
+this case. Nothing else - no history, no findings, no hint of the diagnosis. \
+That is how a real station opens.
 - Produce between {MIN_PROMPTS} and {MAX_PROMPTS} questions, in the order a real \
 examiner would ask them: examine and describe findings first, then \
 interpretation and diagnosis, then differential, then investigation and \

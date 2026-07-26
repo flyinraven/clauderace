@@ -61,6 +61,10 @@ class StationSummary(BaseModel):
     total_marks: int
     prompt_count: int = 0
     prompts_status: str
+    # Whether the VA/IOP numbers have been separated from the signs the
+    # candidate must find. Until they are, a station opens with no data.
+    findings_split_status: str = "none"
+    has_given_findings: bool = False
     attempted: bool = False
     # This candidate's attempts only - one user's practice must not close a
     # station off for anyone else.
@@ -97,6 +101,8 @@ def list_stations(user: CurrentUser, db: DbSession) -> list[StationSummary]:
                 total_marks=station.total_marks,
                 prompt_count=len(station.prompts or []),
                 prompts_status=station.prompts_status,
+                findings_split_status=station.findings_split_status,
+                has_given_findings=bool(station.findings_given),
                 attempted=station.id in counts,
                 attempt_count=counts.get(station.id, (0, None))[0],
                 last_attempt_at=counts.get(station.id, (0, None))[1],

@@ -16,6 +16,8 @@ interface Station {
   total_marks: number
   prompt_count: number
   prompts_status: string
+  findings_split_status: string
+  has_given_findings: boolean
   attempted: boolean
   attempt_count: number
   last_attempt_at: string | null
@@ -134,12 +136,29 @@ export default function Osce() {
     }
   }
 
+  /**
+   * Separate the numbers the examiner reads out (acuity, pressure) from the
+   * signs the candidate has to find. Without it a station opens with the
+   * demographic alone, which is not how a real station is set up.
+   */
+  const splitFindings = async () => {
+    try {
+      const result = await api<{ job_id: number }>('/osce/stations/split-findings', {
+        method: 'POST',
+      })
+      setPrepJob(result.job_id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nothing to split')
+    }
+  }
+
   if (loading) return <Loading label="Loading stations…" />
 
   const ready = stations.filter((s) => s.prompts_status === 'complete')
   const notReady = stations.length - ready.length
   const unattempted = ready.filter((s) => !s.attempted)
   const attemptedCount = stations.filter((s) => s.attempted).length
+  const needSplit = stations.filter((s) => ['none', 'failed'].includes(s.findings_split_status)).length
 
   return (
     <div className="space-y-6">
@@ -155,6 +174,11 @@ export default function Osce() {
           {attemptedCount > 0 && (
             <Button variant="ghost" onClick={clearAllAttempts}>
               Reset {attemptedCount} sat station(s)
+            </Button>
+          )}
+          {user?.role === 'admin' && needSplit > 0 && (
+            <Button variant="secondary" onClick={splitFindings}>
+              Split findings for {needSplit} station(s)
             </Button>
           )}
           {user?.role === 'admin' && notReady > 0 && (

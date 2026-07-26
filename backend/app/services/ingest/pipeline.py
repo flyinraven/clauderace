@@ -136,8 +136,43 @@ def _finalise(ctx: JobContext, source: SourceDocument, kind: str) -> bool:
     _BLOCK_CACHE.pop(source.id, None)
 
     if kind == "osce" and result.get("station_ids"):
+        _queue_findings_split(ctx, result["station_ids"])
         _queue_prompt_build(ctx, result["station_ids"])
     return True
+
+
+def _queue_findings_split(ctx: JobContext, station_ids: list[int]) -> None:
+    """Separate the numbers the examiner reads out from the signs to be found.
+
+    Until this runs a station has no `findings_given`, so the sitting opens
+    with the demographic alone - no visual acuity, no intraocular pressure -
+    which is not how a station is set up. Like the prompt build, every ingest
+    has needed it.
+    """
+    from app.services.jobs.runner import create_job
+    from app.services.osce.findings import JOB_SPLIT_OSCE_FINDINGS
+
+    pending = [
+        s.id
+        for s in ctx.db.execute(
+            select(OsceStation).where(
+                OsceStation.id.in_(station_ids),
+                OsceStation.findings.is_not(None),
+                OsceStation.findings_split_status.in_(["none", "failed"]),
+            )
+        ).scalars().all()
+    ]
+    if not pending:
+        return
+    job = create_job(
+        ctx.db,
+        JOB_SPLIT_OSCE_FINDINGS,
+        payload={"station_ids": pending},
+        created_by_id=ctx.job.created_by_id,
+        total_steps=len(pending),
+        message=f"Splitting findings for {len(pending)} station(s)",
+    )
+    logger.info("Queued findings split job %s for %d station(s)", job.id, len(pending))
 
 
 def _queue_prompt_build(ctx: JobContext, station_ids: list[int]) -> None:
