@@ -101,6 +101,24 @@ def test_a_station_missing_steps_of_the_arc_is_rejected():
     assert any("arc step 4" in p for p in problems)
 
 
+def test_a_stub_answer_costs_a_retry_not_the_station(client, db, admin, ai, run_jobs):
+    """The utility model sometimes answers with an unfinished fragment."""
+    make_station(db, prompts=[], prompts_status="none")
+    replies = ['{\n  "prompts', json.dumps({"prompts": full_arc()})]
+
+    def responder(body, n):
+        return replies.pop(0) if replies else json.dumps({"prompts": full_arc()})
+
+    ai.responder = responder
+    client.post("/api/osce/stations/build-prompts", headers=auth(admin))
+    run_jobs()
+
+    db.expire_all()
+    station = db.query(OsceStation).one()
+    assert station.prompts_status == "complete"
+    assert len(station.prompts) == 7
+
+
 def test_a_station_with_no_image_need_not_ask_the_candidate_to_read_one():
     """Nothing is shown, so there is no photograph to describe."""
     from app.services.osce.prompts import _arc_problems, _normalise

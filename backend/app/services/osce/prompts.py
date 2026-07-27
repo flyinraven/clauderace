@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.constants import OSCE_STATION_MARKS, OSCE_STATION_MINUTES
 from app.models import OsceStation
 from app.services.ai import AIClient
+from app.services.ai.client import AIError
 from app.services.coerce import as_float
 from app.services.errors import log_error
 from app.services.jobs.runner import JobContext, JobHandlerError, register_handler
@@ -30,6 +31,8 @@ JOB_BUILD_OSCE_PROMPTS = "build_osce_prompts"
 STATION_SECONDS = OSCE_STATION_MINUTES * 60  # 540
 STATION_MARKS = OSCE_STATION_MARKS
 MIN_PROMPTS = 3
+# How many times to ask before giving up on a station.
+_GENERATE_ATTEMPTS = 2
 # The arc below runs to seven steps: instruction, ancillary test, read the
 # image, differentials, the diagnosis-and-management question, an evolving
 # hypothetical and a knowledge question. One question per step, no more.
@@ -227,17 +230,24 @@ def build_prompts_for_station(
 def _generate(
     client: AIClient, user: str, job_id: int | None
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """One round trip, normalised. Raises if nothing usable comes back."""
-    data = client.complete_json(
-        task="utility",
-        system=SYSTEM_PROMPT,
-        user=user,
-        # Seven questions each carrying rubric points is a long reply, and the
-        # utility model spends output tokens reasoning before it writes any of
-        # it. At the 8k default some stations were cut off mid-JSON and lost.
-        max_tokens=16000,
-        job_id=job_id,
-    )
+    """One round trip, normalised. Raises if nothing usable comes back.
+
+    The utility model intermittently answers with a stub - one station came
+    back as the twelve characters '{\\n  "prompts' - which the repair pass
+    inside complete_json cannot mend, because there is nothing there to repair.
+    Asking again gets a full answer, so a station is not lost to a bad draw.
+    """
+    for attempt in range(_GENERATE_ATTEMPTS):
+        try:
+            data = client.complete_json(
+                task="utility", system=SYSTEM_PROMPT, user=user, job_id=job_id
+            )
+            break
+        except AIError:
+            if attempt + 1 >= _GENERATE_ATTEMPTS:
+                raise
+            logger.warning("Prompt generation returned nothing usable; asking again")
+
     if isinstance(data, list):
         data = {"prompts": data}
     if not isinstance(data, dict):

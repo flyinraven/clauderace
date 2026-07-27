@@ -296,6 +296,34 @@ def test_malformed_json_is_repaired_with_one_extra_call(db, monkeypatch):
     assert "not valid JSON" in json.dumps(calls[1]["messages"][-1])
 
 
+def test_the_repair_call_still_carries_the_original_request(db, monkeypatch):
+    """Without it the model answers from the system prompt alone and invents.
+
+    A station whose first reply was the stub '{\\n  "prompts' came back from
+    the repair as a confident, fully formed case with a diagnosis belonging to
+    no patient in the bank.
+    """
+    _configure(db)
+    replies = ['{\n  "prompts', '{"ok": true}']
+    calls: list[dict] = []
+
+    def respond(self, url, headers, body):
+        calls.append(body)
+        return {
+            "model": "fake",
+            "choices": [
+                {"message": {"content": replies[len(calls) - 1]}, "finish_reason": "stop"}
+            ],
+            "usage": {},
+        }
+
+    monkeypatch.setattr(AIClient, "_post", respond)
+    AIClient(db).complete_json(
+        task="grading", system="You are an examiner", user="DIAGNOSIS: iris melanoma"
+    )
+    assert "DIAGNOSIS: iris melanoma" in json.dumps(calls[1]["messages"][-1])
+
+
 # --- JSON extraction -----------------------------------------------------
 @pytest.mark.parametrize(
     ("text", "expected"),

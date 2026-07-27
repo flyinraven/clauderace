@@ -345,10 +345,21 @@ class AIClient:
         except AIError:
             if repair_attempts <= 0:
                 raise
-            repair = (
-                "Your previous reply was not valid JSON. Return the same content "
-                "as a single valid JSON value and nothing else - no prose, no "
-                "code fences.\n\nPrevious reply:\n" + response.text[:6000]
+            # The repair carries the ORIGINAL request with it. Sending only the
+            # broken reply used to drop the source material entirely, and the
+            # model - still holding a system prompt telling it to write an OSCE
+            # station - invented one from nothing. A station arrived with a
+            # confidently stated diagnosis belonging to no patient in the bank,
+            # which is far worse than the parse failure it was papering over.
+            note = (
+                "\n\n---\nYour previous reply to this request was not valid JSON. "
+                "Answer the request above again, as a single valid JSON value and "
+                "nothing else - no prose, no code fences. Do not invent content: "
+                "everything must come from the request.\n\nPrevious reply:\n"
+                + response.text[:6000]
+            )
+            repair: str | list[ContentPart] = (
+                user + note if isinstance(user, str) else [*user, TextPart(note)]
             )
             repaired = self.complete(
                 task, system, repair,
