@@ -10,6 +10,7 @@ marked against exactly what was asked of it.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from sqlalchemy import select
@@ -58,8 +59,9 @@ candidate where to look or what they are going to find.
 
 How a RANZCO station is actually built, from real examiner handouts. Follow
 this arc, in this order. Steps 1, 2, 4 and 5 are REQUIRED in every station;
-step 3 is required whenever the station has an image; and you must include at
-least one of steps 6 and 7:
+step 3 is required only when the request lists an ancillary image, and
+forbidden when it does not; and you must include at least one of steps 6
+and 7:
 
 1. THE STANDING INSTRUCTION. The first question is always what the candidate
    is told as they walk in: the region and the eye, nothing else. "Please
@@ -74,9 +76,16 @@ least one of steps 6 and 7:
 2. WHAT ELSE WOULD YOU DO. "What other examinations would you do in this
    patient?" / "What ancillary test would you perform?" The candidate should
    name the test before being shown it - so do NOT name it yourself.
-3. READ THE IMAGE. Having asked for it, they describe what it shows -
-   correctly naming the sign, its extent, and what is absent. Ask it blind:
-   "What does this show?" / "Describe the OCT."
+3. READ THE ANCILLARY IMAGE, and ONLY if the request below lists one. Having
+   asked for it, they describe what it shows - correctly naming the sign, its
+   extent, and what is absent. Ask it blind: "What does this show?" /
+   "Describe the OCT."
+   You may refer ONLY to an image the request actually lists. Never write
+   "This is her A-scan biometry", "Here is the OCT" or "These are the fields"
+   for something that is not there: the candidate is shown nothing, is asked
+   to interpret it anyway, and cannot answer. When no ancillary image is
+   listed, omit step 3 entirely and let step 2 stand on its own - asking which
+   test they would order is fine; presenting its result is not.
 4. SUMMARISE AND DIFFERENTIATE, with a stated number: "Can you summarise your
    findings and give 5 differential diagnoses?"
 5. THE EXAMINER GIVES THE DIAGNOSIS AND ASKS FOR MANAGEMENT. This is ONE
@@ -130,6 +139,25 @@ Register, from the handouts - match it exactly:
 - Never number the questions in their text, and never preface them with
   "Question 3" or "Next". Say only what the examiner would say.
 
+RECOVERING THE QUESTIONS THAT WERE REALLY ASKED. For a station taken from a
+past examiners' report, the report is a record of a station that actually ran,
+and it says what was asked - just not in question form. Read it that way and
+put the real questions back:
+- The AIMS are the asks, one step removed. "To discuss vision rehabilitation
+  in paediatric cataract" means the examiner asked "How would you rehabilitate
+  her vision?" Every aim should be traceable to a question you write.
+- WHAT THE COHORT MISSED names what was asked. "Few candidates considered the
+  patient would likely need a general anaesthetic" means they were asked about
+  the anaesthetic; "very few considered the regular risks of cataract surgery"
+  means they were asked to consent or counsel. Turn each into the question
+  that would expose it, and mark that rubric point is_critical.
+- HOW THE COHORT PERFORMED tells you where the station's weight sat: what they
+  did well was still asked, and still needs a question.
+Then fit those recovered questions to the arc above rather than inventing
+fresh ones: they are what a real examiner said, and they outrank anything you
+would have thought of. Where the report gives you nothing for a step, write
+the step as the arc describes it.
+
 Other rules:
 - Produce between {MIN_PROMPTS} and {MAX_PROMPTS} questions.
 - Give each question the number of the arc step it came from, in "step". No
@@ -172,20 +200,49 @@ def build_prompts_for_station(
 
     mistakes = "\n".join(f"  - {m}" for m in (station.common_mistakes or [])) or "  (none recorded)"
 
-    # A station with no photograph cannot ask the candidate to read one, so the
-    # arc skips step 3 rather than inventing an image that is never shown.
-    has_image = bool(station.figures)
-    image_note = (
-        "This station has an image, so arc step 3 is required."
-        if has_image
-        else "This station has NO image. Skip arc step 3 entirely - never ask the "
-        "candidate to describe a photograph, OCT or angiogram they will not be shown."
-    )
+    # What the report says the candidate was asked to do, where it records it
+    # at all. This is the closest thing to the real wording that survives.
+    tasks = "\n".join(
+        f"  - {t.get('text') or t.get('task') or t}" if isinstance(t, dict) else f"  - {t}"
+        for t in (station.tasks or [])
+    ) or "  (not recorded)"
+
+    # The first figure is the patient: it is what the candidate is looking at
+    # when told to examine. Only a SECOND figure is an ancillary test there is
+    # something to hand over and read, so only then can step 3 be asked. A
+    # station shown one external photograph was being asked "this is her A-scan
+    # biometry, what does it show?" - about a scan that does not exist.
+    figures = list(station.figures)
+    has_image = len(figures) > 1
+    if not figures:
+        image_note = (
+            "This station shows NO image at all. Skip arc step 3, and never present "
+            "a photograph, scan or angiogram - there is nothing to show."
+        )
+    else:
+        listed = "\n".join(
+            f"  {i + 1}. {f.caption or f.wanted_description or 'unlabelled image'}"
+            for i, f in enumerate(figures)
+        )
+        first = "The first is what the candidate examines at step 1, not something to hand over."
+        image_note = (
+            f"IMAGES THIS STATION ACTUALLY SHOWS:\n{listed}\n{first}\n"
+            + (
+                "The rest are ancillary tests, so arc step 3 asks about one of THOSE."
+                if has_image
+                else "There is no ancillary image, so OMIT arc step 3. Do not present an "
+                "OCT, angiogram, biometry, field or scan result anywhere in the station: "
+                "nothing will be shown, and the candidate cannot interpret what they "
+                "cannot see. Asking which test they would order is still fine."
+            )
+        )
 
     user = (
         f"SUBSPECIALTY: {station.subspecialty or 'unspecified'}\n"
-        f"STATION: {station.title or f'Station {station.station_number}'}\n\n"
-        f"CASE SUMMARY:\n{station.case_summary or '(none)'}\n\n"
+        f"STATION: {station.title or f'Station {station.station_number}'}\n"
+        f"SOURCE: {station.source or 'unknown'}"
+        + (f", {station.exam_period}" if station.exam_period else "")
+        + f"\n\nCASE SUMMARY:\n{station.case_summary or '(none)'}\n\n"
         f"AIMS OF THE STATION:\n"
         + ("\n".join(f"  - {a}" for a in (station.aims or [])) or "  (none)")
         + f"\n\nPATIENT HISTORY:\n{station.patient_history or '(none)'}\n\n"
@@ -193,6 +250,8 @@ def build_prompts_for_station(
         f"DIAGNOSIS:\n{station.diagnosis or '(none)'}\n\n"
         f"MARKING RUBRIC (20 marks total):\n{rubric_lines}\n\n"
         f"MISTAKES THE EXAMINERS NOTED IN THE REAL COHORT:\n{mistakes}\n\n"
+        f"HOW THE COHORT PERFORMED:\n{station.cohort_performance or '(not recorded)'}\n\n"
+        f"CANDIDATE TASKS AS THE REPORT RECORDS THEM:\n{tasks}\n\n"
         f"{image_note}\n\n"
         f"Write the examiner's question sequence now. Check your arithmetic: "
         f"seconds must total {STATION_SECONDS} and marks must total 20."
@@ -272,6 +331,15 @@ _OPENING_GIVEAWAYS = (
 
 _REQUIRED_STEPS = (1, 2, 4, 5)
 
+# Handing over a result: "this is her A-scan biometry", "here is the OCT".
+# Harmless when the image exists and fatal when it does not, because the
+# candidate is asked to read something the screen never shows them.
+_PRESENTS_A_RESULT = re.compile(
+    r"\b(this is|here is|here are|these are|shown here|i am showing you|"
+    r"what does (this|it) show|what do these show)\b",
+    re.IGNORECASE,
+)
+
 
 def _arc_problems(prompts: list[dict[str, Any]], has_image: bool = True) -> list[str]:
     """Check the sequence against the arc. Empty means it is a real station."""
@@ -291,6 +359,17 @@ def _arc_problems(prompts: list[dict[str, Any]], has_image: bool = True) -> list
     ordered = [s for s in steps if isinstance(s, int)]
     if ordered != sorted(ordered):
         problems.append("the questions are not in arc order")
+
+    # Nothing may be handed to the candidate that the station cannot show.
+    if not has_image:
+        for prompt in prompts:
+            if _PRESENTS_A_RESULT.search(prompt["text"]):
+                problems.append(
+                    f"question {prompt['label']} presents a test result "
+                    f"({prompt['text'][:60]!r}...), but this station has no ancillary "
+                    "image to show; ask which test they would order instead"
+                )
+                break
 
     opening = prompts[0]
     if opening.get("step") != 1:

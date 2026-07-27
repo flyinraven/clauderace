@@ -128,6 +128,46 @@ def test_a_station_with_no_image_need_not_ask_the_candidate_to_read_one():
     assert any("arc step 3" in p for p in _arc_problems(prompts, has_image=True))
 
 
+def test_a_test_result_cannot_be_handed_over_when_there_is_none_to_show():
+    """A live station asked "this is her A-scan biometry" - there was no scan.
+
+    The candidate is shown one external photograph, is asked to interpret a
+    scan that does not exist, and cannot answer.
+    """
+    from app.services.osce.prompts import _arc_problems, _normalise
+
+    raw = [item for item in full_arc() if item["step"] != 3]
+    raw[1]["text"] = "This is her A-scan biometry. What does it show?"
+    prompts, _ = _normalise(raw)
+    problems = _arc_problems(prompts, has_image=False)
+    assert any("presents a test result" in p for p in problems)
+
+
+def test_only_a_second_figure_counts_as_an_ancillary_image(client, db, admin, ai, run_jobs):
+    """The first figure is the patient the candidate is examining, not a handout."""
+    from app.models import OsceFigure
+    from app.services.osce.prompts import build_prompts_for_station
+    from app.services.ai import AIClient
+
+    station = make_station(db, prompts=[], prompts_status="none")
+    station.figures.append(OsceFigure(caption="External photograph of the right eye"))
+    db.commit()
+
+    sent: list[str] = []
+
+    def responder(body, n):
+        sent.append(json.dumps(body["messages"][-1]["content"]))
+        return json.dumps({"prompts": [i for i in full_arc() if i["step"] != 3]})
+
+    ai.responder = responder
+    build_prompts_for_station(db, AIClient(db), station)
+
+    assert "OMIT arc step 3" in sent[0]
+    assert "External photograph of the right eye" in sent[0]
+    # One request only: a sequence without step 3 is correct here, not a fault.
+    assert len(sent) == 1
+
+
 def test_the_model_is_asked_again_when_the_arc_is_wrong(client, db, admin, ai, run_jobs):
     """A rejected first attempt is fed back, and the corrected one is kept."""
     make_station(db, prompts=[], prompts_status="none")
