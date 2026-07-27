@@ -164,9 +164,57 @@ def test_the_images_a_station_already_has_are_named_in_the_request(client, db, a
 
     assert "External photograph of the right eye" in sent[0]
     assert "image_wanted" in sent[0]
-    # One request only: with a single figure, a sequence without step 3 is
-    # allowed - the question may instead ask for an image to be sourced.
-    assert len(sent) == 1
+
+
+def test_a_question_that_would_fit_any_station_is_rejected():
+    """Across 36 rebuilt stations, step 2 was the same sentence 29 times."""
+    from app.services.osce.prompts import _arc_problems, _normalise
+
+    vocabulary = {"keratoconus", "cornea", "hydrops", "topography", "crosslinking"}
+    raw = full_arc()
+    raw[1]["text"] = "What other investigations would you perform in this patient?"
+    prompts, _ = _normalise(raw)
+    problems = _arc_problems(prompts, has_image=False, vocabulary=vocabulary)
+    assert any(p.startswith("question B") and "would fit any station" in p for p in problems)
+
+    # Asking the thing this case actually turns on passes.
+    raw[1]["text"] = "What would the topography show, and how would you use it?"
+    prompts, _ = _normalise(raw)
+    assert not any(
+        p.startswith("question B")
+        for p in _arc_problems(prompts, has_image=False, vocabulary=vocabulary)
+    )
+
+
+def test_an_aim_with_no_question_is_a_hole_in_the_station():
+    """Station 3's aim of distinguishing dystopia from strabismus was dropped."""
+    from app.services.osce.prompts import _arc_problems, _normalise
+
+    vocabulary = {"globe", "dystopia", "vertical", "strabismus", "orbital", "proptosis"}
+    aims = ["To distinguish between globe dystopia versus vertical strabismus."]
+    prompts, _ = _normalise(full_arc())
+    problems = _arc_problems(prompts, has_image=False, vocabulary=vocabulary, aims=aims)
+    assert any("never asked about" in p for p in problems)
+
+    raw = full_arc()
+    raw[1]["text"] = "How would you tell that globe dystopia from a vertical strabismus?"
+    prompts, _ = _normalise(raw)
+    assert not any(
+        "never asked about" in p
+        for p in _arc_problems(prompts, has_image=False, vocabulary=vocabulary, aims=aims)
+    )
+
+
+def test_a_generic_aim_is_not_held_against_the_station():
+    """"Describe findings." names nothing checkable, so it cannot be traced."""
+    from app.services.osce.prompts import _arc_problems, _normalise
+
+    prompts, _ = _normalise(full_arc())
+    problems = _arc_problems(
+        prompts, has_image=False, vocabulary={"cataract", "subluxed"},
+        aims=["Describe findings.", "Examine the anterior segment."],
+    )
+    assert not any("never asked about" in p for p in problems)
 
 
 def test_a_rubric_that_marks_reading_a_scan_forces_the_question_that_shows_it():

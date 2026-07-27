@@ -48,19 +48,33 @@ the next one.
 You are given a station's case, findings, diagnosis and its 20-mark rubric. \
 Convert it into the ordered sequence of questions you would actually ask.
 
-THE ONE RULE ABOVE ALL OTHERS: a question must never contain its own answer.
-The candidate is being tested on whether they can find the signs and name the
-disease. So until the examiner formally gives the diagnosis at step 5, NO
-question may name a finding, a sign, an imaging appearance, the diagnosis, or
-the region of pathology. Write "Now describe the fundus" - never "Now describe
-the dragged macula", "in this post-vitrectomy eye", "for this type of
-choroiditis", or "including the macula and periphery", which all tell the
-candidate where to look or what they are going to find.
+THE AIMS ARE THE STATION. The aims listed below are what this station exists
+to test, and they are what the examiner actually asked. EVERY aim must become
+a question, in the words an examiner would use. An aim of "to distinguish
+globe dystopia from vertical strabismus" is the question "How would you tell
+whether that is globe dystopia or a vertical strabismus?" - ask it. An aim of
+"to recognise a tectonic graft and examine its integrity" is "How would you
+assess the integrity of that graft?" The arc below decides where a question
+sits in the sequence; the aims decide which questions exist at all. A station
+whose questions could be swapped with another station's has failed, because
+the aims are what make it this station and not a generic one.
 
-How a RANZCO station is actually built, from real examiner handouts. Follow
-this arc, in this order. Steps 1, 2, 4 and 5 are REQUIRED in every station;
-step 3 is required whenever the case turns on an investigation; and you must
-include at least one of steps 6 and 7:
+WHAT MUST NOT BE GIVEN AWAY - and only this:
+- The DIAGNOSIS, before the examiner states it at step 5. Never name it, and
+  never hint at it with a phrase only the diagnosis explains.
+- WHERE TO LOOK, in the standing instruction at step 1. It names a region and
+  an eye, never a structure or a sign.
+Everything else is fair. Once the candidate has described the signs, an
+examiner refers to them by name - that is how a real station sounds. "How
+would you measure that proptosis?" and "What is the significance of the
+anomalous vessels?" are proper questions, not leaks.
+
+How a RANZCO station is actually built, from real examiner handouts. Use this
+arc for ORDER. Steps 1, 4 and 5 are in every station, and at least one of 6
+and 7; step 3 whenever the case turns on an investigation. Step 2 is the
+case's own examination or test question and is almost always present. Where a
+case carries more, add questions - four to seven is the normal range, and a
+station with five aims needs more questions than one with two:
 
 1. THE STANDING INSTRUCTION. The first question is always what the candidate
    is told as they walk in: the region and the eye, nothing else. "Please
@@ -72,9 +86,22 @@ include at least one of steps 6 and 7:
    It is still marked, and heavily: what comes back is the candidate's
    description of the signs, so EVERY rubric point about identifying or
    describing a finding belongs here. It must never carry zero marks.
-2. WHAT ELSE WOULD YOU DO. "What other examinations would you do in this
-   patient?" / "What ancillary test would you perform?" The candidate should
-   name the test before being shown it - so do NOT name it yourself.
+2. WHAT ELSE WOULD YOU DO - about THIS case. This is the step that most often
+   comes out generic, and a generic version is a wasted question. "What other
+   investigations would you perform in this patient?" could be asked of any
+   station in the college's history, tests nothing specific, and must not be
+   your answer.
+   Ask instead the manoeuvre, measurement or test this case turns on, in the
+   examiner's words:
+     "How would you measure the globe dystopia?"
+     "What would you look for on gonioscopy?"
+     "How would you assess the integrity of that graft?"
+     "How would you work up the systemic associations of that retinal finding?"
+     "What would you do to confirm the site of the lesion?"
+   Take it from the aims and the rubric - they name the test the examiners
+   cared about. Where the candidate genuinely should propose the test
+   unprompted, ask what they would do NEXT for this specific problem rather
+   than naming the test for them.
 3. READ THE ANCILLARY IMAGE. Having asked for it, they describe what it shows
    - correctly naming the sign, its extent, and what is absent. Ask it blind:
    "What does this show?" / "Describe the OCT."
@@ -114,21 +141,50 @@ include at least one of steps 6 and 7:
    inheritance pattern?" "What are the risk factors for developing
    keratoconus? Name 4." "What are the types of paediatric glaucoma?"
 
-A worked example of the whole arc, for a station whose diagnosis is
-serpiginous choroiditis with a secondary CNVM. Note how nothing before E gives
-anything away:
+THREE STATIONS, END TO END. Read them for how differently they sound - the
+arc is the same and almost no wording is. Do NOT reuse these sentences; they
+are here to show the range, and a question copied out of them is a question
+that was not written for the case in front of you.
 
-  A. (step 1) "Please examine the posterior segment of both eyes."
-  B. (step 2) "What other investigations would you perform in this patient?"
-  C. (step 3) "This is her OCT and fluorescein angiogram. What do they show?"
-  D. (step 4) "Please summarise your findings and give me 4 differential
-      diagnoses."
-  E. (step 5) "The diagnosis is serpiginous choroiditis with a secondary
-      choroidal neovascular membrane. How would you manage her if she were new
-      to your practice today?"
-  F. (step 6) "Her Mantoux and QuantiFERON Gold come back positive. What is
-      the significance of that, and what changes?"
-  G. (step 7) "What are the causes of a serpiginous-like choroiditis? Name 4."
+Serpiginous choroiditis with a secondary CNVM. Aims: identify multifocal
+choroiditis and form differentials; interpret ancillary tests; organise tests,
+referrals and a plan.
+  A. (1) "Please examine the posterior segment of both eyes."
+  B. (2) "Which tests would you organise to sort out the cause of that
+      choroiditis?"
+  C. (3) "This is her OCT and fluorescein angiogram. What do they show?"
+  D. (4) "Please summarise your findings and give me 4 differential diagnoses."
+  E. (5) "The diagnosis is serpiginous choroiditis with a secondary choroidal
+      neovascular membrane. How would you manage her if she were new to your
+      practice today?"
+  F. (6) "Her Mantoux and QuantiFERON Gold come back positive. What is the
+      significance of that, and what changes?"
+  G. (7) "What are the causes of a serpiginous-like choroiditis? Name 4."
+
+Orbital inflammatory disease. Aims: perform an orbital examination
+systematically; distinguish globe dystopia from vertical strabismus; form
+differentials; understand the principles of orbital disease management.
+  A. (1) "Please examine the orbits of both eyes."
+  B. (2) "How would you measure that dystopia, and how would you satisfy
+      yourself it is not a vertical strabismus?"
+  C. (3) "This is his MRI. Talk me through it, including the negatives."
+  D. (4) "Summarise the case for me and give three differentials."
+  E. (5) "This is idiopathic orbital inflammatory disease. He is yours from
+      today - what is your plan?"
+  F. (7) "Which systemic conditions would you want to exclude? Name three."
+
+Advanced primary open angle glaucoma on maximal drops. Aims: assess the disc
+and quantify the damage; understand target pressures; know when to escalate.
+  A. (1) "Please examine the optic discs of both eyes."
+  B. (2) "What would you look for on gonioscopy in this man?"
+  C. (3) "These are his visual fields. Talk me through them."
+  D. (4) "Summarise the case and tell me what is going on."
+  E. (5) "This is advanced primary open angle glaucoma. What pressure would
+      you be aiming for, and how would you get there?"
+  F. (6) "He comes back in a year and the field has progressed despite a
+      pressure of 14. What now?"
+  G. (7) "What are the risk factors for progression in open angle glaucoma?
+      Name 4."
 
 Register, from the handouts - match it exactly:
 - Short, spoken, second person, ONE thing asked at a time. Do not staple two
@@ -144,6 +200,12 @@ Register, from the handouts - match it exactly:
   to your practice?"
 - Never number the questions in their text, and never preface them with
   "Question 3" or "Next". Say only what the examiner would say.
+- Vary how you ask. Real examiners say "Talk me through it", "What is going on
+  here?", "He is yours from today - what is your plan?", "Her mother asks
+  you...", not the same five sentences at every station. Before you finish,
+  read your questions back: if any of them could be pasted into a different
+  station without changing a word, it is not testing this case and needs
+  rewriting around the aims, the findings or the rubric.
 
 RECOVERING THE QUESTIONS THAT WERE REALLY ASKED. For a station taken from a
 past examiners' report, the report is a record of a station that actually ran,
@@ -230,6 +292,9 @@ def build_prompts_for_station(
             for i, f in enumerate(figures)
         )
     needs_investigation = station_needs_an_investigation(station.rubric)
+    # What this station is about, used to reject questions that could have been
+    # written for any station at all.
+    vocabulary = station_vocabulary(station)
     rubric_demands = (
         "\nThe rubric marks the candidate on READING an investigation, which means "
         "one was put in front of them at the real station. Arc step 3 is therefore "
@@ -272,7 +337,7 @@ def build_prompts_for_station(
     # The arc is the whole point of the station, and the model does drop steps
     # or give the diagnosis away in the opening instruction. Say what is wrong
     # and ask once more rather than shipping a station that examines nothing.
-    problems = _arc_problems(prompts, has_image, needs_investigation)
+    problems = _arc_problems(prompts, has_image, needs_investigation, vocabulary, station.aims)
     if problems:
         retry_user = (
             user
@@ -281,7 +346,7 @@ def build_prompts_for_station(
             + "\n\nRewrite the whole sequence, fixing these."
         )
         retried, retry_warnings = _generate(client, retry_user, job_id)
-        remaining = _arc_problems(retried, has_image, needs_investigation)
+        remaining = _arc_problems(retried, has_image, needs_investigation, vocabulary, station.aims)
         # Keep whichever attempt is closer to a real station; a second try that
         # is still imperfect is usually still better than the first.
         if len(remaining) <= len(problems):
@@ -356,6 +421,50 @@ _READS_IT = re.compile(
 )
 
 
+# Words that carry no clinical content: shared by every station, so they can
+# never be evidence that a question was written for this one.
+_GENERIC_WORDS = frozenset("""
+about would could should there their this that these those with from your yours
+what when where which whom while have here does doing done been being
+patient patients examine examination examining examiner candidate station
+please describe description discuss discussion understand understanding
+finding findings sign signs perform performing formulate appropriate suitable
+relevant important management manage managing plan plans principle principles
+consider considering consideration approach investigate investigation
+investigations test tests other others next then also based presentation
+present presents give given tell take takes make makes want need needs
+question questions answer answers eye eyes both left right case cases
+diagnosis diagnoses differential differentials summarise summarize summary
+ancillary interpret interpreting interpretation organise organize referral
+referrals systematic systematically recognise recognize identify identifying
+demonstrate demonstrating knowledge suitable comment comments elicit
+""".split())
+
+
+def _content_words(text: str) -> set[str]:
+    """The words in `text` that could only come from a particular case."""
+    return {
+        word
+        for word in re.findall(r"[a-z]+", (text or "").lower())
+        if len(word) > 3 and word not in _GENERIC_WORDS
+    }
+
+
+def station_vocabulary(station: OsceStation) -> set[str]:
+    """Everything this station is about, as words a question could echo."""
+    parts = [
+        station.findings or "",
+        station.findings_elicited or "",
+        station.diagnosis or "",
+        station.case_summary or "",
+        station.subspecialty or "",
+        " ".join(station.aims or []),
+        " ".join(str(p.get("text") or "") for p in (station.rubric or [])),
+        " ".join(station.common_mistakes or []),
+    ]
+    return _content_words(" ".join(parts))
+
+
 def station_needs_an_investigation(rubric: list[dict[str, Any]] | None) -> bool:
     """Does the marking rubric expect the candidate to READ an investigation?"""
     for point in rubric or []:
@@ -374,14 +483,60 @@ _PRESENTS_A_RESULT = re.compile(
 )
 
 
+def _generic_problems(
+    prompts: list[dict[str, Any]],
+    vocabulary: set[str] | None,
+    aims: list[str] | None,
+) -> list[str]:
+    """Catch a sequence that would fit any station, and aims never asked about.
+
+    Measured over 36 rebuilt stations, step 2 came back as the same sentence -
+    "What other investigations would you perform in this patient?" - 29 times.
+    A question that shares no word with its own case is not testing that case,
+    and an aim with no question is a piece of the station simply missing.
+    """
+    problems: list[str] = []
+    if not vocabulary:
+        return problems
+
+    # Steps 1 and 4 are formulaic in the real exam too: "Please examine the
+    # posterior segment of both eyes" is exactly what is said. The middle and
+    # late questions are where a station has to be itself.
+    for prompt in prompts:
+        if prompt.get("step") in (1, 4) or not prompt.get("step"):
+            continue
+        if not (_content_words(prompt["text"]) & vocabulary):
+            problems.append(
+                f"question {prompt['label']} ({prompt['text'][:60]!r}...) says nothing "
+                "specific to this case - it would fit any station; ask what this case's "
+                "aims and rubric actually turn on"
+            )
+
+    asked = _content_words(" ".join(p["text"] for p in prompts))
+    for aim in aims or []:
+        wanted = _content_words(aim) & vocabulary
+        # An aim like "Describe findings." carries nothing to check against.
+        if len(wanted) < 2:
+            continue
+        if not (wanted & asked):
+            problems.append(
+                f"the aim {aim[:70]!r} is never asked about; it is what the station "
+                "exists to test, so it needs a question of its own"
+            )
+    return problems
+
+
 def _arc_problems(
     prompts: list[dict[str, Any]],
     has_image: bool = True,
     needs_investigation: bool = False,
+    vocabulary: set[str] | None = None,
+    aims: list[str] | None = None,
 ) -> list[str]:
     """Check the sequence against the arc. Empty means it is a real station."""
     problems: list[str] = []
     steps = [p.get("step") for p in prompts]
+    problems.extend(_generic_problems(prompts, vocabulary, aims))
 
     # Step 3 reads an ancillary image. The station need not already have one -
     # a question that asks for it says what it needs and the image is sourced -
@@ -406,7 +561,13 @@ def _arc_problems(
     # question that presents a result must either be reading an image the
     # station already has, or have said which image to go and find.
     for index, prompt in enumerate(prompts):
-        if not _PRESENTS_A_RESULT.search(prompt["text"]):
+        # "This is idiopathic orbital inflammatory disease" is step 5 stating
+        # the diagnosis, not an image being handed over. Only a sentence that
+        # presents something of a MODALITY needs an image behind it.
+        if not (
+            _PRESENTS_A_RESULT.search(prompt["text"])
+            and _INVESTIGATIONS.search(prompt["text"])
+        ):
             continue
         reads_existing = has_image and prompt.get("step") == 3
         if not reads_existing and not prompt.get("image_wanted"):
