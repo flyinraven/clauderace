@@ -14,12 +14,9 @@ from collections import defaultdict
 from typing import Any
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
-from app.constants import (
-    DEFAULT_ANGOFF_EXPECTED,
-    EXAMINER_DISCREPANCY_THRESHOLD,
-)
+from app.constants import DEFAULT_ANGOFF_EXPECTED
 from app.models import (
     Answer,
     ExamPaper,
@@ -31,16 +28,21 @@ from app.models import (
     SessionResult,
 )
 from app.services.ai import AIClient
+from app.services.coerce import as_int
 from app.services.errors import log_error
 from app.services.jobs.runner import JobContext, JobHandlerError, register_handler
+from app.services.marking import (
+    aggregate_by_key,
+    clamp_award,
+    examiner_passes,
+    temperature_for,
+    upsert_grade,
+    verdict,
+)
 
 logger = logging.getLogger(__name__)
 
 JOB_GRADE_SESSION = "grade_session"
-
-# Two independent passes, deliberately at different temperatures so they are
-# not identical samples of the same distribution.
-EXAMINER_TEMPERATURES = {1: 0.0, 2: 0.35}
 
 SYSTEM_PROMPT = """\
 You are a RANZCO examiner marking one sub-question of a RACE written paper. \
@@ -115,7 +117,7 @@ def grade_part(
 
     # An empty answer scores zero without spending a model call.
     if not answer_text.strip():
-        grade = _upsert_grade(db, session.id, part.id, examiner_pass)
+        grade = upsert_grade(db, Grade, session.id, examiner_pass, part_id=part.id)
         grade.awarded_marks = 0.0
         grade.available_marks = available
         grade.breakdown = [
@@ -137,7 +139,7 @@ def grade_part(
         task="grading",
         system=SYSTEM_PROMPT,
         user=_build_prompt(part, question, answer_text),
-        temperature=EXAMINER_TEMPERATURES.get(examiner_pass, 0.2),
+        temperature=temperature_for(examiner_pass),
         job_id=job_id,
     )
     if not isinstance(data, dict):
@@ -150,11 +152,10 @@ def grade_part(
     for item in data.get("breakdown") or []:
         if not isinstance(item, dict):
             continue
-        point = points_by_id.get(_as_int(item.get("point_id")))
+        point = points_by_id.get(as_int(item.get("point_id")))
         if point is None:
             continue
-        # Never let a pass award more than the key point is worth.
-        awarded = max(0.0, min(_as_float(item.get("awarded"), 0.0), float(point.marks)))
+        awarded = clamp_award(item.get("awarded"), point.marks)
         total += awarded
         breakdown.append(
             {
@@ -171,41 +172,13 @@ def grade_part(
     # model's arithmetic error, not a marking decision.
     total = min(total, available)
 
-    grade = _upsert_grade(db, session.id, part.id, examiner_pass)
+    grade = upsert_grade(db, Grade, session.id, examiner_pass, part_id=part.id)
     grade.awarded_marks = round(total, 2)
     grade.available_marks = available
     grade.breakdown = breakdown
     grade.feedback = str(data.get("feedback") or "").strip() or None
     grade.model_used = client.model_for("grading")
     db.commit()
-    return grade
-
-
-def _examiner_passes(db: Session) -> tuple[int, ...]:
-    """Which examiner passes to run.
-
-    Two passes reproduce the real exam's double marking and reveal where
-    examiners would disagree, at exactly double the cost. One is the sensible
-    default for solo revision.
-    """
-    from app.services.settings_store import SettingsStore
-
-    count = max(1, min(2, SettingsStore(db).get_int("grading.examiner_passes", 1)))
-    return tuple(range(1, count + 1))
-
-
-def _upsert_grade(db: Session, session_id: int, part_id: int, examiner_pass: int) -> Grade:
-    existing = db.execute(
-        select(Grade)
-        .where(Grade.session_id == session_id)
-        .where(Grade.part_id == part_id)
-        .where(Grade.examiner_pass == examiner_pass)
-    ).scalar_one_or_none()
-    if existing:
-        return existing
-    grade = Grade(session_id=session_id, part_id=part_id, examiner_pass=examiner_pass)
-    db.add(grade)
-    db.flush()
     return grade
 
 
@@ -251,7 +224,7 @@ def handle_grade_session(ctx: JobContext) -> bool:
         text = answer.text if answer else ""
 
         client = AIClient(ctx.db)
-        for examiner_pass in _examiner_passes(ctx.db):
+        for examiner_pass in examiner_passes(ctx.db):
             try:
                 grade_part(
                     ctx.db, client, session, part, question, text, examiner_pass,
@@ -295,10 +268,21 @@ def _parts_for_session(db: Session, session: ExamSession) -> list[int]:
         .where(ExamPaperQuestion.paper_id == session.paper_id)
         .order_by(ExamPaperQuestion.section, ExamPaperQuestion.position)
     ).scalars().all()
+    if not question_ids:
+        return []
+
+    questions = {
+        q.id: q
+        for q in db.execute(
+            select(Question)
+            .where(Question.id.in_(question_ids))
+            .options(selectinload(Question.parts).selectinload(QuestionPart.answer_points))
+        ).scalars().all()
+    }
 
     part_ids: list[int] = []
     for question_id in question_ids:
-        question = db.get(Question, question_id)
+        question = questions.get(question_id)
         if question is None:
             continue
         for part in sorted(question.parts, key=lambda p: p.position):
@@ -325,38 +309,32 @@ def summarise_session(db: Session, session: ExamSession) -> SessionResult:
     graded_part_ids = {g.part_id for g in grades}
     ungraded = sorted(expected_part_ids - graded_part_ids)
 
-    by_part: dict[int, list[Grade]] = defaultdict(list)
-    for grade in grades:
-        by_part[grade.part_id].append(grade)
+    by_part = aggregate_by_key(grades, lambda g: g.part_id)
 
-    total_awarded = 0.0
-    total_available = 0.0
-    flagged: list[int] = []
+    # Which subspecialty each part belongs to, in one join rather than two
+    # lookups per sub-question.
+    subspecialty_by_part = {
+        part_id: subspecialty or "Unclassified"
+        for part_id, subspecialty in db.execute(
+            select(QuestionPart.id, Question.subspecialty)
+            .join(Question, Question.id == QuestionPart.question_id)
+            .where(QuestionPart.id.in_(list(by_part) or [0]))
+        ).all()
+    }
+
+    total_awarded = sum(a.awarded for a in by_part.values())
+    total_available = sum(a.available for a in by_part.values())
+    flagged = sorted(part_id for part_id, a in by_part.items() if a.flagged)
+
+    # The written result also reports where the marks were won and lost, which
+    # the OSCE does not: a station is one subspecialty by construction.
     by_subspecialty: dict[str, dict[str, float]] = defaultdict(
         lambda: {"awarded": 0.0, "available": 0.0}
     )
-
-    for part_id, part_grades in by_part.items():
-        available = max(g.available_marks for g in part_grades)
-        awarded = sum(g.awarded_marks for g in part_grades) / len(part_grades)
-
-        # Disagreement between the two examiners, as a fraction of the marks
-        # available, is what a real board would arbitrate.
-        if len(part_grades) > 1 and available > 0:
-            spread = max(g.awarded_marks for g in part_grades) - min(
-                g.awarded_marks for g in part_grades
-            )
-            if spread / available > EXAMINER_DISCREPANCY_THRESHOLD:
-                flagged.append(part_id)
-
-        total_awarded += awarded
-        total_available += available
-
-        part = db.get(QuestionPart, part_id)
-        question = db.get(Question, part.question_id) if part else None
-        key = (question.subspecialty if question else None) or "Unclassified"
-        by_subspecialty[key]["awarded"] += awarded
-        by_subspecialty[key]["available"] += available
+    for part_id, aggregate in by_part.items():
+        key = subspecialty_by_part.get(part_id, "Unclassified")
+        by_subspecialty[key]["awarded"] += aggregate.awarded
+        by_subspecialty[key]["available"] += aggregate.available
 
     percentage = (total_awarded / total_available * 100) if total_available else 0.0
 
@@ -371,12 +349,7 @@ def summarise_session(db: Session, session: ExamSession) -> SessionResult:
     if cut_score is not None and paper and paper.total_marks and total_available:
         effective_cut = round(cut_score * (total_available / paper.total_marks), 2)
 
-    # A verdict is only meaningful when the whole paper was marked.
-    outcome = None
-    if ungraded:
-        outcome = "incomplete"
-    elif effective_cut is not None:
-        outcome = "pass" if total_awarded >= effective_cut else "fail"
+    outcome = verdict(ungraded, total_awarded, effective_cut)
 
     breakdown = {
         name: {
@@ -449,17 +422,3 @@ def _overall_feedback(
     if strong:
         lines.append("Strongest areas: " + ", ".join(strong) + ".")
     return " ".join(lines)
-
-
-def _as_int(value: Any) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _as_float(value: Any, default: float) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default

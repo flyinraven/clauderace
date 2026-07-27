@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Image, OsceFigure, OsceStation
 from app.services.ai import AIClient, AIError, ImagePart, TextPart
+from app.services.coerce import as_float
 from app.services.errors import log_error
 from app.services.imagesearch.base import ImageSearchError
 from app.services.imagesearch.service import (
@@ -229,7 +230,7 @@ def source_image_for_station(
                 continue
 
             tier = str(verdict.get("tier") or "reject").lower()
-            confidence = _as_float(verdict.get("confidence"), 0.0)
+            confidence = as_float(verdict.get("confidence"), 0.0)
 
             if tier == "faithful" and confidence >= MIN_MATCH_CONFIDENCE:
                 return _attach(db, figure, candidate, downloaded, verdict, "faithful",
@@ -353,9 +354,3 @@ def stations_needing_images(db: Session) -> list[int]:
     all_ids = db.execute(select(OsceStation.id).order_by(OsceStation.id)).scalars().all()
     return [i for i in all_ids if i not in with_image]
 
-
-def _as_float(value: Any, default: float) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default

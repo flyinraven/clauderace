@@ -12,6 +12,7 @@ import logging
 
 import httpx
 
+from app.services.coerce import as_int
 from app.services.imagesearch.base import ImageCandidate, ImageSearchError
 
 logger = logging.getLogger(__name__)
@@ -75,8 +76,8 @@ class BraveImageSearch:
                     page_url=item.get("url"),
                     title=item.get("title"),
                     source=item.get("source") or (item.get("meta_url") or {}).get("hostname"),
-                    width=_as_int(properties.get("width") or item.get("width")),
-                    height=_as_int(properties.get("height") or item.get("height")),
+                    width=as_int(properties.get("width") or item.get("width")),
+                    height=as_int(properties.get("height") or item.get("height")),
                 )
             )
         return candidates
@@ -132,8 +133,8 @@ class OpenverseImageSearch:
                     page_url=item.get("foreign_landing_url"),
                     title=item.get("title"),
                     source=item.get("source"),
-                    width=_as_int(item.get("width")),
-                    height=_as_int(item.get("height")),
+                    width=as_int(item.get("width")),
+                    height=as_int(item.get("height")),
                     licence=f"{licence.upper()} {version}".strip() if licence else None,
                     attribution=item.get("attribution"),
                 )
@@ -184,15 +185,8 @@ class SerpApiImageSearch:
                     page_url=item.get("link"),
                     title=item.get("title"),
                     source=item.get("source"),
-                    width=_as_int(item.get("original_width")),
-                    height=_as_int(item.get("original_height")),
+                    width=as_int(item.get("original_width")),
+                    height=as_int(item.get("original_height")),
                 )
             )
         return candidates
-
-
-def _as_int(value) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None

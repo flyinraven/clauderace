@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { setAudioSession } from './audioSession'
 
 /**
  * Microphone recording that works on iOS Safari.
@@ -70,6 +71,9 @@ export function useRecorder() {
       setPermission('granted')
       return true
     }
+    // Declared before the mic opens: on iOS this is what keeps the examiner's
+    // voice on the loudspeaker once the session goes into record mode.
+    setAudioSession('play-and-record')
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -199,6 +203,7 @@ export function useRecorder() {
     streamRef.current = null
     void audioCtxRef.current?.close().catch(() => undefined)
     audioCtxRef.current = null
+    setAudioSession('playback')
     setPermission('idle')
   }, [stopMeter])
 

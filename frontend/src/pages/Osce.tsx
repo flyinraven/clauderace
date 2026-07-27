@@ -340,7 +340,9 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
                 <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <p className="font-medium text-slate-800">
-                    {station.title ?? station.case_summary?.slice(0, 70) ?? `Station ${station.station_number}`}
+                    {/* Never fall back to the case summary: it reads the case
+                        out before the candidate has chosen to sit it. */}
+                    {station.title ?? `Station ${station.station_number ?? station.id}`}
                   </p>
                   <p className="mt-0.5 text-xs text-slate-500">
                     {station.subspecialty ?? 'Unclassified'}

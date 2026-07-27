@@ -1,0 +1,209 @@
+"""The marking rules shared by written papers and OSCE stations.
+
+These were duplicated in `grading.grade` and `osce.circuit`. Now that both flows
+depend on one copy, a change here changes every result the platform issues, so
+each rule is pinned directly rather than only through the two end-to-end flows.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from app.constants import EXAMINER_DISCREPANCY_THRESHOLD
+from app.models import Grade, OsceGrade, Setting
+from app.services.marking import (
+    absorb_mark_drift,
+    aggregate_by_key,
+    aggregate_passes,
+    clamp_award,
+    examiner_passes,
+    temperature_for,
+    upsert_grade,
+    verdict,
+)
+
+
+class FakeGrade:
+    """Enough of a Grade to aggregate: both real models expose these two."""
+
+    def __init__(self, awarded: float, available: float, key: str = "A"):
+        self.awarded_marks = awarded
+        self.available_marks = available
+        self.key = key
+
+
+# --- Clamping ------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("awarded", "maximum", "expected"),
+    [
+        (3, 6, 3.0),
+        (99, 6, 6.0),          # a model that misread the rubric
+        (-5, 6, 0.0),          # not a thing an examiner can do
+        (6, 6, 6.0),
+        (2.5, 6, 2.5),         # half marks are legitimate
+        ("4", 6, 4.0),         # models return numbers as strings
+        (None, 6, 0.0),
+        ("not a number", 6, 0.0),
+        (3, 0, 0.0),           # a point worth nothing awards nothing
+    ],
+)
+def test_an_award_is_clamped_to_what_the_point_is_worth(awarded, maximum, expected):
+    assert clamp_award(awarded, maximum) == expected
+
+
+# --- Averaging the passes ------------------------------------------------
+def test_one_pass_is_taken_as_it_stands():
+    result = aggregate_passes([FakeGrade(4, 10)])
+    assert result.awarded == 4.0
+    assert result.available == 10.0
+    assert result.flagged is False, "one examiner cannot disagree with themselves"
+
+
+def test_two_passes_are_averaged():
+    result = aggregate_passes([FakeGrade(4, 10), FakeGrade(6, 10)])
+    assert result.awarded == 5.0
+    assert result.available == 10.0
+
+
+def test_examiners_disagreeing_past_the_threshold_flags_the_part():
+    """What a real exam board would arbitrate."""
+    spread = (EXAMINER_DISCREPANCY_THRESHOLD * 10) + 1
+    assert aggregate_passes([FakeGrade(0, 10), FakeGrade(spread, 10)]).flagged is True
+
+
+def test_examiners_close_enough_together_are_not_flagged():
+    below = (EXAMINER_DISCREPANCY_THRESHOLD * 10) - 0.5
+    assert aggregate_passes([FakeGrade(0, 10), FakeGrade(below, 10)]).flagged is False
+
+
+def test_a_part_worth_nothing_cannot_be_flagged():
+    """Dividing the spread by zero available marks is not a disagreement."""
+    assert aggregate_passes([FakeGrade(0, 0), FakeGrade(0, 0)]).flagged is False
+
+
+def test_the_larger_available_figure_wins_if_the_passes_disagree_on_it():
+    """They should always agree; if they do not, do not silently mark out of less."""
+    assert aggregate_passes([FakeGrade(2, 8), FakeGrade(2, 10)]).available == 10.0
+
+
+def test_grouping_averages_each_unit_separately():
+    grades = [
+        FakeGrade(4, 10, "A"), FakeGrade(6, 10, "A"),
+        FakeGrade(1, 10, "B"),
+    ]
+    by_key = aggregate_by_key(grades, lambda g: g.key)
+    assert by_key["A"].awarded == 5.0
+    assert by_key["B"].awarded == 1.0
+    assert sum(a.available for a in by_key.values()) == 20.0
+
+
+# --- The verdict ---------------------------------------------------------
+def test_a_partly_marked_result_gets_no_verdict_however_high_the_score():
+    """The rule that stops a candidate reading a partial score as a final one."""
+    assert verdict([7], total_awarded=95.0, cut_score=50.0) == "incomplete"
+
+
+def test_pass_and_fail_are_decided_against_the_cut_score():
+    assert verdict([], total_awarded=50.0, cut_score=50.0) == "pass", "on the line passes"
+    assert verdict([], total_awarded=49.9, cut_score=50.0) == "fail"
+
+
+def test_no_cut_score_means_no_verdict_rather_than_a_fail():
+    assert verdict([], total_awarded=10.0, cut_score=None) is None
+
+
+# --- Examiner passes -----------------------------------------------------
+def test_one_pass_by_default(db):
+    assert examiner_passes(db) == (1,)
+
+
+def test_two_passes_when_configured(db):
+    db.add(Setting(key="grading.examiner_passes", value=2, is_encrypted=False))
+    db.commit()
+    assert examiner_passes(db) == (1, 2)
+
+
+@pytest.mark.parametrize("configured", [0, -1, 5, 99])
+def test_the_pass_count_is_clamped_to_one_or_two(db, configured):
+    """Zero passes would mark nothing; five would quintuple the bill."""
+    db.add(Setting(key="grading.examiner_passes", value=configured, is_encrypted=False))
+    db.commit()
+    assert examiner_passes(db) in {(1,), (1, 2)}
+
+
+def test_the_two_passes_use_different_temperatures():
+    """Two samples at the same temperature are not two opinions."""
+    assert temperature_for(1) != temperature_for(2)
+    assert temperature_for(1) == 0.0, "the first pass is deterministic"
+    assert temperature_for(99) == 0.2, "an unexpected pass number still marks"
+
+
+# --- Grade rows ----------------------------------------------------------
+def test_a_grade_row_is_created_once_and_then_reused(db):
+    """Re-marking must not accumulate a second row per attempt."""
+    first = upsert_grade(db, Grade, session_id=1, examiner_pass=1, part_id=7)
+    first.awarded_marks = 3.0
+    db.commit()
+
+    again = upsert_grade(db, Grade, session_id=1, examiner_pass=1, part_id=7)
+    assert again.id == first.id
+    assert db.query(Grade).count() == 1
+
+
+def test_each_pass_and_each_unit_gets_its_own_row(db):
+    upsert_grade(db, Grade, session_id=1, examiner_pass=1, part_id=7)
+    upsert_grade(db, Grade, session_id=1, examiner_pass=2, part_id=7)
+    upsert_grade(db, Grade, session_id=1, examiner_pass=1, part_id=8)
+    upsert_grade(db, Grade, session_id=2, examiner_pass=1, part_id=7)
+    db.commit()
+    assert db.query(Grade).count() == 4
+
+
+def test_the_same_helper_serves_the_osce_key(db):
+    """A station identifies its markable unit by prompt label, not part id."""
+    grade = upsert_grade(db, OsceGrade, session_id=1, examiner_pass=1, prompt_label="A")
+    grade.available_marks = 10.0
+    db.commit()
+
+    assert upsert_grade(
+        db, OsceGrade, session_id=1, examiner_pass=1, prompt_label="A"
+    ).id == grade.id
+    upsert_grade(db, OsceGrade, session_id=1, examiner_pass=1, prompt_label="B")
+    db.commit()
+    assert db.query(OsceGrade).count() == 2
+
+
+# --- Mark arithmetic -----------------------------------------------------
+def test_rounding_drift_lands_on_the_largest_point():
+    """Eight marks over three points is 2.67 each, which sums to 8.01."""
+    points = [{"marks": 1.0}, {"marks": 2.67}, {"marks": 4.34}]
+    assert sum(p["marks"] for p in points) == 8.01, "the drift this exists to fix"
+
+    absorb_mark_drift(points, 8.0)
+    assert sum(p["marks"] for p in points) == 8.0
+    # The largest point absorbed it; the others are untouched.
+    assert points[2]["marks"] == 4.33
+    assert points[0]["marks"] == 1.0
+    assert points[1]["marks"] == 2.67
+
+
+def test_drift_is_absorbed_downwards_too():
+    points = [{"marks": 7.0}, {"marks": 7.0}, {"marks": 7.0}]
+    absorb_mark_drift(points, 20.0)
+    assert sum(p["marks"] for p in points) == 20.0
+
+
+def test_a_point_is_never_pushed_negative():
+    points = [{"marks": 0.5}, {"marks": 30.0}]
+    absorb_mark_drift(points, 1.0)
+    assert all(p["marks"] >= 0 for p in points)
+
+
+def test_a_total_already_correct_is_left_alone():
+    points = [{"marks": 10.0}, {"marks": 10.0}]
+    absorb_mark_drift(points, 20.0)
+    assert [p["marks"] for p in points] == [10.0, 10.0]
+
+
+def test_no_points_is_not_an_error():
+    absorb_mark_drift([], 20.0)  # a station whose rubric came back empty

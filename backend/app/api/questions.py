@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Response, status
+from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 
@@ -166,14 +166,32 @@ def list_questions(
         stmt.order_by(Question.id.desc()).limit(limit).offset(offset)
     ).scalars().all()
 
+    # Counting parts and figures through the relationships lazy-loads both
+    # collections for every row - 100 extra round trips for a page of 50, each
+    # one paying SiteGround's latency from Render. Two grouped counts instead.
+    ids = [q.id for q in rows]
+    part_counts = _counts_by_question(db, QuestionPart, ids)
+    figure_counts = _counts_by_question(db, Figure, ids)
+
     items: list[QuestionSummary] = []
     for question in rows:
         summary = QuestionSummary.model_validate(question)
-        summary.part_count = len(question.parts)
-        summary.figure_count = len(question.figures)
+        summary.part_count = part_counts.get(question.id, 0)
+        summary.figure_count = figure_counts.get(question.id, 0)
         items.append(summary)
 
     return QuestionPage(items=items, total=total, limit=limit, offset=offset)
+
+
+def _counts_by_question(db, model, question_ids: list[int]) -> dict[int, int]:
+    if not question_ids:
+        return {}
+    rows = db.execute(
+        select(model.question_id, func.count(model.id))
+        .where(model.question_id.in_(question_ids))
+        .group_by(model.question_id)
+    ).all()
+    return {question_id: count for question_id, count in rows}
 
 
 @router.get("/questions/{question_id}", response_model=QuestionDetail)
@@ -486,20 +504,29 @@ def detach_image(figure_id: int, admin: AdminUser, db: DbSession) -> None:
 
 # --- Images ---------------------------------------------------------------
 @router.get("/images/{image_id}")
-def get_image(image_id: int, user: CurrentUser, db: DbSession) -> Response:
+def get_image(image_id: int, request: Request, user: CurrentUser, db: DbSession) -> Response:
     image = db.get(Image, image_id)
     if image is None:
         raise HTTPException(status_code=404, detail="Image not found")
-    return Response(
-        content=image.data,
-        media_type=image.content_type,
-        headers={
-            # Images are immutable once stored (the id is content-addressed via
-            # sha256), so they can be cached hard.
-            "Cache-Control": "private, max-age=31536000, immutable",
-            "ETag": f'"{image.sha256}"',
-        },
-    )
+    if not image.data:
+        # An audio clip or image whose bytes were released after use.
+        raise HTTPException(status_code=410, detail="This image is no longer stored")
+
+    etag = f'"{image.sha256}"'
+    headers = {
+        # Images are immutable once stored (the id is content-addressed via
+        # sha256), so they can be cached hard.
+        "Cache-Control": "private, max-age=31536000, immutable",
+        "ETag": etag,
+    }
+
+    # The bytes live in the database and are re-read on every request, so a
+    # conditional request is worth answering: `useImage` re-fetches whenever a
+    # figure remounts, and a station image is several hundred kilobytes.
+    if etag in [tag.strip() for tag in (request.headers.get("if-none-match") or "").split(",")]:
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+
+    return Response(content=image.data, media_type=image.content_type, headers=headers)
 
 
 # --- Reference data -------------------------------------------------------

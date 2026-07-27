@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session
 
 from app.constants import (
     DEFAULT_ANGOFF_EXPECTED,
-    EXAMINER_DISCREPANCY_THRESHOLD,
     OSCE_STATION_MINUTES,
     SUBSPECIALTIES,
 )
@@ -27,8 +26,17 @@ from app.models import (
     OsceStation,
 )
 from app.services.ai import AIClient
+from app.services.coerce import as_float, as_int
 from app.services.errors import log_error
 from app.services.jobs.runner import JobContext, JobHandlerError, register_handler
+from app.services.marking import (
+    aggregate_by_key,
+    clamp_award,
+    examiner_passes,
+    temperature_for,
+    upsert_grade,
+    verdict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +45,6 @@ JOB_GRADE_OSCE = "grade_osce_session"
 STATION_SECONDS = OSCE_STATION_MINUTES * 60
 # Absorbs the upload of the final answer when the clock runs out mid-recording.
 OSCE_GRACE_SECONDS = 20
-
-EXAMINER_TEMPERATURES = {1: 0.0, 2: 0.35}
 
 
 # --- Clock ----------------------------------------------------------------
@@ -238,7 +244,7 @@ def grade_prompt(
     available = float(sum(pt.get("marks", 0) for pt in rubric))
     label = prompt.get("label") or "?"
 
-    grade = _upsert_grade(db, session.id, label, examiner_pass)
+    grade = upsert_grade(db, OsceGrade, session.id, examiner_pass, prompt_label=label)
     grade.available_marks = available
 
     if not rubric:
@@ -272,7 +278,7 @@ def grade_prompt(
         task="grading",
         system=SYSTEM_PROMPT,
         user=_prompt_for(station, prompt, transcript),
-        temperature=EXAMINER_TEMPERATURES.get(examiner_pass, 0.2),
+        temperature=temperature_for(examiner_pass),
         job_id=job_id,
     )
     if not isinstance(data, dict):
@@ -283,12 +289,12 @@ def grade_prompt(
     for item in data.get("breakdown") or []:
         if not isinstance(item, dict):
             continue
-        index = _as_int(item.get("index"))
+        index = as_int(item.get("index"))
         if index is None or not (0 <= index < len(rubric)):
             continue
         point = rubric[index]
-        point_marks = float(point.get("marks", 0))
-        awarded = max(0.0, min(_as_float(item.get("awarded"), 0.0), point_marks))
+        point_marks = as_float(point.get("marks"), 0.0)
+        awarded = clamp_award(item.get("awarded"), point_marks)
         total += awarded
         breakdown.append(
             {
@@ -306,28 +312,6 @@ def grade_prompt(
     grade.feedback = str(data.get("feedback") or "").strip() or None
     grade.model_used = client.model_for("grading")
     db.commit()
-    return grade
-
-
-def _examiner_passes(db: Session) -> tuple[int, ...]:
-    """Shared with the written papers - see app.services.grading.grade."""
-    from app.services.grading.grade import _examiner_passes as passes
-
-    return passes(db)
-
-
-def _upsert_grade(db: Session, session_id: int, label: str, examiner_pass: int) -> OsceGrade:
-    existing = db.execute(
-        select(OsceGrade)
-        .where(OsceGrade.session_id == session_id)
-        .where(OsceGrade.prompt_label == label)
-        .where(OsceGrade.examiner_pass == examiner_pass)
-    ).scalar_one_or_none()
-    if existing:
-        return existing
-    grade = OsceGrade(session_id=session_id, prompt_label=label, examiner_pass=examiner_pass)
-    db.add(grade)
-    db.flush()
     return grade
 
 
@@ -366,7 +350,7 @@ def handle_grade_osce_session(ctx: JobContext) -> bool:
     transcript = response.marking_text if response else ""
 
     client = AIClient(ctx.db)
-    for examiner_pass in _examiner_passes(ctx.db):
+    for examiner_pass in examiner_passes(ctx.db):
         try:
             grade_prompt(
                 ctx.db, client, session, station, prompt, transcript, examiner_pass,
@@ -402,39 +386,21 @@ def summarise_osce_session(db: Session, session: OsceSession) -> OsceResult:
         select(OsceGrade).where(OsceGrade.session_id == session.id)
     ).scalars().all()
 
-    by_prompt: dict[str, list[OsceGrade]] = defaultdict(list)
-    for grade in grades:
-        by_prompt[grade.prompt_label].append(grade)
-
+    by_prompt = aggregate_by_key(grades, lambda g: g.prompt_label)
     ungraded = sorted(expected - set(by_prompt))
 
-    total_awarded = 0.0
-    total_available = 0.0
-    flagged: list[str] = []
-
-    for label, prompt_grades in by_prompt.items():
-        available = max(g.available_marks for g in prompt_grades)
-        awarded = sum(g.awarded_marks for g in prompt_grades) / len(prompt_grades)
-        if len(prompt_grades) > 1 and available > 0:
-            spread = max(g.awarded_marks for g in prompt_grades) - min(
-                g.awarded_marks for g in prompt_grades
-            )
-            if spread / available > EXAMINER_DISCREPANCY_THRESHOLD:
-                flagged.append(label)
-        total_awarded += awarded
-        total_available += available
+    total_awarded = sum(a.awarded for a in by_prompt.values())
+    total_available = sum(a.available for a in by_prompt.values())
+    flagged = sorted(label for label, a in by_prompt.items() if a.flagged)
 
     percentage = (total_awarded / total_available * 100) if total_available else 0.0
 
+    # A station's cut score comes from its own Angoff expectation, unlike a
+    # written paper's, which is set for the paper as a whole.
     expectation = (station.angoff_expected if station else None) or DEFAULT_ANGOFF_EXPECTED
     cut_score = round(total_available * float(expectation), 2) if total_available else None
 
-    # As with the written papers, a partly-marked station gets no verdict.
-    outcome = None
-    if ungraded:
-        outcome = "incomplete"
-    elif cut_score is not None:
-        outcome = "pass" if total_awarded >= cut_score else "fail"
+    outcome = verdict(ungraded, total_awarded, cut_score)
 
     result = db.execute(
         select(OsceResult).where(OsceResult.session_id == session.id)
@@ -490,11 +456,13 @@ def circuit_progress(db: Session, circuit: OsceCircuit) -> dict[str, Any]:
     done = [s for s in sittings if s.submitted_at is not None]
     total_awarded = 0.0
     total_available = 0.0
-    for sitting in done:
-        result = db.execute(
-            select(OsceResult).where(OsceResult.session_id == sitting.id)
-        ).scalar_one_or_none()
-        if result:
+    if done:
+        # The OSCE page calls this for every circuit, so a query per sitting
+        # here is a query per station per circuit on one page load.
+        results = db.execute(
+            select(OsceResult).where(OsceResult.session_id.in_([s.id for s in done]))
+        ).scalars().all()
+        for result in results:
             total_awarded += result.total_awarded
             total_available += result.total_available
     return {
@@ -504,20 +472,6 @@ def circuit_progress(db: Session, circuit: OsceCircuit) -> dict[str, Any]:
         "total_available": round(total_available, 2),
         "percentage": round(total_awarded / total_available * 100, 1) if total_available else None,
     }
-
-
-def _as_int(value: Any) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _as_float(value: Any, default: float) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
 
 
 __all__ = [

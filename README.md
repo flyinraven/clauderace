@@ -61,6 +61,8 @@ backend/app/
     ingest/     extract -> segment -> structure -> persist
     answers/    model answer generation
     jobs/       chunked, resumable background job runner
+    marking.py  rules shared by written and OSCE marking
+    coerce.py   forgiving conversion of model output
 frontend/src/
   pages/        screens, admin screens under pages/admin
   components/   shared UI primitives

@@ -103,6 +103,7 @@ export default function OsceStation() {
   const [uploading, setUploading] = useState<string | null>(null)
   const [stage, setStage] = useState<'sitting' | 'review'>('sitting')
   const [edits, setEdits] = useState<Record<string, string>>({})
+  const [saveFailed, setSaveFailed] = useState<string[]>([])
   const [submitting, setSubmitting] = useState(false)
 
   const rec = useRecorder()
@@ -264,32 +265,60 @@ export default function OsceStation() {
     speech.unlock()
     const ok = await rec.requestAccess()
     if (!ok) return
-    await api(`/osce/sittings/${sittingId}/begin`, { method: 'POST' })
-    const data = await api<Sitting>(`/osce/sittings/${sittingId}`)
-    setSitting(data)
-    setRemaining(data.clock.seconds_remaining)
-    const first = data.prompts[0]
-    if (first) await speech.speak(first.text)
-    await rec.start()
+    // Starting the clock is irreversible, so a failure here has to be visible:
+    // unreported, the screen sat on "Before you begin" with a station that had
+    // already started counting down on the server.
+    try {
+      await api(`/osce/sittings/${sittingId}/begin`, { method: 'POST' })
+      const data = await api<Sitting>(`/osce/sittings/${sittingId}`)
+      setSitting(data)
+      setRemaining(data.clock.seconds_remaining)
+      const first = data.prompts[0]
+      if (first) await speech.speak(first.text)
+      await rec.start()
+    } catch (err) {
+      rec.release()
+      setError(
+        err instanceof Error
+          ? `The station could not be started: ${err.message}`
+          : 'The station could not be started.',
+      )
+    }
   }
 
+  /** Persist a corrected transcript. This is exactly what gets marked, so a
+   *  failed save must never pass silently. */
   const saveEdit = async (label: string) => {
     if (!sittingId) return
-    await api(`/osce/sittings/${sittingId}/answers/${label}/transcript`, {
-      method: 'PUT',
-      body: { transcript: edits[label] ?? '' },
-    })
+    try {
+      await api(`/osce/sittings/${sittingId}/answers/${label}/transcript`, {
+        method: 'PUT',
+        body: { transcript: edits[label] ?? '' },
+      })
+      setSaveFailed((prev) => (prev.includes(label) ? prev.filter((l) => l !== label) : prev))
+    } catch (err) {
+      setSaveFailed((prev) => (prev.includes(label) ? prev : [...prev, label]))
+      setError(
+        err instanceof Error
+          ? `Your correction to answer ${label} was not saved: ${err.message}`
+          : `Your correction to answer ${label} was not saved.`,
+      )
+      throw err
+    }
   }
 
   const submit = async () => {
     if (!sittingId) return
     setSubmitting(true)
     try {
+      // Corrections go first and a failure stops the submission: marking a
+      // transcript the candidate has just fixed is worse than not marking yet.
       for (const label of Object.keys(edits)) await saveEdit(label)
       await api(`/osce/sittings/${sittingId}/submit`, { method: 'POST' })
       navigate(`/osce/sittings/${sittingId}/result`)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Submission failed')
+      // saveEdit has already said which answer failed and why.
+      setError((prev) => prev ?? (err instanceof Error ? err.message : 'Submission failed'))
       setSubmitting(false)
     }
   }
@@ -562,8 +591,15 @@ export default function OsceStation() {
                   value={current}
                   placeholder="Nothing was transcribed for this question."
                   onChange={(e) => setEdits((prev) => ({ ...prev, [p.label]: e.target.value }))}
-                  onBlur={() => void saveEdit(p.label)}
+                  // saveEdit reports its own failure; swallow the rejection so
+                  // it does not surface as an unhandled promise.
+                  onBlur={() => void saveEdit(p.label).catch(() => {})}
                 />
+                {saveFailed.includes(p.label) && (
+                  <p className="mt-1 text-xs font-medium text-red-600">
+                    Not saved — this correction will be lost. Click away and back to retry.
+                  </p>
+                )}
               </Card>
             )
           })}

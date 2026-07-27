@@ -83,6 +83,31 @@ Total spend to date: roughly $7.
   report's own figures where they exist, but every station image in production
   is web-sourced and vision-checked. Do not re-ingest hoping for images.
 
+## Tests
+
+`cd backend && .venv/Scripts/python -m pytest` - 232 tests, about 45 seconds.
+
+The API is tested end to end against an in-memory database and a fake provider
+that sits at `AIClient._post`, so routing, retries, JSON repair, usage
+accounting and the budget all run for real. Jobs are drained a chunk at a time
+by the `run_jobs` fixture rather than by the worker thread, which keeps them
+deterministic while running the identical claim/chunk/resume path.
+
+| File | Covers |
+|---|---|
+| `test_api_auth.py` | sign-in, invites, and every admin-only route |
+| `test_api_osce.py` | a station from browsing to a marked result, and what must not leak while sitting |
+| `test_api_exams.py` | the bank, assembly, the clock gate phase by phase, marking |
+| `test_station_pipeline.py` | prompt building, findings split, image sourcing and verification |
+| `test_api_admin.py` | settings and secret masking, users, documents, jobs, stats |
+| `test_ai_client.py` | the gateway, including the vision image size cap |
+| `test_query_counts.py` | pages whose query count must not grow with content |
+| `test_marking_rules.py` | the rules both marking flows now share |
+| `test_clock.py`, `test_circuit_repeats.py`, `test_transcription_guard.py` | as before |
+
+Two tests in `test_api_exams.py` skip when Paper 1's spec has no reading phase.
+That is deliberate - they assert on a phase that spec may not have.
+
 ## Recent changes (most recent last)
 
 - Marking-key token budget scales with question size; a flat 8000 truncated a
@@ -110,6 +135,46 @@ Total spend to date: roughly $7.
   longer recorded and transcribed as the candidate's own answer.
 - `deploy_frontend.ps1` chmods after upload: scp creates `assets/` as 700,
   which Apache cannot traverse, and the site loads blank.
+- **Images bound to 1568px before any vision call.** Every `ImagePart` shrinks
+  itself on construction, so no vision caller can forget. A 2600px web
+  photograph went from 1.9 MB to 370 KB, and base64 makes that a 2 MB saving
+  per candidate verified - of which there are up to eighteen per station. The
+  cap is what providers downsample to anyway, so the tokens charged are
+  unchanged. An image already inside the cap is left alone unless re-encoding
+  also shrinks it; one over the cap is always shrunk even if that costs bytes,
+  because vision is billed by pixel area, not file size. Anything Pillow cannot
+  read is sent as it came in.
+- **Query counts no longer grow with content.** A marked paper's result page
+  cost 77 queries for 30 sub-questions and now costs 10; the question bank page
+  is flat at 5 whether it shows 2 questions or 22; opening a 20-question paper
+  is 9. Listing circuits no longer reads results one sitting at a time.
+  `test_query_counts.py` compares a small page against a large one so a
+  reintroduced per-row query fails the suite rather than only production.
+- **The station list no longer sends candidates the case summary.** It was the
+  fallback display name for a station with no title, so scrolling the list read
+  the case out before you chose to sit it. Admins still get it - the station
+  images screen needs it to tell one station from another.
+- The image endpoint answers `If-None-Match` with a 304. It always advertised
+  an ETag but re-read the blob from the database and sent it every time.
+- Starting a station and saving a corrected transcript both report failure now.
+  Beginning is irreversible, so a silent failure left the screen on "Before you
+  begin" while the server counted down; a silently failed correction meant the
+  transcript that got marked was not the one on screen. A failed correction also
+  stops submission - marking a transcript the candidate has just fixed is worse
+  than not marking yet.
+- **The marking rules are written once, in `services/marking.py`.** Two passes
+  at different temperatures, clamping an award to what the point is worth,
+  flagging examiner disagreement, refusing a verdict on a partly-marked result,
+  the grade-row upsert and the rounding-drift absorption were all duplicated
+  between `grading.grade` and `osce.circuit`, and `circuit` reached into
+  `grade` for a private `_examiner_passes` to share the last one. What stays
+  per-flow is what genuinely differs: the prompt, the breakdown row shape, the
+  cut score (a paper's is set per paper and scaled when only part of it could be
+  marked; a station's comes from its own Angoff expectation) and the wording of
+  the candidate-facing feedback. `services/coerce.py` holds the model-output
+  coercion that had six copies. Checked by recomputing a real marked paper: all
+  nine result fields, including the subspecialty breakdown and the feedback
+  prose, came back identical to what the old code had stored.
 - Transcription no longer primes the model with expected clinical content,
   which was making it fabricate whole answers from quiet audio. Backstops:
   tiny clips are never sent, and transcripts above 3.5 words/second are
@@ -129,7 +194,20 @@ Total spend to date: roughly $7.
   not yet re-tested on a phone.
 - Three images once came back not auto-approved despite the setting being on.
   Corrected by hand; cause not established. If images appear as "not showing",
-  this is it.
+  this is it. No defect was found in the auto-approve path when it was reviewed
+  on 27 Jul 2026 - `_attach` sets `is_approved` from the setting, and the
+  setting reads True from its spec default with no stored row.
+- **`backend/race.db` (local development) predates two changes and is
+  misleading to test against.** Its 36 stations were ingested on 25 Jul, before
+  demographics came from the structuring pass and before images auto-approved,
+  so locally every station has no demographic and no visible image. Nothing is
+  wrong with the code - production has 75 of 78 stations showing an image. Do
+  not diagnose either as a live bug from the local database; re-run the ingest
+  locally, or check production.
+- The job runner reclaims a stale RUNNING job without incrementing `attempts`,
+  so a chunk that reliably kills the process would be retried forever rather
+  than failing after three tries. Not observed; the only known interruptions are
+  SiteGround dropping a connection, which the next chunk survives.
 
 ## Working effectively in a new session
 

@@ -142,6 +142,8 @@ SUBMISSION_GRACE_SECONDS = 30
 # --- OSCE -----------------------------------------------------------------
 OSCE_STATION_COUNT = 18
 OSCE_STATION_MINUTES = 9
+# Every OSCE station in the examiners' reports carries a 20-mark rubric.
+OSCE_STATION_MARKS = 20
 
 # --- Grading --------------------------------------------------------------
 # Two examiners mark every question in the real exam; we simulate that with two

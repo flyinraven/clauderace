@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, TypeVar
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -61,6 +61,32 @@ def require_admin(user: CurrentUser) -> User:
 
 
 AdminUser = Annotated[User, Depends(require_admin)]
+
+
+T = TypeVar("T")
+
+
+def load_owned(
+    db: Session,
+    model: type[T],
+    row_id: int,
+    user: User,
+    *,
+    missing: str = "Sitting not found",
+    forbidden: str = "This is not your sitting",
+) -> T:
+    """Fetch a row the caller owns, or refuse.
+
+    A candidate may only reach their own sittings; an administrator may reach
+    anyone's, because they review results and diagnose failed marking. Written
+    papers and OSCE stations had a byte-identical copy of this each.
+    """
+    row = db.get(model, row_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=missing)
+    if row.user_id != user.id and user.role != ROLE_ADMIN:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=forbidden)
+    return row
 
 
 def get_settings_store(db: DbSession) -> SettingsStore:

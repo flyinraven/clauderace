@@ -54,7 +54,9 @@ export function useSpeech() {
     if (unlocked.current || !('speechSynthesis' in window)) return
     try {
       const primer = new SpeechSynthesisUtterance(' ')
-      primer.volume = 0
+      // Not zero: a muted utterance is discarded by WebKit without ever
+      // starting the engine, so it unlocks nothing. This is inaudible.
+      primer.volume = 0.01
       window.speechSynthesis.speak(primer)
       unlocked.current = true
     } catch {
@@ -73,9 +75,13 @@ export function useSpeech() {
         return Promise.resolve()
       }
       window.speechSynthesis.cancel()
+      // iOS leaves the queue in a paused state after cancel(), and everything
+      // spoken afterwards sits there silently. Harmless when not paused.
+      window.speechSynthesis.resume()
 
       return new Promise((resolve) => {
         const utterance = new SpeechSynthesisUtterance(text)
+        utterance.volume = 1
         // Slightly under normal pace: examiners read questions deliberately,
         // and clinical terms are easier to follow.
         utterance.rate = 0.95

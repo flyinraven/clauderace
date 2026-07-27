@@ -14,8 +14,9 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
-from app.api.deps import AdminUser, CurrentUser, DbSession
+from app.api.deps import AdminUser, CurrentUser, DbSession, load_owned
 from app.constants import (
     PAPER_SPECS,
     PHASE_NOT_STARTED,
@@ -29,6 +30,7 @@ from app.models import (
     ExamSession,
     Grade,
     Question,
+    QuestionPart,
     SessionResult,
 )
 from app.services.exams import (
@@ -208,12 +210,7 @@ def _summary(db: DbSession, session: ExamSession) -> SessionSummary:
 
 
 def _load_session(db: DbSession, session_id: int, user) -> ExamSession:
-    session = db.get(ExamSession, session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Sitting not found")
-    if session.user_id != user.id and user.role != ROLE_ADMIN:
-        raise HTTPException(status_code=403, detail="This is not your sitting")
-    return session
+    return load_owned(db, ExamSession, session_id, user)
 
 
 def _clock_for(db: DbSession, session: ExamSession):
@@ -317,9 +314,21 @@ def get_session(session_id: int, user: CurrentUser, db: DbSession) -> dict[str, 
     }
 
     items = sorted(paper.items, key=lambda i: (i.section, i.position)) if paper else []
+
+    # Opening a paper touches every question's parts and figures. Loaded lazily
+    # that is three round trips per question; eagerly it is three in total.
+    questions_by_id = {
+        q.id: q
+        for q in db.execute(
+            select(Question)
+            .where(Question.id.in_([i.question_id for i in items] or [0]))
+            .options(selectinload(Question.parts), selectinload(Question.figures))
+        ).scalars().all()
+    }
+
     sections: dict[str, list[dict[str, Any]]] = {"A": [], "B": []}
     for item in items:
-        question = db.get(Question, item.question_id)
+        question = questions_by_id.get(item.question_id)
         if question is None:
             continue
         sections.setdefault(item.section, []).append(
@@ -520,24 +529,44 @@ def get_result(session_id: int, user: CurrentUser, db: DbSession) -> dict[str, A
     items = sorted(paper.items, key=lambda i: (i.section, i.position)) if paper else []
     flagged = set(result.flagged_parts or []) if result else set()
 
+    # A full paper has around 60 sub-questions, and fetching each one's grades
+    # and answer individually meant 120 queries to render one result page. Both
+    # sets belong to this sitting alone, so read them once and index by part.
+    grades_by_part: dict[int, list[Grade]] = {}
+    for grade in db.execute(
+        select(Grade)
+        .where(Grade.session_id == session.id)
+        .order_by(Grade.examiner_pass)
+    ).scalars().all():
+        grades_by_part.setdefault(grade.part_id, []).append(grade)
+
+    answers_by_part = {
+        a.part_id: a
+        for a in db.execute(
+            select(Answer).where(Answer.session_id == session.id)
+        ).scalars().all()
+    }
+
+    # The result reveals the marking key for every sub-question, so parts and
+    # their answer points are loaded up front rather than one part at a time.
+    questions_by_id = {
+        q.id: q
+        for q in db.execute(
+            select(Question)
+            .where(Question.id.in_([i.question_id for i in items] or [0]))
+            .options(selectinload(Question.parts).selectinload(QuestionPart.answer_points))
+        ).scalars().all()
+    }
+
     questions: list[dict[str, Any]] = []
     for item in items:
-        question = db.get(Question, item.question_id)
+        question = questions_by_id.get(item.question_id)
         if question is None:
             continue
         parts_payload = []
         for part in sorted(question.parts, key=lambda p: p.position):
-            grades = db.execute(
-                select(Grade)
-                .where(Grade.session_id == session.id)
-                .where(Grade.part_id == part.id)
-                .order_by(Grade.examiner_pass)
-            ).scalars().all()
-            answer = db.execute(
-                select(Answer)
-                .where(Answer.session_id == session.id)
-                .where(Answer.part_id == part.id)
-            ).scalar_one_or_none()
+            grades = grades_by_part.get(part.id, [])
+            answer = answers_by_part.get(part.id)
 
             awarded = (
                 sum(g.awarded_marks for g in grades) / len(grades) if grades else None

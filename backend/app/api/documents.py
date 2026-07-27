@@ -7,7 +7,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.deps import AdminUser, DbSession
 from app.models import Question, SourceDocument
@@ -49,14 +49,17 @@ def list_documents(admin: AdminUser, db: DbSession) -> list[DocumentOut]:
     docs = db.execute(
         select(SourceDocument).order_by(SourceDocument.created_at.desc())
     ).scalars().all()
+    counts = dict(
+        db.execute(
+            select(Question.source_document_id, func.count(Question.id))
+            .where(Question.source_document_id.is_not(None))
+            .group_by(Question.source_document_id)
+        ).all()
+    )
     out: list[DocumentOut] = []
     for doc in docs:
         item = DocumentOut.model_validate(doc)
-        item.question_count = len(
-            db.execute(
-                select(Question.id).where(Question.source_document_id == doc.id)
-            ).scalars().all()
-        )
+        item.question_count = counts.get(doc.id, 0)
         out.append(item)
     return out
 

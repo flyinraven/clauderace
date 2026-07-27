@@ -27,6 +27,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.models import AiCall
+from app.services.ai.images import normalise_for_vision
 from app.services.settings_store import SettingsStore
 
 logger = logging.getLogger(__name__)
@@ -65,8 +66,19 @@ class TextPart:
 
 @dataclass
 class ImagePart:
+    """One image bound for a vision model.
+
+    The bytes are bounded to what a provider actually looks at as soon as the
+    part is constructed - see `app.services.ai.images`. Doing it here rather
+    than at each call site means a new vision caller cannot forget to, and
+    `data` is what will really be sent, which is what the size checks want.
+    """
+
     data: bytes
     media_type: str = "image/png"
+
+    def __post_init__(self) -> None:
+        self.data, self.media_type = normalise_for_vision(self.data, self.media_type)
 
     @property
     def b64(self) -> str:

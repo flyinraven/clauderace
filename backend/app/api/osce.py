@@ -10,7 +10,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
-from app.api.deps import AdminUser, CurrentUser, DbSession
+from app.api.deps import AdminUser, CurrentUser, DbSession, load_owned
 from app.constants import ROLE_ADMIN
 from app.models import (
     AudioClip,
@@ -53,6 +53,10 @@ class StationSummary(BaseModel):
     station_number: int | None
     subspecialty: str | None
     title: str | None
+    # Administrators only. The summary names or strongly implies the diagnosis,
+    # and the browse list used it as a fallback station name, so a candidate
+    # scrolling the list read the case before choosing to sit it. Admins need it
+    # to tell one station from another when reviewing images.
     case_summary: str | None
     exam_period: str | None
     # "past_paper" or "generated" - the list marks which, because a circuit
@@ -87,6 +91,7 @@ def list_stations(user: CurrentUser, db: DbSession) -> list[StationSummary]:
             .group_by(OsceSession.station_id)
         ).all()
     }
+    is_admin = user.role == ROLE_ADMIN
     out = []
     for station in stations:
         out.append(
@@ -95,7 +100,7 @@ def list_stations(user: CurrentUser, db: DbSession) -> list[StationSummary]:
                 station_number=station.station_number,
                 subspecialty=station.subspecialty,
                 title=station.title,
-                case_summary=station.case_summary,
+                case_summary=station.case_summary if is_admin else None,
                 exam_period=station.exam_period,
                 source=station.source,
                 total_marks=station.total_marks,
@@ -345,12 +350,7 @@ class StartSittingRequest(BaseModel):
 
 
 def _load_sitting(db: DbSession, session_id: int, user) -> OsceSession:
-    sitting = db.get(OsceSession, session_id)
-    if sitting is None:
-        raise HTTPException(status_code=404, detail="Sitting not found")
-    if sitting.user_id != user.id and user.role != ROLE_ADMIN:
-        raise HTTPException(status_code=403, detail="This is not your sitting")
-    return sitting
+    return load_owned(db, OsceSession, session_id, user)
 
 
 def _clock(sitting: OsceSession):
@@ -722,15 +722,20 @@ def sitting_result(session_id: int, user: CurrentUser, db: DbSession) -> dict[st
         ).scalars().all()
     }
 
+    # Every grade for this sitting in one read, rather than one query per
+    # question per examiner pass.
+    grades_by_label: dict[str, list[OsceGrade]] = {}
+    for grade in db.execute(
+        select(OsceGrade)
+        .where(OsceGrade.session_id == sitting.id)
+        .order_by(OsceGrade.examiner_pass)
+    ).scalars().all():
+        grades_by_label.setdefault(grade.prompt_label, []).append(grade)
+
     prompts = []
     for index, prompt in enumerate(station.prompts or []):
         label = prompt.get("label") or str(index)
-        grades = db.execute(
-            select(OsceGrade)
-            .where(OsceGrade.session_id == sitting.id)
-            .where(OsceGrade.prompt_label == label)
-            .order_by(OsceGrade.examiner_pass)
-        ).scalars().all()
+        grades = grades_by_label.get(label, [])
         response = responses.get(label)
         awarded = (
             sum(g.awarded_marks for g in grades) / len(grades) if grades else None

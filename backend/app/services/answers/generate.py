@@ -21,8 +21,10 @@ from sqlalchemy.orm import Session
 
 from app.models import Figure, Image, ModelAnswerPoint, Question, QuestionPart
 from app.services.ai import AIClient, ImagePart, TextPart
+from app.services.coerce import as_float, as_int, as_optional_float, clean_str
 from app.services.errors import log_error
 from app.services.jobs.runner import JobContext, JobHandlerError, register_handler
+from app.services.marking import absorb_mark_drift
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +189,7 @@ def generate_model_answer(
     for spec in data.get("parts") or []:
         if not isinstance(spec, dict):
             continue
-        part = parts_by_id.get(_as_int(spec.get("part_id")))
+        part = parts_by_id.get(as_int(spec.get("part_id")))
         if part is None:
             warnings.append(f"Model returned an unknown part_id {spec.get('part_id')!r}")
             continue
@@ -197,7 +199,7 @@ def generate_model_answer(
             warnings.append(f"No key points returned for part {part.label or part.position + 1}")
             continue
 
-        total = sum(_as_float(p.get("marks"), 0.0) for p in points)
+        total = sum(as_float(p.get("marks"), 0.0) for p in points)
         if abs(total - float(part.marks)) > 0.01:
             # Rescale rather than discard: the content is usually right even when
             # the arithmetic drifts, and an examiner-facing warning is recorded.
@@ -208,12 +210,12 @@ def generate_model_answer(
             if total > 0:
                 factor = float(part.marks) / total
                 for point in points:
-                    point["marks"] = round(_as_float(point.get("marks"), 0.0) * factor, 2)
+                    point["marks"] = round(as_float(point.get("marks"), 0.0) * factor, 2)
             else:
                 even = float(part.marks) / len(points)
                 for point in points:
                     point["marks"] = round(even, 2)
-            _absorb_rounding(points, float(part.marks))
+            absorb_mark_drift(points, float(part.marks))
 
         for position, point in enumerate(points):
             db.add(
@@ -221,10 +223,10 @@ def generate_model_answer(
                     part_id=part.id,
                     position=position,
                     text=str(point["text"]).strip(),
-                    marks=_as_float(point.get("marks"), 0.0),
+                    marks=as_float(point.get("marks"), 0.0),
                     is_critical=bool(point.get("is_critical")),
                     from_examiner_feedback=bool(point.get("from_examiner_feedback")),
-                    rationale=_clean(point.get("rationale")),
+                    rationale=clean_str(point.get("rationale")),
                     accepted_alternatives=[
                         str(a).strip()
                         for a in (point.get("accepted_alternatives") or [])
@@ -237,10 +239,10 @@ def generate_model_answer(
 
     _store_figure_descriptions(db, figures, data.get("figure_descriptions") or [])
 
-    angoff = _as_float(data.get("angoff_expected"), None)
+    angoff = as_optional_float(data.get("angoff_expected"))
     if angoff is not None and 0 <= angoff <= 1:
         question.angoff_expected = angoff
-        question.angoff_rationale = _clean(data.get("angoff_rationale"))
+        question.angoff_rationale = clean_str(data.get("angoff_rationale"))
 
     meta = dict(question.generation_meta or {})
     meta["model_answer_warnings"] = warnings
@@ -253,22 +255,6 @@ def generate_model_answer(
     return {"points": written, "warnings": warnings}
 
 
-def _absorb_rounding(points: list[dict[str, Any]], available: float) -> None:
-    """Push the rounding remainder onto the largest key point.
-
-    Rounding each point to 2dp independently lets the sum drift off the marks
-    available (eight marks over three points gives 2.66 x 3 = 7.98). Marks that
-    do not add up are indefensible to a candidate, so the largest point absorbs
-    the difference.
-    """
-    if not points:
-        return
-    drift = round(available - sum(_as_float(p.get("marks"), 0.0) for p in points), 2)
-    if abs(drift) < 0.005:
-        return
-    target = max(points, key=lambda p: _as_float(p.get("marks"), 0.0))
-    target["marks"] = round(max(0.0, _as_float(target.get("marks"), 0.0) + drift), 2)
-
 
 def _store_figure_descriptions(
     db: Session, figures: list[tuple[Figure, Image | None]], descriptions: list[Any]
@@ -279,7 +265,7 @@ def _store_figure_descriptions(
     for index, spec in enumerate(descriptions):
         if not isinstance(spec, dict):
             continue
-        text = _clean(spec.get("description"))
+        text = clean_str(spec.get("description"))
         if not text:
             continue
         label = str(spec.get("label") or "").strip().lower()
@@ -351,23 +337,3 @@ def questions_needing_answers(db: Session, limit: int | None = None) -> list[int
     return list(db.execute(stmt).scalars().all())
 
 
-# --- Coercion helpers -----------------------------------------------------
-def _as_int(value: Any) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _as_float(value: Any, default: float | None) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _clean(value: Any) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
