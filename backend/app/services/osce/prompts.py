@@ -59,9 +59,8 @@ candidate where to look or what they are going to find.
 
 How a RANZCO station is actually built, from real examiner handouts. Follow
 this arc, in this order. Steps 1, 2, 4 and 5 are REQUIRED in every station;
-step 3 is required only when the request lists an ancillary image, and
-forbidden when it does not; and you must include at least one of steps 6
-and 7:
+step 3 is required whenever the case turns on an investigation; and you must
+include at least one of steps 6 and 7:
 
 1. THE STANDING INSTRUCTION. The first question is always what the candidate
    is told as they walk in: the region and the eye, nothing else. "Please
@@ -76,16 +75,23 @@ and 7:
 2. WHAT ELSE WOULD YOU DO. "What other examinations would you do in this
    patient?" / "What ancillary test would you perform?" The candidate should
    name the test before being shown it - so do NOT name it yourself.
-3. READ THE ANCILLARY IMAGE, and ONLY if the request below lists one. Having
-   asked for it, they describe what it shows - correctly naming the sign, its
-   extent, and what is absent. Ask it blind: "What does this show?" /
-   "Describe the OCT."
-   You may refer ONLY to an image the request actually lists. Never write
-   "This is her A-scan biometry", "Here is the OCT" or "These are the fields"
-   for something that is not there: the candidate is shown nothing, is asked
-   to interpret it anyway, and cannot answer. When no ancillary image is
-   listed, omit step 3 entirely and let step 2 stand on its own - asking which
-   test they would order is fine; presenting its result is not.
+3. READ THE ANCILLARY IMAGE. Having asked for it, they describe what it shows
+   - correctly naming the sign, its extent, and what is absent. Ask it blind:
+   "What does this show?" / "Describe the OCT."
+   Ask this step whenever the case genuinely turns on an investigation - the
+   examiners' report is the guide, and a report that says candidates misread
+   the MRI means the MRI was put in front of them. If the request below does
+   not already list that image, ask the question anyway and describe the image
+   it needs in "image_wanted": it will be sourced and verified before any
+   candidate sees the station.
+   "image_wanted" is a description for an image librarian, not a question:
+   name the modality, the laterality and exactly what must be visible - "MRI
+   of the orbits, coronal, showing an enlarged right inferior rectus muscle
+   with normal other recti and no mass". Getting this precise matters, because
+   a candidate is marked on describing what is actually shown.
+   Never present a result you have not either been given or asked for this
+   way. "This is her A-scan biometry" for a scan that does not exist leaves
+   the candidate reading a blank screen.
 4. SUMMARISE AND DIFFERENTIATE, with a stated number: "Can you summarise your
    findings and give 5 differential diagnoses?"
 5. THE EXAMINER GIVES THE DIAGNOSIS AND ASKS FOR MANAGEMENT. This is ONE
@@ -180,6 +186,8 @@ Return ONLY a JSON object:
     {{"label": "A",
       "text": "the question as spoken",
       "step": <integer 1-7, the arc step this question is>,
+      "image_wanted": "<only on a step 3 question that needs an image the
+                       request does not already list; otherwise omit>",
       "seconds": <integer>,
       "rubric": [
         {{"text": "markable expectation", "marks": <number>,
@@ -215,27 +223,29 @@ def build_prompts_for_station(
     figures = list(station.figures)
     has_image = len(figures) > 1
     if not figures:
-        image_note = (
-            "This station shows NO image at all. Skip arc step 3, and never present "
-            "a photograph, scan or angiogram - there is nothing to show."
-        )
+        listed = "  (none yet)"
     else:
         listed = "\n".join(
             f"  {i + 1}. {f.caption or f.wanted_description or 'unlabelled image'}"
             for i, f in enumerate(figures)
         )
-        first = "The first is what the candidate examines at step 1, not something to hand over."
-        image_note = (
-            f"IMAGES THIS STATION ACTUALLY SHOWS:\n{listed}\n{first}\n"
-            + (
-                "The rest are ancillary tests, so arc step 3 asks about one of THOSE."
-                if has_image
-                else "There is no ancillary image, so OMIT arc step 3. Do not present an "
-                "OCT, angiogram, biometry, field or scan result anywhere in the station: "
-                "nothing will be shown, and the candidate cannot interpret what they "
-                "cannot see. Asking which test they would order is still fine."
-            )
-        )
+    needs_investigation = station_needs_an_investigation(station.rubric)
+    rubric_demands = (
+        "\nThe rubric marks the candidate on READING an investigation, which means "
+        "one was put in front of them at the real station. Arc step 3 is therefore "
+        "REQUIRED here: ask it, and give the image you need in \"image_wanted\"."
+        if needs_investigation
+        else ""
+    )
+    image_note = (
+        f"IMAGES THIS STATION ALREADY HAS:\n{listed}\n"
+        "The first is the patient - what the candidate examines at step 1, not "
+        "something to hand over. Any others are ancillary tests you may ask about "
+        "directly. If the case needs an investigation that is not listed, still ask "
+        "the question and describe the image in \"image_wanted\"; it will be sourced "
+        "and checked against your description before the station is used."
+        + rubric_demands
+    )
 
     user = (
         f"SUBSPECIALTY: {station.subspecialty or 'unspecified'}\n"
@@ -262,7 +272,7 @@ def build_prompts_for_station(
     # The arc is the whole point of the station, and the model does drop steps
     # or give the diagnosis away in the opening instruction. Say what is wrong
     # and ask once more rather than shipping a station that examines nothing.
-    problems = _arc_problems(prompts, has_image)
+    problems = _arc_problems(prompts, has_image, needs_investigation)
     if problems:
         retry_user = (
             user
@@ -271,7 +281,7 @@ def build_prompts_for_station(
             + "\n\nRewrite the whole sequence, fixing these."
         )
         retried, retry_warnings = _generate(client, retry_user, job_id)
-        remaining = _arc_problems(retried, has_image)
+        remaining = _arc_problems(retried, has_image, needs_investigation)
         # Keep whichever attempt is closer to a real station; a second try that
         # is still imperfect is usually still better than the first.
         if len(remaining) <= len(problems):
@@ -331,6 +341,29 @@ _OPENING_GIVEAWAYS = (
 
 _REQUIRED_STEPS = (1, 2, 4, 5)
 
+# Investigations a candidate is marked on READING, as opposed to merely naming.
+# A rubric point about describing MRI findings is proof the scan was put in
+# front of them, so the station has to put it in front of them too.
+_INVESTIGATIONS = re.compile(
+    r"\b(mri|ct\b|oct\b|angiogram|angiography|ffa\b|icg\b|ultrasound|b-?scan|"
+    r"ubm\b|biometry|visual fields?|perimetry|topography|specular|pachymetry|"
+    r"electroretinogram|erg\b|photograph)\b",
+    re.IGNORECASE,
+)
+# ...but only when the point is about interpreting one, not ordering one.
+_READS_IT = re.compile(
+    r"\b(describ|identif|interpret|recognis|recogniz|read|comment)", re.IGNORECASE
+)
+
+
+def station_needs_an_investigation(rubric: list[dict[str, Any]] | None) -> bool:
+    """Does the marking rubric expect the candidate to READ an investigation?"""
+    for point in rubric or []:
+        text = str(point.get("text") or "")
+        if _INVESTIGATIONS.search(text) and _READS_IT.search(text):
+            return True
+    return False
+
 # Handing over a result: "this is her A-scan biometry", "here is the OCT".
 # Harmless when the image exists and fatal when it does not, because the
 # candidate is asked to read something the screen never shows them.
@@ -341,13 +374,22 @@ _PRESENTS_A_RESULT = re.compile(
 )
 
 
-def _arc_problems(prompts: list[dict[str, Any]], has_image: bool = True) -> list[str]:
+def _arc_problems(
+    prompts: list[dict[str, Any]],
+    has_image: bool = True,
+    needs_investigation: bool = False,
+) -> list[str]:
     """Check the sequence against the arc. Empty means it is a real station."""
     problems: list[str] = []
     steps = [p.get("step") for p in prompts]
 
-    # Step 3 is reading the image, which a station without one cannot ask.
-    required = (*_REQUIRED_STEPS, 3) if has_image else _REQUIRED_STEPS
+    # Step 3 reads an ancillary image. The station need not already have one -
+    # a question that asks for it says what it needs and the image is sourced -
+    # so it is required when there is one to read, or when the rubric marks the
+    # candidate on reading one.
+    required = (
+        (*_REQUIRED_STEPS, 3) if has_image or needs_investigation else _REQUIRED_STEPS
+    )
     for step in sorted(required):
         if steps.count(step) != 1:
             problems.append(
@@ -360,16 +402,24 @@ def _arc_problems(prompts: list[dict[str, Any]], has_image: bool = True) -> list
     if ordered != sorted(ordered):
         problems.append("the questions are not in arc order")
 
-    # Nothing may be handed to the candidate that the station cannot show.
-    if not has_image:
-        for prompt in prompts:
-            if _PRESENTS_A_RESULT.search(prompt["text"]):
-                problems.append(
-                    f"question {prompt['label']} presents a test result "
-                    f"({prompt['text'][:60]!r}...), but this station has no ancillary "
-                    "image to show; ask which test they would order instead"
-                )
-                break
+    # Nothing may be handed over that the candidate will not actually see. A
+    # question that presents a result must either be reading an image the
+    # station already has, or have said which image to go and find.
+    for index, prompt in enumerate(prompts):
+        if not _PRESENTS_A_RESULT.search(prompt["text"]):
+            continue
+        reads_existing = has_image and prompt.get("step") == 3
+        if not reads_existing and not prompt.get("image_wanted"):
+            problems.append(
+                f"question {prompt['label']} presents a test result "
+                f"({prompt['text'][:60]!r}...) with no image to show for it; either "
+                "describe the image it needs in image_wanted or ask which test they "
+                "would order instead"
+            )
+            break
+        if index == 0:
+            problems.append("the standing instruction cannot hand over a test result")
+            break
 
     opening = prompts[0]
     if opening.get("step") != 1:
@@ -424,6 +474,9 @@ def _normalise(raw_prompts: list[Any]) -> tuple[list[dict[str, Any]], list[str]]
                 # sequence actually examines the candidate, and kept so a
                 # station can be audited later.
                 "step": int(as_float(item.get("step"), 0.0) or 0) or None,
+                # What image this question needs but the station does not yet
+                # have. Sourcing turns it into a figure bound to this question.
+                "image_wanted": str(item.get("image_wanted") or "").strip() or None,
                 "seconds": max(15, int(as_float(item.get("seconds"), 0.0) or 0)),
                 "rubric": rubric,
             }

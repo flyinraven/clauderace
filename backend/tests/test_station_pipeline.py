@@ -143,7 +143,7 @@ def test_a_test_result_cannot_be_handed_over_when_there_is_none_to_show():
     assert any("presents a test result" in p for p in problems)
 
 
-def test_only_a_second_figure_counts_as_an_ancillary_image(client, db, admin, ai, run_jobs):
+def test_the_images_a_station_already_has_are_named_in_the_request(client, db, admin, ai):
     """The first figure is the patient the candidate is examining, not a handout."""
     from app.models import OsceFigure
     from app.services.osce.prompts import build_prompts_for_station
@@ -162,10 +162,46 @@ def test_only_a_second_figure_counts_as_an_ancillary_image(client, db, admin, ai
     ai.responder = responder
     build_prompts_for_station(db, AIClient(db), station)
 
-    assert "OMIT arc step 3" in sent[0]
     assert "External photograph of the right eye" in sent[0]
-    # One request only: a sequence without step 3 is correct here, not a fault.
+    assert "image_wanted" in sent[0]
+    # One request only: with a single figure, a sequence without step 3 is
+    # allowed - the question may instead ask for an image to be sourced.
     assert len(sent) == 1
+
+
+def test_a_rubric_that_marks_reading_a_scan_forces_the_question_that_shows_it():
+    """Station 3 was marked on describing MRI findings and never showed an MRI."""
+    from app.services.osce.prompts import _arc_problems, _normalise, station_needs_an_investigation
+
+    assert station_needs_an_investigation(
+        [{"text": "Describe MRI findings (enlarged right inferior rectus muscle)", "marks": 3}]
+    )
+    # Ordering a test is not reading one, and does not force the question.
+    assert not station_needs_an_investigation(
+        [{"text": "Suggest relevant ancillary tests (e.g., CT/MRI orbits)", "marks": 2}]
+    )
+
+    prompts, _ = _normalise([item for item in full_arc() if item["step"] != 3])
+    problems = _arc_problems(prompts, has_image=False, needs_investigation=True)
+    assert any("arc step 3" in p for p in problems)
+
+
+def test_a_question_may_ask_for_an_image_the_station_does_not_have_yet():
+    """Station 3 needed an MRI the report proves was shown. Keep the question."""
+    from app.services.osce.prompts import _arc_problems, _normalise
+
+    raw = [item for item in full_arc() if item["step"] != 3]
+    raw.insert(2, {
+        "label": "C", "step": 3,
+        "text": "This is an MRI of the orbits. What does it show?",
+        "image_wanted": "Coronal MRI of the orbits showing an enlarged right inferior rectus",
+        "seconds": 60,
+        "rubric": [{"text": "Describes the enlarged muscle", "marks": 2, "is_critical": True}],
+    })
+    prompts, _ = _normalise(raw)
+
+    assert _arc_problems(prompts, has_image=False) == []
+    assert prompts[2]["image_wanted"].startswith("Coronal MRI")
 
 
 def test_the_model_is_asked_again_when_the_arc_is_wrong(client, db, admin, ai, run_jobs):
@@ -374,6 +410,62 @@ def test_a_sourced_image_is_verified_and_attached(
 
     # Three queries were written, specific to broad, and the first one hit.
     assert len(search.queries) == 1
+
+
+def test_a_question_gets_its_own_image_sourced_and_kept_off_the_opening(
+    client, db, admin, ai, run_jobs, monkeypatch, student
+):
+    """Station 3 asks the candidate to read an MRI the station did not have.
+
+    The question states what it needs, the image is searched and verified
+    against that description, and it belongs to the question - an MRI sitting
+    on screen from the start would answer the examination before it is asked.
+    """
+    station = make_station(db)
+    station.prompts = [
+        {"label": "A", "step": 1, "text": "Please examine the orbits of both eyes.",
+         "seconds": 440, "rubric": [{"text": "Describes the signs", "marks": 18}]},
+        {"label": "B", "step": 3, "text": "This is an MRI of the orbits. What does it show?",
+         "image_wanted": "Coronal MRI of the orbits showing an enlarged right inferior rectus",
+         "seconds": 100, "rubric": [{"text": "Describes the enlarged muscle", "marks": 2}]},
+    ]
+    _configure_image_search(db)
+    search = FakeSearch(["https://example.org/mri1.jpg"])
+    photo = big_photo()
+    monkeypatch.setattr(
+        "app.services.osce.station_images.build_provider", lambda store: search
+    )
+    monkeypatch.setattr(
+        "app.services.osce.station_images.download_candidate",
+        lambda candidate: (photo, "image/jpeg", 2400, 1800),
+    )
+    db.commit()
+
+    client.post("/api/osce/stations/source-images", headers=auth(admin))
+    run_jobs()
+
+    db.expire_all()
+    station = db.query(OsceStation).filter_by(id=station.id).one()
+    prompt = station.prompts[1]
+    assert prompt["figure_id"], "the question must end up holding its image"
+    figure = db.query(OsceFigure).filter_by(id=prompt["figure_id"]).one()
+    assert figure.image_id is not None
+    assert figure.position > 0, "the patient stays first"
+    # Both the query writer and the vision check were told to work to what the
+    # question asked for, not to the station's own signs.
+    asked = [json.dumps(r["body"]) for r in ai.requests]
+    assert sum("enlarged right inferior rectus" in a for a in asked) >= 2, (
+        "the question's image requirement must reach the search and the verification"
+    )
+
+    # And in a sitting it travels with its question, not with the patient.
+    sitting = client.post(
+        "/api/osce/sittings", json={"station_id": station.id}, headers=auth(student)
+    ).json()
+    body = client.get(f"/api/osce/sittings/{sitting['id']}", headers=auth(student)).json()
+    assert all(f["id"] != figure.id for f in body["station"]["figures"])
+    assert body["prompts"][1]["figure"]["id"] == figure.id
+    assert body["prompts"][0]["figure"] is None
 
 
 def test_a_verification_call_never_sends_the_full_size_photograph(

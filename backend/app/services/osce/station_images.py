@@ -18,6 +18,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.models import Image, OsceFigure, OsceStation
 from app.services.ai import AIClient, AIError, ImagePart, TextPart
@@ -118,12 +119,20 @@ Return ONLY a JSON object:
 }"""
 
 
-def build_search_queries(db: Session, client: AIClient, station: OsceStation) -> list[str]:
-    """Three queries, specific to broad, tried in order until one yields a match."""
-    signs = station.findings_elicited or station.findings or ""
+def build_search_queries(
+    db: Session, client: AIClient, station: OsceStation, wanted: str | None = None
+) -> list[str]:
+    """Three queries, specific to broad, tried in order until one yields a match.
+
+    `wanted` narrows the search to one question's ancillary test - "OCT of the
+    right macula showing intraretinal fluid" - instead of the station's signs
+    as a whole. An examiner asking the candidate to read an OCT must be handed
+    an OCT, not the external photograph that opens the station.
+    """
+    signs = wanted or station.findings_elicited or station.findings or ""
     fallback = [
         q for q in [
-            " ".join(p for p in [station.diagnosis, "clinical photograph"] if p),
+            wanted or " ".join(p for p in [station.diagnosis, "clinical photograph"] if p),
             station.diagnosis or "",
             station.subspecialty or "ophthalmology clinical photograph",
         ] if q
@@ -152,10 +161,20 @@ def build_search_queries(db: Session, client: AIClient, station: OsceStation) ->
 
 
 def verify_image(
-    db: Session, client: AIClient, station: OsceStation, data: bytes, media_type: str
+    db: Session,
+    client: AIClient,
+    station: OsceStation,
+    data: bytes,
+    media_type: str,
+    wanted: str | None = None,
 ) -> dict[str, Any]:
-    """Ask a vision model whether this image really shows the station's signs."""
-    signs = station.findings_elicited or station.findings or "(not recorded)"
+    """Ask a vision model whether this image really shows the station's signs.
+
+    `wanted` swaps the station's signs for one question's requirement, so the
+    same verification bar - right modality, no annotation, right pathology -
+    is applied to exactly what that question asks the candidate to read.
+    """
+    signs = wanted or station.findings_elicited or station.findings or "(not recorded)"
     content = [
         TextPart(
             f"SUBSPECIALTY: {station.subspecialty or 'unknown'}\n"
@@ -172,27 +191,42 @@ def verify_image(
 
 
 def source_image_for_station(
-    db: Session, client: AIClient, station: OsceStation, job_id: int | None = None
+    db: Session,
+    client: AIClient,
+    station: OsceStation,
+    job_id: int | None = None,
+    figure: OsceFigure | None = None,
 ) -> dict[str, Any]:
-    """Find, verify and attach one image. Returns an outcome summary."""
+    """Find, verify and attach one image. Returns an outcome summary.
+
+    Pass `figure` to fill a particular one - an ancillary test a question asks
+    the candidate to read. Its `wanted_description` then drives both the search
+    and the verification. Left out, this fills the station's own image.
+    """
     store = SettingsStore(db)
     provider = build_provider(store)
     if provider is None:
         raise ImageSearchError("Image search is disabled (provider is 'none').")
 
-    figure = db.execute(
-        select(OsceFigure).where(OsceFigure.station_id == station.id)
-    ).scalars().first()
-    if figure is None:
-        figure = OsceFigure(
-            station_id=station.id,
-            position=0,
-            wanted_description=station.findings_elicited or station.findings,
-        )
-        db.add(figure)
-        db.flush()
+    wanted: str | None = None
+    if figure is not None:
+        wanted = figure.wanted_description
+    else:
+        figure = db.execute(
+            select(OsceFigure)
+            .where(OsceFigure.station_id == station.id)
+            .order_by(OsceFigure.position)
+        ).scalars().first()
+        if figure is None:
+            figure = OsceFigure(
+                station_id=station.id,
+                position=0,
+                wanted_description=station.findings_elicited or station.findings,
+            )
+            db.add(figure)
+            db.flush()
 
-    queries = build_search_queries(db, client, station)
+    queries = build_search_queries(db, client, station, wanted)
     per_query = store.get_int("imagesearch.results_per_query", 6)
     rejections: list[str] = []
     best_representative: tuple[float, Any, Any, dict[str, Any]] | None = None
@@ -220,11 +254,18 @@ def source_image_for_station(
                 continue
             downloaded = download_candidate(candidate)
             if downloaded is None:
+                # Silently skipping these left "tried 3 queries" and no reason
+                # at all in the notes, when in fact every result was a
+                # thumbnail too small to describe.
+                rejections.append(
+                    f"{candidate.source or 'source'}: not usable (too small, wrong "
+                    "format, or would not download)"
+                )
                 continue
             blob, content_type, _width, _height = downloaded
 
             try:
-                verdict = verify_image(db, client, station, blob, content_type)
+                verdict = verify_image(db, client, station, blob, content_type, wanted)
             except Exception as exc:  # noqa: BLE001 - try the next candidate
                 logger.debug("Verification error on a candidate: %s", exc)
                 continue
@@ -300,6 +341,67 @@ def _attach(
     }
 
 
+def source_prompt_images(
+    db: Session, client: AIClient, station: OsceStation, job_id: int | None = None
+) -> dict[str, Any]:
+    """Find the ancillary images the station's questions ask the candidate to read.
+
+    A question that says "This is an MRI of the orbits, what does it show?" is
+    only askable if there is an MRI. The question states what it needs, this
+    goes and gets it, and the figure is bound to that question so it appears
+    when the question does - showing it from the start would hand the candidate
+    the diagnosis before they have described anything.
+    """
+    prompts = list(station.prompts or [])
+    attached, failed = 0, 0
+
+    for index, prompt in enumerate(prompts):
+        wanted = prompt.get("image_wanted")
+        if not wanted or prompt.get("figure_id"):
+            continue
+
+        figure = OsceFigure(
+            station_id=station.id,
+            # After every figure the station already has: position 0 is the
+            # patient, and ordering keeps the opening image first.
+            position=len(station.figures) + 1,
+            wanted_description=wanted,
+        )
+        db.add(figure)
+        db.flush()
+
+        try:
+            outcome = source_image_for_station(db, client, station, job_id, figure=figure)
+        except ImageSearchError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - one question must not stop the rest
+            db.rollback()
+            logger.exception("Could not source the image for prompt %s", prompt.get("label"))
+            log_error(db, source="osce_images", message=str(exc),
+                      context={"station_id": station.id, "prompt": prompt.get("label")})
+            failed += 1
+            continue
+
+        if outcome.get("attached"):
+            # Bound by id, so the sitting can show it at this question alone.
+            prompt["figure_id"] = figure.id
+            attached += 1
+        else:
+            # Nothing suitable was found. The question would ask the candidate
+            # to read a blank screen, so the figure is left for an admin to
+            # fill by hand and the question keeps its unmet request.
+            failed += 1
+
+    if attached:
+        # Rebinding alone does not survive: the intermediate commit inside
+        # image attachment leaves the column looking unchanged, and the
+        # figure_id is quietly dropped. Flagging it dirty is what persists it.
+        station.prompts = [dict(p) for p in prompts]
+        flag_modified(station, "prompts")
+    db.commit()
+    return {"attached": attached, "failed": failed}
+
+
 @register_handler(JOB_SOURCE_STATION_IMAGES)
 def handle_source_station_images(ctx: JobContext) -> bool:
     """One station per chunk: search, verify, attach."""
@@ -317,13 +419,21 @@ def handle_source_station_images(ctx: JobContext) -> bool:
     station = ctx.db.get(OsceStation, station_ids[index])
     if station is not None:
         try:
-            outcome = source_image_for_station(
-                ctx.db, AIClient(ctx.db), station, job_id=ctx.job.id
-            )
+            client = AIClient(ctx.db)
+            outcome = source_image_for_station(ctx.db, client, station, job_id=ctx.job.id)
             key = "attached" if outcome.get("attached") else "no_image"
             done = list((ctx.job.result or {}).get(key, []))
             done.append(station.id)
             ctx.set_result(**{key: done})
+
+            # The questions may each need an image of their own on top of the
+            # one the candidate opens on.
+            for_prompts = source_prompt_images(ctx.db, client, station, job_id=ctx.job.id)
+            if for_prompts["attached"] or for_prompts["failed"]:
+                tally = dict((ctx.job.result or {}).get("prompt_images", {}))
+                tally["attached"] = tally.get("attached", 0) + for_prompts["attached"]
+                tally["failed"] = tally.get("failed", 0) + for_prompts["failed"]
+                ctx.set_result(prompt_images=tally)
         except ImageSearchError as exc:
             # Quota or credentials: every remaining station would fail too.
             ctx.db.rollback()
@@ -345,12 +455,24 @@ def handle_source_station_images(ctx: JobContext) -> bool:
 
 
 def stations_needing_images(db: Session) -> list[int]:
-    """Stations with no verified image yet."""
+    """Stations with no verified image yet, or a question still waiting for one."""
     with_image = set(
         db.execute(
             select(OsceFigure.station_id).where(OsceFigure.image_id.is_not(None))
         ).scalars().all()
     )
     all_ids = db.execute(select(OsceStation.id).order_by(OsceStation.id)).scalars().all()
-    return [i for i in all_ids if i not in with_image]
+    needed = [i for i in all_ids if i not in with_image]
+
+    # A station can have its opening photograph and still be unusable, because
+    # a question asks the candidate to read an MRI that was never sourced.
+    for station in db.execute(select(OsceStation).order_by(OsceStation.id)).scalars():
+        if station.id in needed:
+            continue
+        if any(
+            p.get("image_wanted") and not p.get("figure_id")
+            for p in (station.prompts or [])
+        ):
+            needed.append(station.id)
+    return sorted(needed)
 

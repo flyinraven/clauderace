@@ -13,6 +13,9 @@ interface OscePrompt {
   text: string
   seconds: number
   marks: number
+  // The investigation this question asks you to read. Held back until the
+  // question is reached: on screen from the start it would answer itself.
+  figure: StationFigure | null
   transcript: string | null
   transcript_edited: string | null
   transcription_status: string
@@ -493,6 +496,13 @@ export default function OsceStation() {
                 No sound yet? On iPhone the side switch mutes this — flick it off silent,
                 then press <strong>Read aloud</strong>.
               </p>
+            )}
+
+            {/* The examiner hands over the investigation as they ask about it. */}
+            {prompt.figure && (
+              <div className="mt-4 max-w-md">
+                <StationFigureView figure={prompt.figure} />
+              </div>
             )}
 
             <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4">

@@ -463,6 +463,10 @@ def preview_station(station_id: int, admin: AdminUser, db: DbSession) -> dict[st
                 "seconds": p.get("seconds"),
                 "marks": sum(pt.get("marks", 0) for pt in (p.get("rubric") or [])),
                 "rubric": p.get("rubric") or [],
+                "figure_id": p.get("figure_id"),
+                # Left set with no figure_id, this is a question asking for an
+                # image that could not be found - the thing to fix by hand.
+                "image_wanted": p.get("image_wanted"),
             }
             for i, p in enumerate(station.prompts or [])
         ],
@@ -497,16 +501,25 @@ def get_sitting(session_id: int, user: CurrentUser, db: DbSession) -> dict[str, 
         ).scalars().all()
     }
 
+    by_id = {f.id: f for f in station.figures}
     prompts = []
     for index, prompt in enumerate(station.prompts or []):
         label = prompt.get("label") or str(index)
         response = responses.get(label)
+        figure = by_id.get(prompt.get("figure_id"))
         prompts.append(
             {
                 "label": label,
                 "index": index,
                 "text": prompt.get("text"),
                 "seconds": prompt.get("seconds"),
+                # The investigation this question asks them to read, shown only
+                # once the question is reached.
+                "figure": (
+                    {"id": figure.id, "image_id": figure.image_id, "caption": figure.caption}
+                    if figure and figure.image_id and figure.is_approved
+                    else None
+                ),
                 "marks": sum(pt.get("marks", 0) for pt in (prompt.get("rubric") or [])),
                 "transcript": response.transcript if response else None,
                 "transcript_edited": response.transcript_edited if response else None,
@@ -524,6 +537,12 @@ def get_sitting(session_id: int, user: CurrentUser, db: DbSession) -> dict[str, 
     else:
         given = None
 
+    # An image belonging to a question is NOT shown with the patient: an MRI on
+    # screen from the start answers the question before it is asked. It travels
+    # with its own prompt instead, and appears when that prompt does.
+    prompt_figure_ids = {
+        p.get("figure_id") for p in (station.prompts or []) if p.get("figure_id")
+    }
     figures = [
         {
             "id": f.id,
@@ -532,7 +551,7 @@ def get_sitting(session_id: int, user: CurrentUser, db: DbSession) -> dict[str, 
             "position": f.position,
         }
         for f in sorted(station.figures, key=lambda f: f.position)
-        if f.image_id and f.is_approved
+        if f.image_id and f.is_approved and f.id not in prompt_figure_ids
     ]
 
     return {
