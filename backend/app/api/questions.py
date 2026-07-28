@@ -19,6 +19,7 @@ from app.constants import (
     STATUS_REVIEW,
 )
 from app.models import (
+    ExamPaperQuestion,
     Figure,
     Image,
     ModelAnswerPoint,
@@ -346,6 +347,34 @@ def update_answer_point(
         raise HTTPException(status_code=404, detail="Key point not found")
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(point, field, value)
+    db.commit()
+
+
+@router.delete("/questions/{question_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_question(
+    question_id: int, admin: AdminUser, db: DbSession, remove_from_papers: bool = False
+) -> None:
+    """Remove a question outright — for one that ingested badly.
+
+    A question sitting in a paper is refused rather than quietly pulled out
+    from under it, since that changes the paper's total marks for anyone
+    part-way through.
+    """
+    question = db.get(Question, question_id)
+    if question is None:
+        raise HTTPException(status_code=404, detail="Question not found")
+
+    papers = db.execute(
+        select(ExamPaperQuestion).where(ExamPaperQuestion.question_id == question_id)
+    ).scalars().all()
+    if papers and not remove_from_papers:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This question is used in {len(papers)} paper(s). Pass "
+                   f"remove_from_papers=true to take it out of them and delete it.",
+        )
+
+    db.delete(question)
     db.commit()
 
 

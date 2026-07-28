@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
+from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy import func, select
 
 from app.api.deps import AdminUser, CurrentUser, DbSession, load_owned
@@ -282,6 +283,77 @@ def reject_figure_image(
     }
 
 
+class AddFigureRequest(BaseModel):
+    wanted_description: str = Field(min_length=3, max_length=500)
+    source_now: bool = True
+
+
+@router.post("/stations/{station_id}/figures", status_code=status.HTTP_201_CREATED)
+def add_station_figure(
+    station_id: int, payload: AddFigureRequest, admin: AdminUser, db: DbSession
+) -> dict[str, Any]:
+    """Ask for one more image of the station, described by hand.
+
+    Automatic coverage groups the rubric by eye, which is right for most
+    stations and wrong for some. This is how an administrator adds the view it
+    did not think of — "gonioscopy of the right angle showing the tube".
+    """
+    from app.services.osce.station_images import JOB_SOURCE_STATION_IMAGES
+
+    station = db.get(OsceStation, station_id)
+    if station is None:
+        raise HTTPException(status_code=404, detail="Station not found")
+
+    figure = OsceFigure(
+        station_id=station.id,
+        position=len(station.figures) + 1,
+        wanted_description=payload.wanted_description.strip(),
+        verification_status="pending",
+    )
+    db.add(figure)
+    db.commit()
+    db.refresh(figure)
+
+    job_id = None
+    if payload.source_now:
+        job = create_job(
+            db, JOB_SOURCE_STATION_IMAGES,
+            payload={"station_ids": [station.id]},
+            created_by_id=admin.id, total_steps=1,
+            message="Finding the requested image",
+        )
+        job_id = job.id
+
+    return {"figure_id": figure.id, "job_id": job_id}
+
+
+@router.delete("/figures/{figure_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_figure(figure_id: int, admin: AdminUser, db: DbSession) -> None:
+    """Remove a figure entirely, rather than just detaching its image.
+
+    A question bound to this figure would otherwise ask the candidate to read
+    something that is no longer there, so the binding goes with it.
+    """
+    figure = db.get(OsceFigure, figure_id)
+    if figure is None:
+        raise HTTPException(status_code=404, detail="Figure not found")
+
+    station = db.get(OsceStation, figure.station_id)
+    if station is not None and station.prompts:
+        prompts = [dict(p) for p in station.prompts]
+        changed = False
+        for prompt in prompts:
+            if prompt.get("figure_id") == figure.id:
+                prompt.pop("figure_id", None)
+                changed = True
+        if changed:
+            station.prompts = prompts
+            flag_modified(station, "prompts")
+
+    db.delete(figure)
+    db.commit()
+
+
 @router.delete("/figures/{figure_id}/image", status_code=status.HTTP_204_NO_CONTENT)
 def detach_figure_image(figure_id: int, admin: AdminUser, db: DbSession) -> None:
     """Remove an image and leave the station without one."""
@@ -418,6 +490,40 @@ def clear_attempts(station_id: int, user: CurrentUser, db: DbSession) -> dict[st
         db.delete(sitting)
     db.commit()
     return {"cleared": len(sittings)}
+
+
+@router.delete("/stations/{station_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_station(
+    station_id: int, admin: AdminUser, db: DbSession, delete_sittings: bool = False
+) -> None:
+    """Remove a station outright — for one that ingested badly.
+
+    Sittings are refused rather than silently destroyed, because deleting a
+    station takes every candidate's recorded answers and marks with it.
+    """
+    station = db.get(OsceStation, station_id)
+    if station is None:
+        raise HTTPException(status_code=404, detail="Station not found")
+
+    sittings = db.execute(
+        select(OsceSession).where(OsceSession.station_id == station_id)
+    ).scalars().all()
+    if sittings and not delete_sittings:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{len(sittings)} candidate sitting(s) exist for this station. Pass "
+                   f"delete_sittings=true to remove them as well.",
+        )
+
+    # Circuits hold station ids in a JSON list rather than a foreign key, so
+    # nothing else would drop the reference and the circuit would break when sat.
+    for circuit in db.execute(select(OsceCircuit)).scalars().all():
+        remaining = [i for i in (circuit.station_ids or []) if i != station_id]
+        if len(remaining) != len(circuit.station_ids or []):
+            circuit.station_ids = remaining
+
+    db.delete(station)
+    db.commit()
 
 
 @router.get("/stations/{station_id}/preview")

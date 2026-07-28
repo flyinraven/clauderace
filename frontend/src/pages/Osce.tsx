@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api } from '../api/client'
+import { ApiError, api } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import { useJob } from '../hooks/useJob'
 import { useImage } from '../hooks/useImage'
@@ -169,6 +169,34 @@ export default function Osce() {
       load()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not clear the attempts')
+    }
+  }
+
+  /** Delete a station outright — for one that ingested badly. */
+  const removeStation = async (station: Station) => {
+    const label = station.title ?? `Station ${station.station_number ?? station.id}`
+    if (!confirm(`Delete "${label}"?\n\nIts questions, marking scheme and images go with it. This cannot be undone.`)) {
+      return
+    }
+    setError(null)
+    try {
+      await api(`/osce/stations/${station.id}`, { method: 'DELETE' })
+      load()
+    } catch (err) {
+      // Refused while candidates have sat it, since their answers and marks
+      // would go too. Confirming a second time is what consents to that.
+      if (err instanceof ApiError && err.status === 409) {
+        if (!confirm(`${err.message}\n\nDelete the station and those sittings?`)) return
+        try {
+          await api(`/osce/stations/${station.id}?delete_sittings=true`, { method: 'DELETE' })
+          load()
+          return
+        } catch (forced) {
+          setError(forced instanceof Error ? forced.message : 'Could not delete the station')
+          return
+        }
+      }
+      setError(err instanceof Error ? err.message : 'Could not delete the station')
     }
   }
 
@@ -387,14 +415,24 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
                     </Button>
                   )}
                   {user?.role === 'admin' && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      title="Read the questions without sitting the station"
-                      onClick={() => togglePreview(station.id)}
-                    >
-                      {openId === station.id ? 'Hide' : 'Review'}
-                    </Button>
+                    <>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        title="Read the questions without sitting the station"
+                        onClick={() => togglePreview(station.id)}
+                      >
+                        {openId === station.id ? 'Hide' : 'Review'}
+                      </Button>
+                      <button
+                        type="button"
+                        title="Delete this station outright"
+                        onClick={() => removeStation(station)}
+                        className="rounded-md px-2 py-1 text-xs font-medium text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                      >
+                        Delete
+                      </button>
+                    </>
                   )}
                 </div>
                 </div>

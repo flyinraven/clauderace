@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api } from '../api/client'
+import { ApiError, api } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import { useJob } from '../hooks/useJob'
 import { Alert, Badge, Button, Card, EmptyState, Input, Loading, ProgressBar, Select } from '../components/ui'
@@ -59,6 +59,31 @@ export default function QuestionBank() {
   useEffect(() => {
     if (job && job.status === 'completed') load()
   }, [job?.status, load])
+
+  const removeQuestion = async (question: QuestionSummary) => {
+    const label = question.topic || `${question.question_type} ${question.original_number ?? ''}`.trim()
+    if (!confirm(`Delete "${label}"?\n\nIts parts, figures and model answer go with it.`)) return
+    setError(null)
+    try {
+      await api(`/questions/${question.id}`, { method: 'DELETE' })
+      load()
+    } catch (err) {
+      // A question sitting in a paper is refused until the deletion is
+      // confirmed a second time, since it changes that paper's total marks.
+      if (err instanceof ApiError && err.status === 409) {
+        if (!confirm(`${err.message}\n\nDelete it and take it out of those papers?`)) return
+        try {
+          await api(`/questions/${question.id}?remove_from_papers=true`, { method: 'DELETE' })
+          load()
+          return
+        } catch (forced) {
+          setError(forced instanceof Error ? forced.message : 'Delete failed')
+          return
+        }
+      }
+      setError(err instanceof Error ? err.message : 'Delete failed')
+    }
+  }
 
   const generateAnswers = async () => {
     setError(null)
@@ -270,7 +295,12 @@ export default function QuestionBank() {
         <>
           <div className="grid gap-3">
             {page.items.map((question) => (
-              <QuestionRow key={question.id} question={question} />
+              <QuestionRow
+                key={question.id}
+                question={question}
+                canDelete={user?.role === 'admin'}
+                onDelete={removeQuestion}
+              />
             ))}
           </div>
 
@@ -303,7 +333,15 @@ export default function QuestionBank() {
   )
 }
 
-function QuestionRow({ question }: { question: QuestionSummary }) {
+function QuestionRow({
+  question,
+  canDelete,
+  onDelete,
+}: {
+  question: QuestionSummary
+  canDelete: boolean
+  onDelete: (question: QuestionSummary) => void
+}) {
   return (
     <Link
       to={`/questions/${question.id}`}
@@ -335,6 +373,21 @@ function QuestionRow({ question }: { question: QuestionSummary }) {
           >
             {question.model_answer_status === 'complete' ? 'Model answer' : 'No model answer'}
           </Badge>
+          {canDelete && (
+            <button
+              type="button"
+              // The row is a link, so a click here would otherwise navigate
+              // to the question it is deleting.
+              onClick={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                onDelete(question)
+              }}
+              className="rounded-md px-2 py-1 text-xs font-medium text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+            >
+              Delete
+            </button>
+          )}
         </div>
       </div>
     </Link>
