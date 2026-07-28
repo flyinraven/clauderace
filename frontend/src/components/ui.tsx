@@ -179,6 +179,94 @@ export function Select({ className, children, ...rest }: SelectHTMLAttributes<HT
   )
 }
 
+// --- Pagination -----------------------------------------------------------
+/**
+ * Page through a long list.
+ *
+ * Numbered rather than next-and-back alone: eighteen stations a sitting means
+ * the one you want is a known distance in, and stepping there one page at a
+ * time is the thing worth avoiding. Long runs collapse to an ellipsis so the
+ * control stays one line however many pages there are.
+ */
+export function Pagination({
+  total,
+  pageSize,
+  offset,
+  onOffset,
+  noun = 'item',
+}: {
+  total: number
+  pageSize: number
+  offset: number
+  onOffset: (offset: number) => void
+  noun?: string
+}) {
+  if (total <= pageSize) return null
+
+  const pageCount = Math.ceil(total / pageSize)
+  const current = Math.floor(offset / pageSize) + 1
+
+  // First, last, and a window around the current page.
+  const pages: (number | 'gap')[] = []
+  for (let page = 1; page <= pageCount; page += 1) {
+    const near = Math.abs(page - current) <= 1
+    if (page === 1 || page === pageCount || near) {
+      pages.push(page)
+    } else if (pages[pages.length - 1] !== 'gap') {
+      pages.push('gap')
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 pt-3">
+      <p className="text-sm text-slate-500">
+        Showing {offset + 1}–{Math.min(offset + pageSize, total)} of {total} {noun}
+        {total === 1 ? '' : 's'}
+      </p>
+      <div className="flex flex-wrap items-center gap-1">
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={current === 1}
+          onClick={() => onOffset(Math.max(0, offset - pageSize))}
+        >
+          Previous
+        </Button>
+        {pages.map((page, index) =>
+          page === 'gap' ? (
+            <span key={`gap-${index}`} className="px-1.5 text-sm text-slate-400">
+              …
+            </span>
+          ) : (
+            <button
+              key={page}
+              type="button"
+              onClick={() => onOffset((page - 1) * pageSize)}
+              aria-current={page === current ? 'page' : undefined}
+              className={cx(
+                'min-w-[2rem] rounded-lg px-2 py-1.5 text-sm font-medium transition',
+                page === current
+                  ? 'bg-clinical-600 text-white'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200',
+              )}
+            >
+              {page}
+            </button>
+          ),
+        )}
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={current === pageCount}
+          onClick={() => onOffset(offset + pageSize)}
+        >
+          Next
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 // --- States ---------------------------------------------------------------
 export function EmptyState({ title, children }: { title: string; children?: ReactNode }) {
   return (

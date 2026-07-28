@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { ApiError, api } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import { useJob } from '../hooks/useJob'
-import { Alert, Badge, Button, Card, EmptyState, Input, Loading, ProgressBar, Select } from '../components/ui'
+import { Alert, Badge, Button, Card, EmptyState, Input, Loading, Pagination, ProgressBar, Select } from '../components/ui'
 import type { QuestionPage, QuestionSummary } from '../types'
 
 interface FilterOptions {
@@ -362,29 +362,19 @@ export default function QuestionBank() {
             ))}
           </div>
 
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-slate-500">
-              Showing {page.offset + 1}–{Math.min(page.offset + page.limit, page.total)} of {page.total}
-            </p>
-            <div className="flex gap-2">
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={offset === 0}
-                onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
-              >
-                Previous
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={offset + PAGE_SIZE >= page.total}
-                onClick={() => setOffset(offset + PAGE_SIZE)}
-              >
-                Next
-              </Button>
-            </div>
-          </div>
+          <Pagination
+            total={page.total}
+            pageSize={PAGE_SIZE}
+            offset={page.offset}
+            noun="question"
+            onOffset={(next) => {
+              setOffset(next)
+              // Ticks are page-local, and carrying them across a page change
+              // would mean deleting rows that are no longer on screen.
+              setSelected(new Set())
+              window.scrollTo({ top: 0, behavior: 'smooth' })
+            }}
+          />
         </>
       )}
     </div>

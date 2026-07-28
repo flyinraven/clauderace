@@ -4,7 +4,7 @@ import { ApiError, api } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import { useJob } from '../hooks/useJob'
 import { useImage } from '../hooks/useImage'
-import { Alert, Badge, Button, Card, EmptyState, Input, Loading, ProgressBar, Select } from '../components/ui'
+import { Alert, Badge, Button, Card, EmptyState, Input, Loading, Pagination, ProgressBar, Select } from '../components/ui'
 
 interface Station {
   id: number
@@ -96,6 +96,8 @@ interface Circuit {
   }
 }
 
+const STATIONS_PER_PAGE = 20
+
 export default function Osce() {
   const { user } = useAuth()
   const navigate = useNavigate()
@@ -115,6 +117,7 @@ export default function Osce() {
   const [fState, setFState] = useState('')
   // Deleting a bad sitting one station at a time is eighteen confirmations.
   const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [offset, setOffset] = useState(0)
 
   const { job } = useJob(prepJob)
 
@@ -340,6 +343,11 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
     return true
   })
 
+  // A filter that narrows the list to fewer stations than the current page
+  // starts at would otherwise show an empty page.
+  const pageOffset = offset >= visible.length ? 0 : offset
+  const paged = visible.slice(pageOffset, pageOffset + STATIONS_PER_PAGE)
+
   const ready = stations.filter((s) => s.prompts_status === 'complete')
   const notReady = stations.length - ready.length
   const unattempted = ready.filter((s) => !s.attempted)
@@ -494,13 +502,13 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
               <label className="flex items-center gap-2 text-xs text-slate-600">
                 <input
                   type="checkbox"
-                  checked={visible.length > 0 && visible.every((s) => selected.has(s.id))}
+                  checked={paged.length > 0 && paged.every((s) => selected.has(s.id))}
                   onChange={(e) =>
-                    setSelected(e.target.checked ? new Set(visible.map((s) => s.id)) : new Set())
+                    setSelected(e.target.checked ? new Set(paged.map((s) => s.id)) : new Set())
                   }
                   className="rounded border-slate-300"
                 />
-                Select all shown
+                Select all on this page
               </label>
               {selected.size > 0 && (
                 <>
@@ -517,7 +525,7 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
             <EmptyState title="No stations match these filters" />
           ) : (
           <ul className="divide-y divide-slate-100">
-            {visible.map((station) => (
+            {paged.map((station) => (
               <li key={station.id} className="py-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                 {user?.role === 'admin' && (
@@ -658,6 +666,16 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
             ))}
           </ul>
           )}
+          <Pagination
+            total={visible.length}
+            pageSize={STATIONS_PER_PAGE}
+            offset={pageOffset}
+            noun="station"
+            onOffset={(next) => {
+              setOffset(next)
+              setSelected(new Set())
+            }}
+          />
           </>
         )}
       </Card>
