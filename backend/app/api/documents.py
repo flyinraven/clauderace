@@ -7,6 +7,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy import func, select
 
 from app.api.deps import AdminUser, DbSession
@@ -103,14 +104,19 @@ async def upload_document(
 
     # Parse up front so the upload fails fast on an unreadable file, and so the
     # response can tell the administrator what was detected.
+    #
+    # Both the parse and the segmentation are CPU-bound and take far longer than
+    # a health check will wait on a large paper. Run on the event loop they hold
+    # the whole server, Render's probe times out, and the instance is restarted
+    # mid-upload — so they go to the threadpool instead.
+    from app.services.ingest.segment import segment
+
     try:
-        parsed = extract_document(data, filename, file.content_type or "")
+        parsed = await run_in_threadpool(extract_document, data, filename, file.content_type or "")
     except Exception as exc:  # noqa: BLE001 - surfaced to the uploader
         raise HTTPException(status_code=400, detail=f"Could not read this file: {exc}") from exc
 
-    from app.services.ingest.segment import segment
-
-    detected_kind, blocks = segment(parsed, document_kind)
+    detected_kind, blocks = await run_in_threadpool(segment, parsed, document_kind)
 
     document = SourceDocument(
         filename=filename,

@@ -38,6 +38,21 @@ type Options = Omit<RequestInit, 'body'> & { body?: unknown; raw?: boolean }
 
 const SLOW_REQUEST_MS = 3000
 
+/**
+ * A sleeping instance drops the request that wakes it, and an ingest heavy
+ * enough to restart the instance takes every in-flight request with it. Both
+ * look like a dead server to one attempt and like a pause to three, so reads
+ * are retried before the failure is shown.
+ *
+ * Only reads. Retrying an upload would ingest the same document twice.
+ */
+const RETRY_DELAYS_MS = [2000, 5000]
+
+const isRetryable = (method: string | undefined): boolean =>
+  (method ?? 'GET').toUpperCase() === 'GET' || (method ?? '').toUpperCase() === 'HEAD'
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
 export async function api<T = unknown>(path: string, options: Options = {}): Promise<T> {
   const { body, raw, headers, ...rest } = options
   const token = getToken()
@@ -55,14 +70,24 @@ export async function api<T = unknown>(path: string, options: Options = {}): Pro
 
   const slowTimer = setTimeout(() => onSlowRequest.forEach((fn) => fn(true)), SLOW_REQUEST_MS)
 
+  const retryDelays = isRetryable(rest.method) ? RETRY_DELAYS_MS : []
+
   let response: Response
   try {
-    response = await fetch(`${BASE_URL}/api${path}`, { ...rest, headers: finalHeaders, body: payload })
-  } catch {
-    throw new ApiError(
-      'Could not reach the server. If it has been idle it may be starting up — wait a moment and try again.',
-      0,
-    )
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        response = await fetch(`${BASE_URL}/api${path}`, { ...rest, headers: finalHeaders, body: payload })
+        break
+      } catch {
+        if (attempt >= retryDelays.length) {
+          throw new ApiError(
+            'Could not reach the server. If it has been idle it may be starting up — wait a moment and try again.',
+            0,
+          )
+        }
+        await sleep(retryDelays[attempt])
+      }
+    }
   } finally {
     clearTimeout(slowTimer)
     onSlowRequest.forEach((fn) => fn(false))
