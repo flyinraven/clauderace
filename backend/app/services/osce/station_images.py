@@ -25,6 +25,7 @@ from app.services.ai import AIClient, AIError, ImagePart, TextPart
 from app.services.coerce import as_float
 from app.services.errors import log_error
 from app.services.imagesearch.base import ImageSearchError
+from app.services.imagesearch.relevance import expected_modalities, modality_mismatch
 from app.services.imagesearch.service import (
     attach_image_to_figure,
     build_provider,
@@ -32,6 +33,7 @@ from app.services.imagesearch.service import (
     download_candidate,
 )
 from app.services.jobs.runner import JobContext, JobHandlerError, register_handler
+from app.services.osce.coverage import station_views
 from app.services.settings_store import SettingsStore
 
 logger = logging.getLogger(__name__)
@@ -107,9 +109,15 @@ an adult; that is not a mismatch.
 
 Judge the image on its own merits, not on the page it came from.
 
+Name the modality as exactly one of: external, slit_lamp, fundus, angiogram,
+oct, ultrasound, radiology, visual_field, topography, pathology, other. Report
+what the image IS, not what the station wanted - a mismatch is caught after you
+answer, and guessing the expected one hides it.
+
 Return ONLY a JSON object:
 {
   "tier": "faithful" | "representative" | "reject",
+  "modality": "<one of the values above>",
   "confidence": <number 0-1>,
   "shows": "what the image actually shows, one sentence",
   "reason": "why you graded it that way, one sentence",
@@ -190,6 +198,27 @@ def verify_image(
     return data_out
 
 
+def expected_modalities_for(station: OsceStation, wanted: str | None) -> frozenset[str]:
+    """What kind of image this figure has to be.
+
+    A figure requested by a question states its own requirement. The station's
+    opening image is governed instead by the first thing the candidate is asked
+    to do: "examine the anterior segment" cannot be answered by an angiogram,
+    however well that angiogram matches the station's findings overall.
+    """
+    if wanted:
+        return expected_modalities(wanted)
+    for prompt in station.prompts or []:
+        text = str(prompt.get("text") or "").strip()
+        if text:
+            return expected_modalities(text)
+    tasks = station.tasks or []
+    if tasks:
+        first = tasks[0]
+        return expected_modalities(first if isinstance(first, str) else str(first.get("text") or ""))
+    return frozenset()
+
+
 def source_image_for_station(
     db: Session,
     client: AIClient,
@@ -226,6 +255,7 @@ def source_image_for_station(
             db.add(figure)
             db.flush()
 
+    expected = expected_modalities_for(station, wanted)
     queries = build_search_queries(db, client, station, wanted)
     per_query = store.get_int("imagesearch.results_per_query", 6)
     rejections: list[str] = []
@@ -272,6 +302,15 @@ def source_image_for_station(
 
             tier = str(verdict.get("tier") or "reject").lower()
             confidence = as_float(verdict.get("confidence"), 0.0)
+
+            # The grader judges pathology; this judges whether the image is the
+            # examination that was asked for. An angiogram passed on the
+            # station's disc findings is still the wrong thing to hand someone
+            # told to examine the anterior segment.
+            mismatch = modality_mismatch(expected, verdict.get("modality"))
+            if mismatch:
+                rejections.append(f"{candidate.source or 'source'}: {mismatch}")
+                continue
 
             if tier == "faithful" and confidence >= MIN_MATCH_CONFIDENCE:
                 return _attach(db, figure, candidate, downloaded, verdict, "faithful",
@@ -339,6 +378,61 @@ def _attach(
         "confidence": confidence, "source_url": candidate.image_url,
         "rejected": rejected,
     }
+
+
+def source_coverage_images(
+    db: Session, client: AIClient, station: OsceStation, job_id: int | None = None
+) -> dict[str, Any]:
+    """Fill every view the station's rubric needs, not just the opening one.
+
+    A task marking signs in both eyes cannot be answered from one photograph:
+    the marks for the other eye are unearnable however good the candidate is.
+    Each view the rubric implies gets its own figure, so the whole rubric is
+    describable.
+    """
+    views = station_views(station)
+    if len(views) <= 1:
+        return {"attached": 0, "failed": 0, "views": len(views)}
+
+    # The opening figure already covers the first view; it was sourced from the
+    # first task and is what the candidate sees on entering.
+    existing = {
+        (f.wanted_description or "").strip().lower()
+        for f in station.figures
+        if f.image_id is not None
+    }
+    attached, failed = 0, 0
+
+    for view in views[1:]:
+        wanted = view.wanted_description
+        if wanted.strip().lower() in existing:
+            continue
+        figure = OsceFigure(
+            station_id=station.id,
+            position=len(station.figures) + 1,
+            wanted_description=wanted,
+        )
+        db.add(figure)
+        db.flush()
+        try:
+            outcome = source_image_for_station(db, client, station, job_id, figure=figure)
+        except ImageSearchError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - one view must not stop the rest
+            db.rollback()
+            logger.exception("Could not source the %s view for station %s",
+                             view.laterality, station.id)
+            log_error(db, source="osce_images", message=str(exc),
+                      context={"station_id": station.id, "view": view.laterality})
+            failed += 1
+            continue
+        if outcome.get("attached"):
+            attached += 1
+        else:
+            failed += 1
+
+    db.commit()
+    return {"attached": attached, "failed": failed, "views": len(views)}
 
 
 def source_prompt_images(
@@ -426,6 +520,15 @@ def handle_source_station_images(ctx: JobContext) -> bool:
             done.append(station.id)
             ctx.set_result(**{key: done})
 
+            # One photograph cannot carry a rubric that marks both eyes, so
+            # the remaining views are filled before the station is called done.
+            coverage = source_coverage_images(ctx.db, client, station, job_id=ctx.job.id)
+            if coverage["attached"] or coverage["failed"]:
+                tally = dict((ctx.job.result or {}).get("coverage", {}))
+                tally["attached"] = tally.get("attached", 0) + coverage["attached"]
+                tally["failed"] = tally.get("failed", 0) + coverage["failed"]
+                ctx.set_result(coverage=tally)
+
             # The questions may each need an image of their own on top of the
             # one the candidate opens on.
             for_prompts = source_prompt_images(ctx.db, client, station, job_id=ctx.job.id)
@@ -465,7 +568,8 @@ def stations_needing_images(db: Session) -> list[int]:
     needed = [i for i in all_ids if i not in with_image]
 
     # A station can have its opening photograph and still be unusable, because
-    # a question asks the candidate to read an MRI that was never sourced.
+    # a question asks the candidate to read an MRI that was never sourced, or
+    # because its rubric marks both eyes and only one was ever photographed.
     for station in db.execute(select(OsceStation).order_by(OsceStation.id)).scalars():
         if station.id in needed:
             continue
@@ -473,6 +577,9 @@ def stations_needing_images(db: Session) -> list[int]:
             p.get("image_wanted") and not p.get("figure_id")
             for p in (station.prompts or [])
         ):
+            needed.append(station.id)
+            continue
+        if len([f for f in station.figures if f.image_id]) < len(station_views(station)):
             needed.append(station.id)
     return sorted(needed)
 

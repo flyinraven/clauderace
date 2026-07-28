@@ -85,6 +85,40 @@ export default function StationImages() {
     }
   }
 
+  /** Ask for one more view of a station that automatic coverage missed. */
+  const addFigure = async (stationId: number) => {
+    const wanted = prompt(
+      'Describe the image this station still needs.\n\n' +
+        'Write it as the view an examiner would show, e.g. "gonioscopy of the ' +
+        'right angle showing the tube" or "external photograph of the left eye ' +
+        'showing a recent penetrating keratoplasty".',
+    )
+    if (!wanted?.trim()) return
+    setError(null)
+    try {
+      const result = await api<{ job_id: number | null }>(
+        `/osce/stations/${stationId}/figures`,
+        { method: 'POST', body: { wanted_description: wanted.trim(), source_now: true } },
+      )
+      if (result.job_id) setJobId(result.job_id)
+      load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not add the figure')
+    }
+  }
+
+  /** Drop a figure the station should not have at all. */
+  const removeFigure = async (figure: StationFigure) => {
+    if (!confirm('Remove this figure from the station entirely?')) return
+    setError(null)
+    try {
+      await api(`/osce/figures/${figure.id}`, { method: 'DELETE' })
+      load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not remove the figure')
+    }
+  }
+
   const shown = useMemo(() => {
     if (filter === 'all') return figures
     if (filter === 'approved') return figures.filter((f) => f.is_approved)
@@ -161,6 +195,8 @@ export default function StationImages() {
               onUnapprove={() => setApproved(figure, false)}
               onRejectAndReplace={() => reject(figure, true)}
               onRejectOnly={() => reject(figure, false)}
+              onAddAnother={() => addFigure(figure.station_id)}
+              onRemove={() => removeFigure(figure)}
             />
           ))}
         </div>
@@ -176,6 +212,8 @@ function FigureCard({
   onUnapprove,
   onRejectAndReplace,
   onRejectOnly,
+  onAddAnother,
+  onRemove,
 }: {
   figure: StationFigure
   station?: Station
@@ -183,6 +221,8 @@ function FigureCard({
   onUnapprove: () => void
   onRejectAndReplace: () => void
   onRejectOnly: () => void
+  onAddAnother: () => void
+  onRemove: () => void
 }) {
   const { url } = useImage(figure.image_id)
   const [zoomed, setZoomed] = useState(false)
@@ -274,6 +314,14 @@ function FigureCard({
                 Show at station
               </Button>
             )}
+            {/* A rubric marking both eyes needs a view of each; coverage
+                groups them automatically, and this is the one it missed. */}
+            <Button size="sm" variant="ghost" onClick={onAddAnother}>
+              Add another view
+            </Button>
+            <Button size="sm" variant="ghost" onClick={onRemove}>
+              Remove figure
+            </Button>
           </div>
           {figure.rejection_count > 0 && (
             <p className="mt-2 text-xs text-slate-500">
@@ -297,6 +345,14 @@ function FigureCard({
               <dd className="text-slate-700">{figure.verification_notes ?? '—'}</dd>
             </div>
           </dl>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button size="sm" variant="ghost" onClick={onAddAnother}>
+              Describe what it needs
+            </Button>
+            <Button size="sm" variant="ghost" onClick={onRemove}>
+              Remove figure
+            </Button>
+          </div>
         </>
       )}
 

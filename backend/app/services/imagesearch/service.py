@@ -18,9 +18,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Figure, Image, Question
-from app.services.ai import AIClient
+from app.services.ai import AIClient, ImagePart, TextPart
 from app.services.errors import log_error
 from app.services.imagesearch.base import ImageCandidate, ImageSearchError
+from app.services.imagesearch.relevance import expected_modalities, modality_mismatch
 from app.services.imagesearch.providers import (
     BraveImageSearch,
     OpenverseImageSearch,
@@ -209,6 +210,42 @@ def attach_image_to_figure(
     return existing
 
 
+CLASSIFY_SYSTEM = """\
+You name what kind of clinical image you have been given, for an ophthalmology
+examination question.
+
+Answer with exactly one of: external, slit_lamp, fundus, angiogram, oct,
+ultrasound, radiology, visual_field, topography, pathology, other.
+
+Report what the image IS, not what you think was wanted. Use "other" for
+diagrams, illustrations, graphs, stock photography, or anything that is not a
+clinical image of a patient.
+
+Return ONLY a JSON object: {"modality": "<value>", "is_clinical_image": true|false}"""
+
+
+def classify_modality(db: Session, data: bytes, media_type: str) -> dict[str, Any]:
+    """Ask a vision model what the image is. Empty dict if it cannot say."""
+    try:
+        client = AIClient(db)
+        if not client.is_configured_for("vision"):
+            return {}
+        out = client.complete_json(
+            task="vision",
+            system=CLASSIFY_SYSTEM,
+            user=[
+                TextPart("Name this image's modality."),
+                ImagePart(data=data, media_type=media_type),
+            ],
+            max_tokens=80,
+            temperature=0.0,
+        )
+        return out if isinstance(out, dict) else {}
+    except Exception:  # noqa: BLE001 - an unclassified image is not a failure
+        logger.debug("Could not classify a candidate image's modality")
+        return {}
+
+
 def find_and_attach(db: Session, figure: Figure, question: Question) -> dict[str, Any]:
     store = SettingsStore(db)
     provider = build_provider(store)
@@ -222,10 +259,30 @@ def find_and_attach(db: Session, figure: Figure, question: Question) -> dict[str
     if not candidates:
         return {"attached": False, "query": query, "reason": "no results"}
 
+    # What the question asks the candidate to read decides what kind of image
+    # can answer it. Attaching the first thing that downloaded is how a question
+    # about the anterior segment ends up illustrated with an angiogram.
+    expected = expected_modalities(
+        figure.wanted_description, figure.caption, question.stem, question.topic
+    )
+    skipped: list[str] = []
+
     for candidate in candidates:
         downloaded = download_candidate(candidate)
         if downloaded is None:
             continue
+        blob, content_type, _width, _height = downloaded
+
+        verdict = classify_modality(db, blob, content_type)
+        if verdict:
+            if verdict.get("is_clinical_image") is False:
+                skipped.append(f"{candidate.source or 'source'}: not a clinical image")
+                continue
+            mismatch = modality_mismatch(expected, verdict.get("modality"))
+            if mismatch:
+                skipped.append(f"{candidate.source or 'source'}: {mismatch}")
+                continue
+
         image = attach_image_to_figure(db, figure, candidate, downloaded)
         return {
             "attached": True,
@@ -233,9 +290,15 @@ def find_and_attach(db: Session, figure: Figure, question: Question) -> dict[str
             "image_id": image.id,
             "source_url": candidate.image_url,
             "page_url": candidate.page_url,
+            "modality": verdict.get("modality"),
+            "skipped": len(skipped),
         }
 
-    return {"attached": False, "query": query, "reason": "no candidate could be downloaded"}
+    return {
+        "attached": False,
+        "query": query,
+        "reason": "; ".join(skipped[:5]) or "no candidate could be downloaded",
+    }
 
 
 # --- Job handler ----------------------------------------------------------
