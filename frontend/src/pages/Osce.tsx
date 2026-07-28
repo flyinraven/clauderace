@@ -440,12 +440,11 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
           <EmptyState title="No stations ingested yet" />
         ) : (
           <>
-          <div className="mb-3 flex flex-wrap items-center gap-2">
+          <div className="mb-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search title, case or number…"
-              className="w-56"
             />
             <Select value={fSubspecialty} onChange={(e) => setFSubspecialty(e.target.value)}>
               <option value="">All subspecialties</option>
@@ -471,7 +470,9 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
               <option value="attempted">Sat</option>
               <option value="unattempted">Not sat</option>
             </Select>
-            {(search || fSubspecialty || fPeriod || fSource || fState) && (
+          </div>
+          {(search || fSubspecialty || fPeriod || fSource || fState) && (
+            <div className="mb-3">
               <Button
                 size="sm"
                 variant="ghost"
@@ -485,8 +486,8 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
               >
                 Clear filters
               </Button>
-            )}
-          </div>
+            </div>
+          )}
 
           {user?.role === 'admin' && visible.length > 0 && (
             <div className="mb-2 flex flex-wrap items-center gap-2 border-b border-slate-100 pb-2">
