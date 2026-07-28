@@ -33,6 +33,8 @@ export default function QuestionBank() {
   const [genCount, setGenCount] = useState(20)
   const [genSubspecialty, setGenSubspecialty] = useState('')
   const [genDifficulty, setGenDifficulty] = useState('')
+  // Clearing out a badly ingested paper one confirmation at a time is no use.
+  const [selected, setSelected] = useState<Set<number>>(new Set())
 
   const { job } = useJob(answerJob)
 
@@ -59,6 +61,36 @@ export default function QuestionBank() {
   useEffect(() => {
     if (job && job.status === 'completed') load()
   }, [job?.status, load])
+
+  /** Delete everything ticked — a whole sitting that ingested badly. */
+  const removeSelected = async () => {
+    const ids = [...selected]
+    if (ids.length === 0) return
+    if (!confirm(`Delete ${ids.length} question(s)?\n\nTheir parts, figures and model answers go with them.`)) {
+      return
+    }
+    setError(null)
+    const failed: number[] = []
+    for (const id of ids) {
+      try {
+        await api(`/questions/${id}?remove_from_papers=true`, { method: 'DELETE' })
+      } catch {
+        failed.push(id)
+      }
+    }
+    setSelected(new Set())
+    load()
+    if (failed.length) setError(`${failed.length} question(s) could not be deleted.`)
+  }
+
+  const toggleSelected = (id: number) => {
+    setSelected((current) => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   const removeQuestion = async (question: QuestionSummary) => {
     const label = question.topic || `${question.question_type} ${question.original_number ?? ''}`.trim()
@@ -293,6 +325,30 @@ export default function QuestionBank() {
         </EmptyState>
       ) : (
         <>
+          {user?.role === 'admin' && (
+            <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 pb-2">
+              <label className="flex items-center gap-2 text-xs text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={page.items.length > 0 && page.items.every((q) => selected.has(q.id))}
+                  onChange={(e) =>
+                    setSelected(e.target.checked ? new Set(page.items.map((q) => q.id)) : new Set())
+                  }
+                  className="rounded border-slate-300"
+                />
+                Select all on this page
+              </label>
+              {selected.size > 0 && (
+                <>
+                  <span className="text-xs text-slate-500">{selected.size} selected</span>
+                  <Button size="sm" variant="ghost" onClick={removeSelected}>
+                    Delete selected
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
+
           <div className="grid gap-3">
             {page.items.map((question) => (
               <QuestionRow
@@ -300,6 +356,8 @@ export default function QuestionBank() {
                 question={question}
                 canDelete={user?.role === 'admin'}
                 onDelete={removeQuestion}
+                selected={selected.has(question.id)}
+                onToggle={() => toggleSelected(question.id)}
               />
             ))}
           </div>
@@ -337,10 +395,14 @@ function QuestionRow({
   question,
   canDelete,
   onDelete,
+  selected,
+  onToggle,
 }: {
   question: QuestionSummary
   canDelete: boolean
   onDelete: (question: QuestionSummary) => void
+  selected: boolean
+  onToggle: () => void
 }) {
   return (
     <Link
@@ -348,6 +410,20 @@ function QuestionRow({
       className="block rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-clinical-300 hover:shadow"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
+        {canDelete && (
+          <input
+            type="checkbox"
+            checked={selected}
+            // The row is a link; ticking it must not open the question.
+            onClick={(event) => event.stopPropagation()}
+            onChange={(event) => {
+              event.preventDefault()
+              onToggle()
+            }}
+            className="mt-1 rounded border-slate-300"
+            aria-label={`Select ${question.topic ?? 'question'}`}
+          />
+        )}
         <div className="min-w-0 flex-1">
           <p className="font-medium text-slate-900">{question.topic ?? 'Untitled question'}</p>
           <p className="mt-1 text-xs text-slate-500">

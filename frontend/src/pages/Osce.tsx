@@ -4,7 +4,7 @@ import { ApiError, api } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import { useJob } from '../hooks/useJob'
 import { useImage } from '../hooks/useImage'
-import { Alert, Badge, Button, Card, EmptyState, Loading, ProgressBar } from '../components/ui'
+import { Alert, Badge, Button, Card, EmptyState, Input, Loading, ProgressBar, Select } from '../components/ui'
 
 interface Station {
   id: number
@@ -108,6 +108,13 @@ export default function Osce() {
   // Reviewing what a station asks should not cost nine minutes of sitting it.
   const [openId, setOpenId] = useState<number | null>(null)
   const [preview, setPreview] = useState<StationPreview | null>(null)
+  const [search, setSearch] = useState('')
+  const [fSubspecialty, setFSubspecialty] = useState('')
+  const [fPeriod, setFPeriod] = useState('')
+  const [fSource, setFSource] = useState('')
+  const [fState, setFState] = useState('')
+  // Deleting a bad sitting one station at a time is eighteen confirmations.
+  const [selected, setSelected] = useState<Set<number>>(new Set())
 
   const { job } = useJob(prepJob)
 
@@ -200,6 +207,43 @@ export default function Osce() {
     }
   }
 
+  /** Delete every selected station — a whole sitting that ingested badly. */
+  const removeSelected = async () => {
+    const ids = [...selected]
+    if (ids.length === 0) return
+    if (
+      !confirm(
+        `Delete ${ids.length} station(s)?\n\nTheir questions, marking schemes and images ` +
+          'go with them. This cannot be undone.',
+      )
+    ) {
+      return
+    }
+    setError(null)
+    const failed: number[] = []
+    for (const id of ids) {
+      try {
+        // Sittings are taken too: this is a bulk clear-out, and stopping to
+        // ask per station would defeat the point of selecting them.
+        await api(`/osce/stations/${id}?delete_sittings=true`, { method: 'DELETE' })
+      } catch {
+        failed.push(id)
+      }
+    }
+    setSelected(new Set())
+    load()
+    if (failed.length) setError(`${failed.length} station(s) could not be deleted.`)
+  }
+
+  const toggleSelected = (id: number) => {
+    setSelected((current) => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
   /** Wipe every attempt, for when a run of tests has hidden real stations. */
   const clearAllAttempts = async () => {
     const total = stations.reduce((sum, s) => sum + s.attempt_count, 0)
@@ -262,6 +306,39 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
   }
 
   if (loading) return <Loading label="Loading stations…" />
+
+  // Eighteen stations a sitting, several sittings ingested: finding the one
+  // that came out wrong means being able to narrow the list.
+  const subspecialties = Array.from(
+    new Set(stations.map((s) => s.subspecialty).filter((s): s is string => !!s)),
+  ).sort()
+  const examPeriods = Array.from(
+    new Set(stations.map((s) => s.exam_period).filter((s): s is string => !!s)),
+  ).sort()
+
+  const visible = stations.filter((station) => {
+    if (fSubspecialty && station.subspecialty !== fSubspecialty) return false
+    if (fPeriod && station.exam_period !== fPeriod) return false
+    if (fSource && station.source !== fSource) return false
+    if (fState === 'ready' && station.prompts_status !== 'complete') return false
+    if (fState === 'not_ready' && station.prompts_status === 'complete') return false
+    if (fState === 'attempted' && !station.attempted) return false
+    if (fState === 'unattempted' && station.attempted) return false
+    if (search.trim()) {
+      const haystack = [
+        station.title,
+        station.subspecialty,
+        station.case_summary,
+        station.exam_period,
+        `station ${station.station_number ?? ''}`,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+      if (!haystack.includes(search.trim().toLowerCase())) return false
+    }
+    return true
+  })
 
   const ready = stations.filter((s) => s.prompts_status === 'complete')
   const notReady = stations.length - ready.length
@@ -357,15 +434,100 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
 
       <Card
         title="All stations"
-        description={`${ready.length} ready${notReady ? `, ${notReady} awaiting preparation` : ''}`}
+        description={`${visible.length} of ${stations.length} shown · ${ready.length} ready${notReady ? `, ${notReady} awaiting preparation` : ''}`}
       >
         {stations.length === 0 ? (
           <EmptyState title="No stations ingested yet" />
         ) : (
+          <>
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search title, case or number…"
+              className="w-56"
+            />
+            <Select value={fSubspecialty} onChange={(e) => setFSubspecialty(e.target.value)}>
+              <option value="">All subspecialties</option>
+              {subspecialties.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </Select>
+            <Select value={fPeriod} onChange={(e) => setFPeriod(e.target.value)}>
+              <option value="">All sittings</option>
+              {examPeriods.map((p) => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </Select>
+            <Select value={fSource} onChange={(e) => setFSource(e.target.value)}>
+              <option value="">Past paper &amp; generated</option>
+              <option value="past_paper">Past paper only</option>
+              <option value="generated">Generated only</option>
+            </Select>
+            <Select value={fState} onChange={(e) => setFState(e.target.value)}>
+              <option value="">Any state</option>
+              <option value="ready">Ready</option>
+              <option value="not_ready">Not ready</option>
+              <option value="attempted">Sat</option>
+              <option value="unattempted">Not sat</option>
+            </Select>
+            {(search || fSubspecialty || fPeriod || fSource || fState) && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setSearch('')
+                  setFSubspecialty('')
+                  setFPeriod('')
+                  setFSource('')
+                  setFState('')
+                }}
+              >
+                Clear filters
+              </Button>
+            )}
+          </div>
+
+          {user?.role === 'admin' && visible.length > 0 && (
+            <div className="mb-2 flex flex-wrap items-center gap-2 border-b border-slate-100 pb-2">
+              <label className="flex items-center gap-2 text-xs text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={visible.length > 0 && visible.every((s) => selected.has(s.id))}
+                  onChange={(e) =>
+                    setSelected(e.target.checked ? new Set(visible.map((s) => s.id)) : new Set())
+                  }
+                  className="rounded border-slate-300"
+                />
+                Select all shown
+              </label>
+              {selected.size > 0 && (
+                <>
+                  <span className="text-xs text-slate-500">{selected.size} selected</span>
+                  <Button size="sm" variant="ghost" onClick={removeSelected}>
+                    Delete selected
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
+
+          {visible.length === 0 ? (
+            <EmptyState title="No stations match these filters" />
+          ) : (
           <ul className="divide-y divide-slate-100">
-            {stations.map((station) => (
+            {visible.map((station) => (
               <li key={station.id} className="py-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
+                {user?.role === 'admin' && (
+                  <input
+                    type="checkbox"
+                    checked={selected.has(station.id)}
+                    onChange={() => toggleSelected(station.id)}
+                    className="rounded border-slate-300"
+                    aria-label={`Select ${station.title ?? `station ${station.station_number ?? station.id}`}`}
+                  />
+                )}
                 <div className="min-w-0 flex-1">
                   <p className="font-medium text-slate-800">
                     {/* Never fall back to the case summary: it reads the case
@@ -494,6 +656,8 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
               </li>
             ))}
           </ul>
+          )}
+          </>
         )}
       </Card>
     </div>
