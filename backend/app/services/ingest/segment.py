@@ -20,6 +20,17 @@ VSAQ_HEADER_RE = re.compile(r"^\s*(?:VSAQ|Very\s+Short\s+Answer\s+Question)\s*[#
 QUESTION_HEADER_RE = re.compile(r"^\s*Question\s*[#:]?\s*(\d{1,2})\s*$", re.IGNORECASE)
 STATION_RE = re.compile(r"\bstation\s*0*(\d{1,2})\b", re.IGNORECASE)
 
+# Every station opens by stating its case and what it is testing, whatever the
+# year's slide furniture looks like. Some decks number their stations in the
+# footer and some label them only by subspecialty and day, so this — not the
+# station number — is what reliably marks where one station ends and the next
+# begins.
+CASE_START_RE = re.compile(r"aim\s+of\s+the\s+station|summary\s+of\s+case", re.IGNORECASE)
+
+# A station's opening runs over two slides often enough that its summary and its
+# aim can land on different pages. Starts this close together are one station.
+CASE_START_MIN_GAP = 2
+
 # Page furniture to drop before handing text to the model.
 NOISE_RE = re.compile(
     r"^\s*(?:page\s+\d+\s+of\s+\d+|RACE\s+(?:OSCE|Written).*|"
@@ -56,6 +67,11 @@ def detect_document_kind(doc: ExtractedDocument) -> str:
     seq_hits = len(
         [l for l in text.splitlines() if SEQ_HEADER_RE.match(l) or QUESTION_HEADER_RE.match(l)]
     )
+    # Decks that label stations by subspecialty and day mention "Station" barely
+    # a handful of times, so the case marker is what identifies them.
+    case_hits = len(CASE_START_RE.findall(text))
+    if case_hits >= 4 and case_hits > seq_hits:
+        return "osce"
     if station_hits >= 10 and station_hits > seq_hits:
         return "osce"
     if seq_hits >= 2:
@@ -137,9 +153,62 @@ def _assign_images_by_owner(doc: ExtractedDocument, blocks: list[Block]) -> None
 def segment_osce(doc: ExtractedDocument) -> list[Block]:
     """Group the slides of an OSCE report into one block per station.
 
-    The deck repeats "Station NN" on every slide, so pages are grouped by the
-    station number they mention. A slide naming four or more stations is the
-    contents page and is skipped.
+    Preferred route is to cut the deck where each station introduces its case,
+    because that marker survives every deck format we have. Only when a deck
+    lacks it do we fall back to grouping by the station number in the footer,
+    which is absent from the years labelled by subspecialty and day.
+    """
+    by_case = _segment_osce_by_case(doc)
+    if len(by_case) >= 2:
+        return by_case
+    return _segment_osce_by_station_number(doc)
+
+
+def _segment_osce_by_case(doc: ExtractedDocument) -> list[Block]:
+    """One block per station, cut at each station's opening slide."""
+    starts: list[int] = []
+    for page in doc.pages:
+        if not CASE_START_RE.search(page.text):
+            continue
+        if starts and page.number - starts[-1] <= CASE_START_MIN_GAP:
+            continue
+        starts.append(page.number)
+
+    blocks: list[Block] = []
+    found: list[int | None] = []
+    for position, start in enumerate(starts):
+        end = starts[position + 1] - 1 if position + 1 < len(starts) else doc.page_count
+        pages = [page for page in doc.pages if start <= page.number <= end]
+        if not pages:
+            continue
+        text = "\n".join("\n".join(_clean_lines(page.text)) for page in pages).strip()
+        numbered = STATION_RE.search(text)
+        page_numbers = [page.number for page in pages]
+        blocks.append(
+            Block(
+                kind="OSCE",
+                number=int(numbered.group(1)) if numbered else position + 1,
+                text=text,
+                page_numbers=page_numbers,
+                images=_images_for_pages(doc, page_numbers),
+            )
+        )
+        found.append(int(numbered.group(1)) if numbered else None)
+
+    # Prefer the deck's own numbering, but only when the whole deck carries it
+    # and it runs in order. A single "Station 16" bleeding across a slide
+    # boundary would otherwise give two stations the same number, and position
+    # in the deck is the order sat regardless.
+    if not (all(n is not None for n in found) and found == sorted(set(found))):
+        for position, block in enumerate(blocks):
+            block.number = position + 1
+    return blocks
+
+
+def _segment_osce_by_station_number(doc: ExtractedDocument) -> list[Block]:
+    """Group by the "Station NN" repeated on every slide.
+
+    A slide naming four or more stations is the contents page and is skipped.
     """
     grouped: dict[int, list[int]] = {}
     order: list[int] = []

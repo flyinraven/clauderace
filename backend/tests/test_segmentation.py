@@ -1,0 +1,117 @@
+"""Segmentation of OSCE decks, whose slide furniture changes between years.
+
+The failure that motivated these: a deck labelling its stations by subspecialty
+and day rather than by number segmented into 3 blocks instead of 18, and the
+whole sitting was structured as three enormous stations.
+"""
+
+from __future__ import annotations
+
+from app.services.ingest.extract import ExtractedDocument, ExtractedPage
+from app.services.ingest.segment import detect_document_kind, segment
+
+
+def _deck(pages: list[str]) -> ExtractedDocument:
+    return ExtractedDocument(
+        pages=[ExtractedPage(number=i, text=text) for i, text in enumerate(pages, start=1)],
+        page_count=len(pages),
+    )
+
+
+def _numbered_station(number: int) -> list[str]:
+    """A deck of the years that put "Station NN" in every footer."""
+    return [
+        f"Summary of Case\n62F with a red eye\nAim of the Station\nReach a diagnosis\n"
+        f"Cornea – Station {number:02d}",
+        f"Findings\nInjected conjunctiva\nCornea – Station {number:02d}",
+        f"Examiner comments\nMost candidates managed this well.\nCornea – Station {number:02d}",
+    ]
+
+
+def _dated_station(subspecialty: str, day: str) -> list[str]:
+    """A deck of the years that label stations by subspecialty and day only."""
+    return [
+        f"Summary of Case\n55F with dragged discs\nAim of the Station\nFormulate a differential\n"
+        f"{subspecialty} - {day}",
+        f"Findings\nBilateral scleral buckle\n{subspecialty} - {day}",
+        f"Examiner comments\nPoorly answered overall.\n{subspecialty} - {day}",
+    ]
+
+
+COVER = ["RACE OSCE\nSemester 2 2024", "Examiners:\nDr A\nDr B"]
+
+
+def test_deck_numbered_in_the_footer_splits_per_station() -> None:
+    pages = COVER + [p for n in range(1, 5) for p in _numbered_station(n)]
+    kind, blocks = segment(_deck(pages))
+
+    assert kind == "osce"
+    assert [b.number for b in blocks] == [1, 2, 3, 4]
+    assert all("Summary of Case" in b.text for b in blocks)
+
+
+def test_deck_labelled_by_subspecialty_and_day_still_splits_per_station() -> None:
+    pages = COVER + [
+        p
+        for subspecialty, day in (
+            ("Paediatrics", "Thursday"),
+            ("Glaucoma", "Thursday"),
+            ("Retina", "Friday"),
+            ("Uveitis", "Friday"),
+        )
+        for p in _dated_station(subspecialty, day)
+    ]
+    doc = _deck(pages)
+
+    assert detect_document_kind(doc) == "osce"
+    kind, blocks = segment(doc)
+
+    # No station numbers anywhere in this deck, so position in the deck is the
+    # number — and there must be one block per station, not one for the lot.
+    assert [b.number for b in blocks] == [1, 2, 3, 4]
+    assert "dragged discs" in blocks[0].text
+    assert "Uveitis - Friday" in blocks[3].text
+
+
+def test_a_station_opening_across_two_slides_is_not_split_in_two() -> None:
+    pages = COVER + [
+        "Summary of Case\n62F with a red eye\nCornea - Thursday",
+        "Aim of the Station\nReach a diagnosis\nCornea - Thursday",
+        "Findings\nInjected conjunctiva\nCornea - Thursday",
+        "Summary of Case\n40M with ptosis\nAim of the Station\nExamine the lids\nOculoplastics - Friday",
+        "Findings\nLevator function 4mm\nOculoplastics - Friday",
+    ]
+    _kind, blocks = segment(_deck(pages))
+
+    assert len(blocks) == 2
+    assert "62F with a red eye" in blocks[0].text
+    assert "40M with ptosis" in blocks[1].text
+
+
+def test_a_number_bleeding_across_a_slide_does_not_duplicate_a_station() -> None:
+    """Real decks leak the next station's footer onto a trailing slide."""
+    pages = COVER + [
+        "Summary of Case\n62F red eye\nAim of the Station\nDiagnose\nCornea - Thursday",
+        "Findings\nInjected conjunctiva\nCornea - Thursday",
+        "Examiner comments\nSee also Station 4\nCornea - Thursday",
+        "Summary of Case\n40M ptosis\nAim of the Station\nExamine lids\nOculoplastics - Friday",
+        "Findings\nLevator 4mm\nOculoplastics - Friday",
+    ]
+    _kind, blocks = segment(_deck(pages))
+
+    # The stray "Station 4" must not number the first station 4 and leave two
+    # stations indistinguishable downstream.
+    assert [b.number for b in blocks] == [1, 2]
+
+
+def test_written_paper_is_unaffected() -> None:
+    pages = [
+        "SEQ 1\nQuestion:\nDescribe the management of acute angle closure.\nTotal marks: 10",
+        "SEQ 2\nQuestion:\nList four causes of a swollen optic disc.\nTotal marks: 10",
+    ]
+    doc = _deck(pages)
+
+    assert detect_document_kind(doc) == "written"
+    kind, blocks = segment(doc)
+    assert kind == "written"
+    assert [b.label for b in blocks] == ["SEQ 1", "SEQ 2"]
