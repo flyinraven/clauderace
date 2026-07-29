@@ -77,7 +77,8 @@ export default function Documents() {
   }
 
   const remove = async (doc: SourceDocument) => {
-    const extra = doc.question_count > 0 ? ` and its ${doc.question_count} question(s)` : ''
+    // "item(s)" rather than "question(s)": an OSCE report yields stations.
+    const extra = doc.question_count > 0 ? ` and its ${doc.question_count} extracted item(s)` : ''
     if (!confirm(`Delete "${doc.filename}"${extra}? This cannot be undone.`)) return
     try {
       await api(`/documents/${doc.id}?delete_questions=true`, { method: 'DELETE' })
@@ -174,7 +175,7 @@ export default function Documents() {
                   <th className="pb-2 font-medium">Type</th>
                   <th className="pb-2 font-medium">Period</th>
                   <th className="pb-2 text-right font-medium">Pages</th>
-                  <th className="pb-2 text-right font-medium">Questions</th>
+                  <th className="pb-2 text-right font-medium">Items</th>
                   <th className="pb-2 font-medium">Status</th>
                   <th className="pb-2" />
                 </tr>
