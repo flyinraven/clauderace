@@ -17,6 +17,7 @@ from app.services.marking import (
     aggregate_passes,
     clamp_award,
     examiner_passes,
+    rescale_marks_to_whole,
     temperature_for,
     upsert_grade,
     verdict,
@@ -207,3 +208,53 @@ def test_a_total_already_correct_is_left_alone():
 
 def test_no_points_is_not_an_error():
     absorb_mark_drift([], 20.0)  # a station whose rubric came back empty
+
+
+# --- Whole-mark rescaling -------------------------------------------------
+# Proportional rescaling followed by 2dp rounding produced rubric lines worth
+# 1.54 and 3.06 marks, and station totals like 9.99. No examiner can award a
+# fraction of a mark, so the OSCE builder apportions whole ones instead.
+
+
+def test_rescaled_marks_are_whole_and_total_exactly():
+    # The rubric that shipped as 1.54 / 2.31 / 3.06 / ... on a real station.
+    points = [
+        {"marks": m}
+        for m in (1.54, 2.31, 3.06, 1.54, 1.54, 1.54, 2.31, 3.08, 1.54, 1.54)
+    ]
+    assert rescale_marks_to_whole(points, 20) is True
+    marks = [p["marks"] for p in points]
+    assert all(isinstance(m, int) for m in marks), marks
+    assert sum(marks) == 20
+
+
+def test_proportions_survive_the_rescale():
+    points = [{"marks": 1.0}, {"marks": 1.0}, {"marks": 2.0}]
+    assert rescale_marks_to_whole(points, 20) is True
+    assert [p["marks"] for p in points] == [5, 5, 10]
+
+
+def test_no_rubric_line_is_left_worth_nothing():
+    points = [{"marks": 100.0}, {"marks": 0.1}, {"marks": 0.1}]
+    assert rescale_marks_to_whole(points, 20) is True
+    assert all(p["marks"] >= 1 for p in points)
+    assert sum(p["marks"] for p in points) == 20
+
+
+def test_more_lines_than_marks_declines_rather_than_dropping_any():
+    points = [{"marks": 1.0} for _ in range(25)]
+    assert rescale_marks_to_whole(points, 20) is False
+    # Untouched, so the caller can fall back to fractions with all 25 intact.
+    assert [p["marks"] for p in points] == [1.0] * 25
+
+
+def test_exactly_as_many_lines_as_marks_gives_one_each():
+    points = [{"marks": 3.0} for _ in range(20)]
+    assert rescale_marks_to_whole(points, 20) is True
+    assert [p["marks"] for p in points] == [1] * 20
+
+
+def test_nothing_to_scale_is_declined_not_crashed():
+    assert rescale_marks_to_whole([], 20) is False
+    assert rescale_marks_to_whole([{"marks": 0.0}], 20) is False
+    assert rescale_marks_to_whole([{"marks": 1.0}], 0) is False
