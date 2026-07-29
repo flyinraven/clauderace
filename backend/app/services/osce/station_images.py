@@ -407,8 +407,8 @@ def source_image_for_station(
                 continue
 
             if tier == "faithful" and confidence >= MIN_MATCH_CONFIDENCE:
-                return _attach(db, figure, candidate, downloaded, verdict, "faithful",
-                               confidence, query, len(rejections), auto_approve)
+                return _attach(db, client, station, figure, candidate, downloaded, verdict,
+                               "faithful", confidence, query, len(rejections), auto_approve)
 
             if tier == "representative" and confidence >= MIN_REPRESENTATIVE_CONFIDENCE:
                 if best_representative is None or confidence > best_representative[0]:
@@ -421,9 +421,9 @@ def source_image_for_station(
 
     if best_representative is not None:
         confidence, candidate, downloaded, verdict = best_representative
-        return _attach(db, figure, candidate, downloaded, verdict, "representative",
-                       confidence, figure.search_query or queries[0], len(rejections),
-                       auto_approve)
+        return _attach(db, client, station, figure, candidate, downloaded, verdict,
+                       "representative", confidence, figure.search_query or queries[0],
+                       len(rejections), auto_approve)
 
     figure.image_id = None
     figure.verification_status = "rejected"
@@ -447,6 +447,8 @@ def source_image_for_station(
 
 def _attach(
     db: Session,
+    client: AIClient,
+    station: OsceStation,
     figure: OsceFigure,
     candidate: Any,
     downloaded: Any,
@@ -467,6 +469,13 @@ def _attach(
     missing = str(verdict.get("missing") or "").strip()
     if tier == "representative" and missing and missing.lower() not in {"null", "none"}:
         notes = f"{notes}  [Does NOT show: {missing}]"
+        # The image is a genuine picture of the pathology but cannot answer
+        # every expectation, and those are marks the candidate is about to be
+        # asked for. State the ones it misses, the way the patient would have
+        # demonstrated them, so the rubric stays earnable alongside the image.
+        figure.described_findings = describe_findings(client, station, missing)
+    else:
+        figure.described_findings = None
     figure.verification_notes = notes or None
     figure.match_confidence = confidence
     figure.search_query = query

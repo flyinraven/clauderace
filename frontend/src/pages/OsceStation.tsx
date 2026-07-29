@@ -69,18 +69,22 @@ function StationFigureView({ figure }: { figure: StationFigure }) {
   const { url } = useImage(figure.image_id)
   const [zoomed, setZoomed] = useState(false)
 
-  // No image could be found for this view, so the station states the findings
-  // the way the patient would have demonstrated them. Rendering the image
-  // frame here would sit on "Loading image…" for ever.
-  if (!figure.image_id && figure.described_findings) {
-    return (
-      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-        <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-          On examination
-        </p>
-        <p className="mt-1 text-sm text-slate-700">{figure.described_findings}</p>
-      </div>
-    )
+  // What the examiner states aloud: either the whole view, when no image was
+  // found at all, or just the signs the image on screen cannot show. Both are
+  // marks the candidate is about to be asked for.
+  const spoken = figure.described_findings ? (
+    <div className="border-t border-slate-200 bg-slate-50 px-3 py-2">
+      <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+        On examination
+      </p>
+      <p className="mt-0.5 text-sm text-slate-700">{figure.described_findings}</p>
+    </div>
+  ) : null
+
+  // Nothing was found for this view. Rendering the image frame would sit on
+  // "Loading image…" for ever.
+  if (!figure.image_id) {
+    return <div className="rounded-lg border border-slate-200">{spoken}</div>
   }
 
   return (
@@ -99,6 +103,7 @@ function StationFigureView({ figure }: { figure: StationFigure }) {
           {figure.caption}
         </figcaption>
       )}
+      {spoken}
       {zoomed && url && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/85 p-4"
