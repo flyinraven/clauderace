@@ -90,6 +90,10 @@ SETTING_SPECS: list[SettingSpec] = [
                   "model - this is the one place cheap output shows.",
     ),
     SettingSpec(
+        "ai.model.generation.slot", "primary", "  ↳ provider", "ai",
+        choices=["primary", "secondary"],
+    ),
+    SettingSpec(
         "ai.model.utility", "google/gemini-2.5-flash",
         "Model - utility tasks", "ai",
         help_text="Mechanical work that reorganises content you already have: "
@@ -98,10 +102,6 @@ SETTING_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         "ai.model.utility.slot", "primary", "  ↳ provider", "ai",
-        choices=["primary", "secondary"],
-    ),
-    SettingSpec(
-        "ai.model.generation.slot", "primary", "  ↳ provider", "ai",
         choices=["primary", "secondary"],
     ),
     SettingSpec(
@@ -149,10 +149,14 @@ SETTING_SPECS: list[SettingSpec] = [
         "imagesearch.provider", "brave", "Image search provider", "images",
         choices=["brave", "serpapi", "openverse", "none"],
         help_text="Brave searches the open web (paid, ~$5 per 1000 queries with "
-                  "$5 monthly credit). Openverse is free and needs no key but "
-                  "returns only openly licensed images. Google Custom Search is "
-                  "closed to new customers and retires 1 Jan 2027; Microsoft "
-                  "retired the Bing Search API in August 2025.",
+                  "$5 monthly credit). SerpApi proxies Google Images and needs "
+                  "its own key (paid, no free tier beyond a small trial). "
+                  "Openverse is free and needs no key but returns only openly "
+                  "licensed images, so clinical photographs are scarce. 'none' "
+                  "disables sourcing entirely. Google Custom Search and the "
+                  "Bing Search API are deliberately absent: Bing was retired in "
+                  "August 2025 and Google Custom Search is closed to new "
+                  "customers and retires 1 Jan 2027.",
     ),
     SettingSpec(
         "imagesearch.api_key", "", "Image search API key", "images", is_secret=True,
