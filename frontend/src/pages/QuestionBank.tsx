@@ -405,11 +405,11 @@ function QuestionRow({
             type="checkbox"
             checked={selected}
             // The row is a link; ticking it must not open the question.
+            // stopPropagation is what prevents that — do not also call
+            // preventDefault here, as that desynchronises the rendered tick
+            // from `selected`.
             onClick={(event) => event.stopPropagation()}
-            onChange={(event) => {
-              event.preventDefault()
-              onToggle()
-            }}
+            onChange={onToggle}
             className="mt-1 rounded border-slate-300"
             aria-label={`Select ${question.topic ?? 'question'}`}
           />
