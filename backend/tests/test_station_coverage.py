@@ -142,3 +142,45 @@ def test_a_general_sign_still_rides_with_every_eye() -> None:
     assert len(views) == 2
     for view in views:
         assert any("injection" in p.lower() for p in view.points)
+
+
+def test_an_investigation_reported_as_normal_needs_no_image() -> None:
+    """Found on a real station: it wanted an OCT of a normal eye, twice.
+
+    "Correlates findings with the given acuity, refraction and normal
+    fundal/OCT report" names an OCT, but only to say it was normal. Splitting
+    on the mention sourced an image of nothing, on both eyes.
+    """
+    task = {
+        "text": "Examine the lens and describe what you see.",
+        "rubric": [
+            {"text": "Identify the dense posterior polar plaque in the right eye"},
+            {"text": "Correlates findings with the given acuity and normal fundal/OCT report"},
+        ],
+    }
+    views = required_views(task)
+    assert all(v.modality != "oct" for v in views), [v.modality for v in views]
+    assert len(views) == 1
+
+
+def test_a_reasoning_point_never_drives_a_search() -> None:
+    task = {
+        "text": "Describe the findings.",
+        "rubric": [
+            {"text": "Interprets the visual field as a bitemporal hemianopia"},
+            {"text": "Summarises the case"},
+        ],
+    }
+    assert required_views(task) == []
+
+
+def test_an_abnormal_investigation_still_gets_its_own_view() -> None:
+    """The guard must not swallow the investigations that do need showing."""
+    task = {
+        "text": "Examine the disc and describe what you see.",
+        "rubric": [
+            {"text": "Identify the swollen optic disc"},
+            {"text": "Note the OCT shows subretinal fluid at the macula"},
+        ],
+    }
+    assert {v.modality for v in required_views(task)} == {None, "oct"}

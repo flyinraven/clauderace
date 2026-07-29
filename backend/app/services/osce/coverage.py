@@ -48,7 +48,21 @@ _EXAMINE_RE = re.compile(
 # drive an image search, and they are not marks an image can unlock.
 _NON_VISUAL_RE = re.compile(
     r"^\s*(?:asks?\b|enquir\w+\b|elicits?\b|states?\b|explains?\b|discusses?\b|"
-    r"offers?\b|arranges?\b|orders?\b|considers?\b|manages?\b|counsels?\b)",
+    r"offers?\b|arranges?\b|orders?\b|considers?\b|manages?\b|counsels?\b|"
+    # Reasoning about findings already in hand. "Correlates findings with the
+    # given acuity and normal OCT report" is not something to be shown - it
+    # was asking for an OCT of a normal eye.
+    r"correlat\w+\b|interpret\w+\b|summaris\w+\b|summariz\w+\b|conclud\w+\b|"
+    r"relates?\b|links?\b|attributes?\b|synthesis\w*\b)",
+    re.IGNORECASE,
+)
+
+# An investigation the station hands over, or reports as unremarkable, is not
+# one the candidate has to read. Sourcing an image of a normal OCT spends a
+# search and a vision call to show nothing.
+_NOTHING_TO_SEE_RE = re.compile(
+    r"\bnormal\b|\bunremarkable\b|\bno\s+abnormalit\w+\b|\bwithin\s+normal\s+limits\b|"
+    r"\bNAD\b|\bgiven\b|\breported\s+as\b|\bnil\s+acute\b",
     re.IGNORECASE,
 )
 
@@ -173,7 +187,11 @@ def _by_modality(laterality: str, points: list[str]) -> list[View]:
     plain: list[str] = []
     for point in points:
         modality = named_modality(point)
-        if modality is None:
+        # A point that names an investigation only to say it was normal, or
+        # that it was given, is describing context rather than asking the
+        # candidate to read anything. It stays with the plain view instead of
+        # demanding an image of its own.
+        if modality is None or _NOTHING_TO_SEE_RE.search(point):
             plain.append(point)
         else:
             grouped.setdefault(modality, []).append(point)
