@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api } from '../../api/client'
+import { ApiError, api, warm } from '../../api/client'
 import { useJob } from '../../hooks/useJob'
 import { Alert, Badge, Button, Card, EmptyState, Field, Input, Loading, ProgressBar } from '../../components/ui'
 import type { SourceDocument } from '../../types'
@@ -32,6 +32,13 @@ export default function Documents() {
 
   useEffect(load, [])
 
+  // This is the one page that POSTs a large file, and a free-tier instance
+  // drops whatever wakes it. Wake it now, while the administrator is still
+  // choosing a file, rather than with the upload itself.
+  useEffect(() => {
+    void warm()
+  }, [])
+
   // Refresh the table when a job finishes so counts and statuses are current.
   useEffect(() => {
     if (job && ['completed', 'failed'].includes(job.status)) load()
@@ -50,7 +57,13 @@ export default function Documents() {
       form.append('file', file)
       if (examPeriod.trim()) form.append('exam_period', examPeriod.trim())
 
-      const result = await api<UploadResponse>('/documents', { method: 'POST', body: form })
+      // Retrying is safe here and nowhere else: the server hashes the file and
+      // refuses a repeat with 409, so a retry cannot ingest it twice.
+      const result = await api<UploadResponse>('/documents', {
+        method: 'POST',
+        body: form,
+        retry: true,
+      })
       setNotice(
         `Detected a ${result.detected_kind === 'osce' ? 'clinical OSCE' : 'written'} report with ` +
           `${result.detected_blocks} item(s). Structuring has started.`,
@@ -59,7 +72,16 @@ export default function Documents() {
       if (fileRef.current) fileRef.current.value = ''
       load()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Upload failed')
+      // A 409 on a retry means the attempt before it did land, and the
+      // connection died on the way back. The document is in - say so rather
+      // than reporting a duplicate the administrator never made.
+      if (err instanceof ApiError && err.status === 409 && err.afterRetry) {
+        setNotice('Uploaded. The connection dropped before the server could confirm it.')
+        if (fileRef.current) fileRef.current.value = ''
+        load()
+      } else {
+        setError(err instanceof Error ? err.message : 'Upload failed')
+      }
     } finally {
       setUploading(false)
     }
