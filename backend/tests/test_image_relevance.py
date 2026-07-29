@@ -76,3 +76,47 @@ def test_an_unknown_modality_answer_does_not_gate() -> None:
 
     for answer in (None, "", "other", "unknown", "something the model made up"):
         assert modality_mismatch(expected, answer) is None
+
+
+# --- The last-resort description -----------------------------------------
+# Some signs have no photograph at all. Fatiguable ptosis and Cogan's lid
+# twitch are manoeuvres over time; a thymectomy scar is on the chest. The
+# station states them instead, and must not name the diagnosis while doing it.
+
+from app.services.osce.station_images import leaks_diagnosis  # noqa: E402
+
+
+class _DiagnosedStation:
+    def __init__(self, diagnosis: str | None):
+        self.diagnosis = diagnosis
+        self.id = 1
+
+
+def test_a_description_naming_the_diagnosis_is_refused() -> None:
+    station = _DiagnosedStation("Myasthenia gravis with ocular involvement")
+    assert leaks_diagnosis("There is bilateral ptosis due to myasthenia gravis.", station)
+
+
+def test_naming_only_part_of_it_still_leaks() -> None:
+    station = _DiagnosedStation("Myasthenia gravis with ocular involvement")
+    assert leaks_diagnosis("The findings are those of ocular myasthenia.", station)
+
+
+def test_describing_the_signs_alone_passes() -> None:
+    station = _DiagnosedStation("Myasthenia gravis with ocular involvement")
+    text = (
+        "There is bilateral asymmetric ptosis, worse on the left. Ptosis of the "
+        "right lid increases when the left lid is held up, and a brief upward "
+        "overshoot of the lid is seen on refixation from downgaze."
+    )
+    assert not leaks_diagnosis(text, station)
+
+
+def test_common_words_in_a_diagnosis_do_not_trip_the_guard() -> None:
+    """"Left", "eye" and "syndrome" appear in half the descriptions written."""
+    station = _DiagnosedStation("Chronic left ocular syndrome")
+    assert not leaks_diagnosis("There is ptosis of the left eye.", station)
+
+
+def test_a_station_with_no_recorded_diagnosis_has_nothing_to_leak() -> None:
+    assert not leaks_diagnosis("Any description at all.", _DiagnosedStation(None))

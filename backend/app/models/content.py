@@ -326,6 +326,13 @@ class OsceFigure(TimestampMixin, Base):
     wanted_description: Mapped[str | None] = mapped_column(Text)
     search_query: Mapped[str | None] = mapped_column(Text)
 
+    # What the examiner states aloud when no image could be found for this
+    # view. A real OSCE has a patient who demonstrates the sign; a dynamic one
+    # - fatiguable ptosis, Cogan's lid twitch - has no still photograph at all,
+    # so the station describes it instead of leaving the marks unearnable.
+    # Last resort only: an image, even a representative one, is preferred.
+    described_findings: Mapped[str | None] = mapped_column(Text)
+
     # Vision check: "pending" | "verified" | "rejected" | "unverified"
     verification_status: Mapped[str] = mapped_column(
         String(20), default="pending", nullable=False

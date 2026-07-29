@@ -26,6 +26,10 @@ interface StationFigure {
   id: number
   image_id: number | null
   caption: string | null
+  // What the examiner states aloud when no photograph of this view exists.
+  // Some signs are dynamic - fatiguable ptosis, Cogan's lid twitch - and no
+  // still image can carry them at all.
+  described_findings: string | null
   position: number
 }
 
@@ -64,6 +68,20 @@ const CLOCK_SYNC_MS = 10_000
 function StationFigureView({ figure }: { figure: StationFigure }) {
   const { url } = useImage(figure.image_id)
   const [zoomed, setZoomed] = useState(false)
+
+  // No image could be found for this view, so the station states the findings
+  // the way the patient would have demonstrated them. Rendering the image
+  // frame here would sit on "Loading image…" for ever.
+  if (!figure.image_id && figure.described_findings) {
+    return (
+      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+          On examination
+        </p>
+        <p className="mt-1 text-sm text-slate-700">{figure.described_findings}</p>
+      </div>
+    )
+  }
 
   return (
     <figure className="overflow-hidden rounded-lg border border-slate-200">

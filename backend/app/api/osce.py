@@ -209,6 +209,7 @@ class StationFigureOut(BaseModel):
     station_id: int
     image_id: int | None
     caption: str | None
+    described_findings: str | None
     search_query: str | None
     verification_status: str
     verification_notes: str | None
@@ -555,6 +556,7 @@ def preview_station(station_id: int, admin: AdminUser, db: DbSession) -> dict[st
                 "id": f.id,
                 "image_id": f.image_id,
                 "caption": f.caption,
+                "described_findings": f.described_findings,
                 "position": f.position,
                 "is_approved": f.is_approved,
                 "verification_status": f.verification_status,
@@ -622,8 +624,17 @@ def get_sitting(session_id: int, user: CurrentUser, db: DbSession) -> dict[str, 
                 # The investigation this question asks them to read, shown only
                 # once the question is reached.
                 "figure": (
-                    {"id": figure.id, "image_id": figure.image_id, "caption": figure.caption}
-                    if figure and figure.image_id and figure.is_approved
+                    {
+                        "id": figure.id,
+                        "image_id": figure.image_id,
+                        "caption": figure.caption,
+                        "described_findings": figure.described_findings,
+                    }
+                    # A described view has no image to gate on: the examiner
+                    # states the findings instead, and that must still reach
+                    # the candidate or the question is unanswerable.
+                    if figure
+                    and ((figure.image_id and figure.is_approved) or figure.described_findings)
                     else None
                 ),
                 "marks": sum(pt.get("marks", 0) for pt in (prompt.get("rubric") or [])),
@@ -654,10 +665,12 @@ def get_sitting(session_id: int, user: CurrentUser, db: DbSession) -> dict[str, 
             "id": f.id,
             "image_id": f.image_id,
             "caption": f.caption,
+            "described_findings": f.described_findings,
             "position": f.position,
         }
         for f in sorted(station.figures, key=lambda f: f.position)
-        if f.image_id and f.is_approved and f.id not in prompt_figure_ids
+        if ((f.image_id and f.is_approved) or f.described_findings)
+        and f.id not in prompt_figure_ids
     ]
 
     return {

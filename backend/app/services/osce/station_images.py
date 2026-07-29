@@ -14,6 +14,7 @@ station's elicited findings, and rejected unless it genuinely shows them.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from sqlalchemy import select
@@ -166,6 +167,87 @@ def build_search_queries(
         return queries or fallback
     except (AIError, ValueError, AttributeError):
         return fallback
+
+
+DESCRIBE_SYSTEM = """You are the examiner at an ophthalmology OSCE station. No photograph exists
+for what the candidate is meant to look at, so you state the findings aloud
+instead, exactly as the patient in front of them would demonstrate.
+
+Write 1-3 short sentences in the present tense, describing ONLY what is
+visible or demonstrable on examination. Use the wording an examiner would
+use at the bedside.
+
+You must NOT name, spell out, abbreviate or hint at the diagnosis, the
+syndrome, the causative organism or the underlying disease. The candidate is
+being marked on reaching it themselves; naming it hands them the answer and
+makes the station worthless. Describe signs, never conclusions.
+
+Do not mention management, investigations, prognosis or history. Do not say
+that an image is missing or refer to a photograph.
+
+Return ONLY a JSON object: {"description": "..."}"""
+
+
+def describe_findings(
+    client: AIClient, station: OsceStation, wanted: str | None
+) -> str | None:
+    """State the signs aloud, for a view no photograph could be found for.
+
+    Guarded twice over. The model is told not to name the diagnosis, and the
+    result is then checked against the station's own diagnosis wording - a
+    model that leaks it anyway must not reach a candidate, because the station
+    marks them on working it out.
+    """
+    signs = (wanted or station.findings_elicited or station.findings or "").strip()
+    if not signs:
+        return None
+    try:
+        data = client.complete_json(
+            task="utility",
+            system=DESCRIBE_SYSTEM,
+            user=(
+                f"SUBSPECIALTY: {station.subspecialty or 'unknown'}\n"
+                f"SIGNS TO STATE: {signs}"
+            ),
+            max_tokens=220,
+            temperature=0.2,
+        )
+    except (AIError, ValueError, AttributeError):
+        logger.warning("Could not describe findings for station %s", station.id)
+        return None
+
+    text = str((data or {}).get("description") or "").strip()
+    if not text:
+        return None
+    if leaks_diagnosis(text, station):
+        logger.warning("Discarded a description that named the diagnosis (station %s)", station.id)
+        return None
+    return text
+
+
+# Words too common to count as giving anything away on their own.
+_DIAGNOSIS_STOPWORDS = frozenset({
+    "left", "right", "bilateral", "eye", "eyes", "with", "and", "the", "of", "a", "an",
+    "syndrome", "disease", "chronic", "acute", "secondary", "primary", "ocular",
+})
+
+
+def leaks_diagnosis(text: str, station: OsceStation) -> bool:
+    """Does this description hand the candidate the answer?
+
+    Deterministic rather than another model call: the check has to be reliable
+    and it has to be free. Any distinctive word from the station's diagnosis
+    appearing in the description fails it.
+    """
+    diagnosis = (station.diagnosis or "").lower()
+    if not diagnosis.strip():
+        return False
+    lowered = text.lower()
+    words = {
+        w for w in re.findall(r"[a-z][a-z'\-]{3,}", diagnosis)
+        if w not in _DIAGNOSIS_STOPWORDS
+    }
+    return any(w in lowered for w in words)
 
 
 def verify_image(
@@ -349,6 +431,15 @@ def source_image_for_station(
         f"Tried {len(queries)} quer(ies): {'; '.join(queries)}. "
         + " | ".join(rejections[:5])
     )[:4000]
+
+    # Last resort, and only here: every query has been tried and not one
+    # candidate survived, not even a representative. Rather than leave a
+    # station whose marks cannot be earned, the examiner states the findings
+    # the way a real patient would demonstrate them.
+    described = describe_findings(client, station, wanted or figure.wanted_description)
+    if described:
+        figure.described_findings = described
+        figure.verification_status = "described"
     db.commit()
     return {"attached": False, "queries": queries, "reason": "all candidates rejected",
             "rejected": len(rejections)}
