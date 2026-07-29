@@ -241,27 +241,30 @@ def source_image_for_station(
     if figure is not None:
         wanted = figure.wanted_description
     else:
+        # The rubric decides what the opening image has to show, not the case
+        # findings. Searching the findings produced a good picture of the
+        # disease and a station whose marks could not be earned from it; the
+        # first view states the signs the candidate is actually marked on.
+        views = station_views(station)
+        opening = views[0].wanted_description if views else (
+            station.findings_elicited or station.findings
+        )
+
         figure = db.execute(
             select(OsceFigure)
             .where(OsceFigure.station_id == station.id)
             .order_by(OsceFigure.position)
         ).scalars().first()
         if figure is None:
-            # The rubric decides what the opening image has to show, not the
-            # case findings. Searching the findings produced a good picture of
-            # the disease and a station whose marks could not be earned from
-            # it; the first view states the signs the candidate is actually
-            # marked on describing.
-            views = station_views(station)
-            figure = OsceFigure(
-                station_id=station.id,
-                position=0,
-                wanted_description=(
-                    views[0].wanted_description if views
-                    else station.findings_elicited or station.findings
-                ),
-            )
+            figure = OsceFigure(station_id=station.id, position=0, wanted_description=opening)
             db.add(figure)
+            db.flush()
+        elif views and figure.wanted_description != opening:
+            # Re-sourcing an existing figure has to re-read the rubric too.
+            # Setting this only on creation meant every station sourced before
+            # the change kept searching its case findings for ever - including
+            # the one this was first tested on.
+            figure.wanted_description = opening
             db.flush()
 
     expected = expected_modalities_for(station, wanted)
