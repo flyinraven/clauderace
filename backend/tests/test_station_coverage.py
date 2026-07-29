@@ -7,7 +7,7 @@ however well the candidate answered.
 
 from __future__ import annotations
 
-from app.services.osce.coverage import required_views, station_views
+from app.services.osce.coverage import MAX_VIEWS, required_views, station_views
 
 
 ANTERIOR_TASK = {
@@ -74,7 +74,10 @@ def test_views_are_capped_so_a_station_is_not_padded() -> None:
         prompts = [ANTERIOR_TASK, dict(ANTERIOR_TASK, label="C"), dict(ANTERIOR_TASK, label="D")]
         findings_elicited = None
 
-    assert len(station_views(_Station())) <= 4
+    # Against the constant, not a literal: the cap moved when views began
+    # splitting by examination as well as by eye, and the rule being tested
+    # is that there is a cap at all.
+    assert len(station_views(_Station())) <= MAX_VIEWS
 
 
 def test_a_station_with_no_examination_task_asks_for_nothing() -> None:
@@ -83,3 +86,59 @@ def test_a_station_with_no_examination_task_asks_for_nothing() -> None:
         findings_elicited = None
 
     assert station_views(_Station()) == []
+
+
+# --- Splitting by examination, not just by eye ----------------------------
+# Grouping by eye alone put "the OCT shows cystoid macular oedema" and "the
+# lens is subluxed" in one view. Whichever image was sourced, the other point
+# was unearnable - the station looked covered and could not be answered.
+
+OCT_AND_LENS_TASK = {
+    "label": "A",
+    "text": "Please examine the anterior segment and describe what you see.",
+    "rubric": [
+        {"text": "Identify the subluxed lens in the right eye"},
+        {"text": "Note the OCT shows cystoid macular oedema in the right eye"},
+        {"text": "Comment on the raised intraocular pressure"},
+    ],
+}
+
+
+def test_a_named_investigation_gets_a_view_of_its_own() -> None:
+    views = required_views(OCT_AND_LENS_TASK)
+    modalities = {v.modality for v in views}
+    assert "oct" in modalities, "the OCT point needs its own image"
+    assert None in modalities, "the lens point cannot be described from an OCT"
+
+
+def test_a_point_naming_no_examination_is_not_folded_into_the_investigation() -> None:
+    """The failure this split exists to prevent, pinned directly."""
+    views = required_views(OCT_AND_LENS_TASK)
+    oct_view = next(v for v in views if v.modality == "oct")
+    assert not any("subluxed lens" in p.lower() for p in oct_view.points), (
+        "a subluxed lens is not visible on an OCT, so listing it as covered "
+        "by the OCT leaves those marks unearnable"
+    )
+
+
+def test_the_view_names_the_examination_it_wants() -> None:
+    oct_view = next(v for v in required_views(OCT_AND_LENS_TASK) if v.modality == "oct")
+    wanted = oct_view.wanted_description.lower()
+    assert wanted.startswith("oct showing"), wanted
+    assert "the oct shows" not in wanted, "the modality was named twice"
+
+
+def test_a_general_sign_still_rides_with_every_eye() -> None:
+    """Splitting by examination must not undo the laterality sharing."""
+    task = {
+        "text": "Examine both eyes and describe the findings.",
+        "rubric": [
+            {"text": "Identify the corneal scar in the right eye"},
+            {"text": "Identify the corneal scar in the left eye"},
+            {"text": "Note the bilateral conjunctival injection"},
+        ],
+    }
+    views = required_views(task)
+    assert len(views) == 2
+    for view in views:
+        assert any("injection" in p.lower() for p in view.points)

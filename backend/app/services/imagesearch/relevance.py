@@ -122,3 +122,54 @@ def modality_mismatch(expected: frozenset[str], observed: str | None) -> str | N
         f"shows {seen.replace('_', ' ')}, but the task calls for "
         f"{' or '.join(sorted(m.replace('_', ' ') for m in expected))}"
     )
+
+
+# How to ask a librarian for each modality. Used to build the search phrase and
+# the caption, so the words are the ones a clinical image would be filed under.
+MODALITY_PHRASES: dict[str, str] = {
+    "external": "external photograph",
+    "slit_lamp": "slit lamp photograph",
+    "fundus": "fundus photograph",
+    "angiogram": "fluorescein angiogram",
+    "oct": "OCT",
+    "ultrasound": "ocular ultrasound",
+    "radiology": "MRI or CT",
+    "visual_field": "visual field printout",
+    "topography": "corneal topography",
+    "pathology": "histopathology slide",
+}
+
+# Results that are numbers or a report, not something to look at. A candidate
+# reads these; they cannot describe them from a photograph, and searching for
+# one returns stock images of test tubes.
+_NON_VISUAL_RESULT_RE = re.compile(
+    r"\bblood\w*\b|\bserum\b|\bFBC\b|\bU\s*&\s*E\b|\bESR\b|\bCRP\b|\bACE\b|\bANCA\b|"
+    r"\bANA\b|\bRPR\b|\bserolog\w+\b|\btitre\w*\b|\bculture\w*\b|\bPCR\b|\bswab\w*\b|"
+    r"\bgenetic\s+test\w*\b|\bkaryotyp\w+\b|\bLFT\w*\b|\bHbA1c\b|\bQuantiFERON\b|"
+    r"\bMantoux\b|\bbiochemistr\w+\b",
+    re.IGNORECASE,
+)
+
+
+def named_modality(text: str | None) -> str | None:
+    """The modality this text names outright, or None if it only implies one.
+
+    Grouping a rubric on this is what separates "the OCT shows intraretinal
+    fluid" from "the disc is swollen" - two findings in the same eye that no
+    single photograph can carry. Region wording is deliberately not enough:
+    "the macula" could be a fundus photograph or an OCT, and splitting on a
+    guess would source two images where one would have done.
+    """
+    if not text or not text.strip():
+        return None
+    named = [name for name, pattern in _MODALITY_PATTERNS if pattern.search(text)]
+    if not named:
+        return None
+    # Ordered as _MODALITY_PATTERNS is: the more specific investigations first,
+    # so "OCT of the macula with a fundus photograph" files under OCT.
+    return named[0]
+
+
+def is_non_visual_result(text: str | None) -> bool:
+    """Is this a result to be read rather than an image to be described?"""
+    return bool(text and _NON_VISUAL_RESULT_RE.search(text))

@@ -16,7 +16,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from app.services.imagesearch.relevance import expected_modalities
+from app.services.imagesearch.relevance import (
+    MODALITY_PHRASES,
+    expected_modalities,
+    named_modality,
+)
 
 # Laterality as the rubric writes it. "Both eyes" is deliberately absent: a
 # point about both eyes belongs in each eye's view, not a view of its own.
@@ -24,8 +28,11 @@ _RIGHT_RE = re.compile(r"\bright\s+eye\b|\bOD\b|\bRE\b|\bright\b", re.IGNORECASE
 _LEFT_RE = re.compile(r"\bleft\s+eye\b|\bOS\b|\bLE\b|\bleft\b", re.IGNORECASE)
 
 # Beyond this a station is being padded rather than made fair, and every extra
-# view is another search and another vision call.
-MAX_VIEWS = 4
+# view is another search and another vision call. Raised from 4 when views
+# began splitting by examination as well as by eye: two eyes each needing an
+# external photograph and an OCT is four on its own, and the cap was silently
+# dropping the rest of the rubric.
+MAX_VIEWS = 6
 
 # A task earns images by asking the candidate to look at something. Mentioning
 # a structure is not enough: "history in a patient with congenital cataracts"
@@ -52,14 +59,19 @@ class View:
 
     laterality: str  # "right" | "left" | "unspecified"
     points: list[str]
+    # The examination this view is, when the rubric named one. A view that
+    # knows it is an OCT is searched for and verified as an OCT.
+    modality: str | None = None
 
     @property
     def wanted_description(self) -> str:
         """What to search for and verify against, in one phrase."""
         signs = "; ".join(_strip_instruction(p) for p in self.points)
+        phrase = MODALITY_PHRASES.get(self.modality or "", "")
+        described = f"{phrase} showing {signs}" if phrase else signs
         if self.laterality == "unspecified":
-            return signs
-        return f"{signs} — {self.laterality} eye"
+            return described
+        return f"{described} — {self.laterality} eye"
 
 
 def _strip_instruction(point: str) -> str:
@@ -77,6 +89,19 @@ def _strip_instruction(point: str) -> str:
     )
     text = re.sub(r"^\s*(?:and\s+describes?\b|and\b)\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\s+in\s+the\s+(?:right|left|both)\s+eyes?\b", "", text, flags=re.IGNORECASE)
+    # "the OCT shows cystoid macular oedema" -> "cystoid macular oedema". The
+    # view names its own modality, so leaving this in produced search phrases
+    # like "OCT showing the OCT shows ...".
+    text = re.sub(
+        r"^\s*(?:the\s+|a\s+|an\s+)?(?:OCT|MRI|CT|B[- ]?scan|ultrasound|angiogram|"
+        r"fluorescein\s+angiogram|FFA|visual\s+field|HVF|fundus\s+(?:photograph|photo)|"
+        r"slit[- ]?lamp\s+(?:photograph|photo)|external\s+(?:photograph|photo)|"
+        r"topography|scan|imaging)\s+"
+        r"(?:shows?|demonstrat\w+|reveals?|confirms?)\s+",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
     return text.strip(" .,;") or point.strip()
 
 
@@ -122,13 +147,43 @@ def required_views(prompt: dict, station_findings: str | None = None) -> list[Vi
     # a general sign becomes a view of its own and doubles the searching.
     shared = grouped.pop("unspecified", [])
     if not grouped:
-        return [View("unspecified", shared)][:MAX_VIEWS]
+        return _by_modality("unspecified", shared)[:MAX_VIEWS]
 
-    views = [
-        View(laterality, points + shared)
-        for laterality, points in sorted(grouped.items())
-    ]
+    views: list[View] = []
+    for laterality, own in sorted(grouped.items()):
+        views.extend(_by_modality(laterality, own + shared))
     return views[:MAX_VIEWS]
+
+
+def _by_modality(laterality: str, points: list[str]) -> list[View]:
+    """Split one eye's points into the separate examinations they need.
+
+    Grouping by eye alone was never enough. "The OCT shows intraretinal fluid"
+    and "the lens is subluxed" are both the right eye, and no one photograph
+    carries them: whichever image is sourced, the other point is unearnable.
+
+    Points naming no examination get a view of their own rather than riding
+    along with the named ones. That is the opposite of how an eye-less point is
+    treated above, and deliberately: a general sign really is visible in both
+    eyes, but a subluxed lens is not visible on an OCT. Folding the unnamed
+    points into the OCT's view would report the rubric as covered while leaving
+    those marks unearnable - the exact failure this module exists to prevent.
+    """
+    grouped: dict[str, list[str]] = {}
+    plain: list[str] = []
+    for point in points:
+        modality = named_modality(point)
+        if modality is None:
+            plain.append(point)
+        else:
+            grouped.setdefault(modality, []).append(point)
+
+    views = [View(laterality, plain)] if plain else []
+    views.extend(
+        View(laterality, own, modality=modality)
+        for modality, own in sorted(grouped.items())
+    )
+    return views
 
 
 def station_views(station) -> list[View]:

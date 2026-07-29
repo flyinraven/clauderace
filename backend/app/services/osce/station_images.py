@@ -247,10 +247,19 @@ def source_image_for_station(
             .order_by(OsceFigure.position)
         ).scalars().first()
         if figure is None:
+            # The rubric decides what the opening image has to show, not the
+            # case findings. Searching the findings produced a good picture of
+            # the disease and a station whose marks could not be earned from
+            # it; the first view states the signs the candidate is actually
+            # marked on describing.
+            views = station_views(station)
             figure = OsceFigure(
                 station_id=station.id,
                 position=0,
-                wanted_description=station.findings_elicited or station.findings,
+                wanted_description=(
+                    views[0].wanted_description if views
+                    else station.findings_elicited or station.findings
+                ),
             )
             db.add(figure)
             db.flush()
@@ -368,10 +377,17 @@ def _attach(
     figure.match_confidence = confidence
     figure.search_query = query
     # Vision verification has already discarded diagrams, wrong modalities and
-    # unrelated pathology, so a verified image is shown straight away and the
+    # unrelated pathology, so a faithful image is shown straight away and the
     # user rejects the ones that are wrong. Holding everything back for
     # approval means stations start with no image at all, which is worse.
-    figure.is_approved = auto_approve
+    #
+    # A representative one is different, and used to be auto-approved too. The
+    # model has just written down which of the station's signs it does NOT
+    # show, and those are the marks the candidate is about to be asked for. It
+    # is held for review rather than published as though it could answer the
+    # question - the whole complaint about stations whose images cannot be
+    # described to earn the marks.
+    figure.is_approved = auto_approve and tier == "faithful"
     db.commit()
     return {
         "attached": True, "tier": tier, "query": query,
