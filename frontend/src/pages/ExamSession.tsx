@@ -195,7 +195,10 @@ export default function ExamSession() {
   if (!payload || !clock) return <Loading label="Opening your paper…" />
 
   const active = questions[activeIndex]
-  const urgent = clock.phase === 'writing' && totalLeft <= 300
+  // An untimed sitting has no deadline, so it has no clock to show and can
+  // never be running out of time.
+  const timed = payload.session.is_timed
+  const urgent = timed && clock.phase === 'writing' && totalLeft <= 300
 
   return (
     <div className="space-y-4">
@@ -212,7 +215,7 @@ export default function ExamSession() {
 
           <div className="flex items-center gap-4">
             <PhaseIndicator phase={clock.phase} />
-            {['prep', 'reading', 'writing'].includes(clock.phase) && (
+            {timed && ['prep', 'reading', 'writing'].includes(clock.phase) && (
               <div className="text-right">
                 <p
                   className={cx(
@@ -249,9 +252,19 @@ export default function ExamSession() {
       {clock.phase === 'not_started' && (
         <Card title="Ready to begin">
           <p className="text-sm text-slate-600">
-            Once you start, the clock runs continuously: {clock.can_view_questions ? '' : '5 minutes preparation, '}
-            15 minutes reading (the paper is visible but answers are locked), then the writing period.
-            You cannot pause it.
+            {timed ? (
+              <>
+                Once you start, the clock runs continuously:{' '}
+                {clock.can_view_questions ? '' : '5 minutes preparation, '}
+                15 minutes reading (the paper is visible but answers are locked), then the writing
+                period. You cannot pause it.
+              </>
+            ) : (
+              <>
+                Untimed practice: there is no clock and no reading period. Answer at your own pace
+                and submit whenever you are ready — your answers save as you type.
+              </>
+            )}
           </p>
           <div className="mt-4">
             <Button onClick={begin}>Start the paper</Button>
