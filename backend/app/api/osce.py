@@ -190,10 +190,28 @@ def split_findings_endpoint(admin: AdminUser, db: DbSession) -> dict[str, Any]:
     return {"job_id": job.id, "station_count": len(ids)}
 
 
+class SourceImagesRequest(BaseModel):
+    """Which stations to source for, and how many at once.
+
+    Sourcing every station that needs one is a long run of searches and vision
+    calls on a single free-tier instance, competing with whatever else is
+    using it. Naming the stations, or capping the batch, lets it be done in
+    pieces whose results can be looked at before spending on the next.
+    """
+
+    station_ids: list[int] | None = None
+    limit: int | None = Field(default=None, ge=1, le=200)
+
+
 @router.post("/stations/source-images", status_code=status.HTTP_202_ACCEPTED)
-def source_images(admin: AdminUser, db: DbSession) -> dict[str, Any]:
+def source_images(
+    admin: AdminUser, db: DbSession, payload: SourceImagesRequest | None = None
+) -> dict[str, Any]:
     """Search for a clinical image per station and vision-verify each one."""
-    ids = stations_needing_images(db)
+    payload = payload or SourceImagesRequest()
+    ids = payload.station_ids or stations_needing_images(db)
+    if payload.limit:
+        ids = ids[: payload.limit]
     if not ids:
         raise HTTPException(status_code=400, detail="Every station already has a verified image")
     job = create_job(

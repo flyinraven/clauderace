@@ -521,3 +521,61 @@ def test_the_recording_is_released_once_transcribed(client, db, student, ai):
     assert response.transcript == "the candidate said this"
     assert clip.data is None, "audio is dropped once the transcript exists"
     assert clip.is_discarded is True
+
+
+def test_sourcing_can_be_limited_to_named_stations(client, db, admin, monkeypatch):
+    """Sourcing all 81 at once is a long run of paid calls on one free instance.
+
+    Naming the stations lets it be done in batches whose results can be looked
+    at before spending on the next.
+    """
+    from app.models import OsceStation
+
+    ids = []
+    for n in range(3):
+        st = OsceStation(station_number=n + 1, total_marks=20, source="past_paper",
+                         status="review", subspecialty="Glaucoma")
+        db.add(st)
+        db.flush()
+        ids.append(st.id)
+    db.commit()
+
+    response = client.post(
+        "/api/osce/stations/source-images",
+        json={"station_ids": ids[:2]},
+        headers=auth(admin),
+    )
+    assert response.status_code == 202
+    assert response.json()["station_count"] == 2
+
+    from app.models import Job
+    job = db.get(Job, response.json()["job_id"])
+    assert job.payload["station_ids"] == ids[:2], "only the named stations"
+
+
+def test_a_batch_can_be_capped_without_naming_them(client, db, admin):
+    from app.models import OsceStation
+
+    for n in range(5):
+        db.add(OsceStation(station_number=n + 1, total_marks=20, source="past_paper",
+                           status="review", subspecialty="Glaucoma"))
+    db.commit()
+
+    response = client.post(
+        "/api/osce/stations/source-images", json={"limit": 2}, headers=auth(admin)
+    )
+    assert response.status_code == 202
+    assert response.json()["station_count"] == 2
+
+
+def test_sourcing_with_no_body_still_does_everything_that_needs_it(client, db, admin):
+    """The button that sends no body must keep working."""
+    from app.models import OsceStation
+
+    db.add(OsceStation(station_number=1, total_marks=20, source="past_paper",
+                       status="review", subspecialty="Glaucoma"))
+    db.commit()
+
+    response = client.post("/api/osce/stations/source-images", headers=auth(admin))
+    assert response.status_code == 202
+    assert response.json()["station_count"] == 1
