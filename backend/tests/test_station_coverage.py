@@ -184,3 +184,40 @@ def test_an_abnormal_investigation_still_gets_its_own_view() -> None:
         ],
     }
     assert {v.modality for v in required_views(task)} == {None, "oct"}
+
+
+def test_a_management_proposal_is_not_something_to_photograph() -> None:
+    """"Proposes a test to assess fatiguability" wanted a picture of an ice pack."""
+    task = {
+        "text": "Describe your findings.",
+        "rubric": [
+            {"text": "Proposes a test to assess fatiguability (e.g., ice pack test)"},
+            {"text": "Lists other treatment options"},
+            {"text": "Include infective causes in the differential diagnoses"},
+            {"text": "Organise appropriate investigations"},
+        ],
+    }
+    assert required_views(task) == []
+
+
+def test_a_point_marked_on_absence_is_not_sourced() -> None:
+    """No search returns a scan showing no bony destruction."""
+    task = {
+        "text": "Describe the findings.",
+        "rubric": [
+            {"text": "Identifies right inferior globe dystopia"},
+            {"text": "Important negative findings: no bony destruction on MRI"},
+        ],
+    }
+    assert all(v.modality != "radiology" for v in required_views(task))
+
+
+def test_the_instruction_strip_does_not_eat_the_word_it_is_stripping() -> None:
+    """[\s,and]* matched the letters a, n and d, so "describe" lost its d."""
+    task = {
+        "text": "Examine the orbit and describe what you see.",
+        "rubric": [{"text": "Identifies and describe globe dystopia in the right orbit"}],
+    }
+    wanted = required_views(task)[0].wanted_description
+    assert "escribe" not in wanted, wanted
+    assert wanted.lower().startswith("globe dystopia"), wanted

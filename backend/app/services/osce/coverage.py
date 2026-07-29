@@ -53,7 +53,13 @@ _NON_VISUAL_RE = re.compile(
     # given acuity and normal OCT report" is not something to be shown - it
     # was asking for an OCT of a normal eye.
     r"correlat\w+\b|interpret\w+\b|summaris\w+\b|summariz\w+\b|conclud\w+\b|"
-    r"relates?\b|links?\b|attributes?\b|synthesis\w*\b)",
+    r"relates?\b|links?\b|attributes?\b|synthesis\w*\b|"
+    # Answers given by saying, not by seeing. "Proposes a test to assess
+    # fatiguability" wanted a photograph of an ice pack test. Recognises and
+    # identifies are deliberately absent: those are usually about a sign.
+    r"proposes?\b|suggests?\b|recommends?\b|lists?\b|outlines?\b|formulat\w+\b|"
+    r"plans?\b|advises?\b|selects?\b|prescribes?\b|includes?\b|organis\w+\b|"
+    r"organiz\w+\b|excludes?\b|investigat\w+\b|requests?\b)",
     re.IGNORECASE,
 )
 
@@ -62,7 +68,10 @@ _NON_VISUAL_RE = re.compile(
 # search and a vision call to show nothing.
 _NOTHING_TO_SEE_RE = re.compile(
     r"\bnormal\b|\bunremarkable\b|\bno\s+abnormalit\w+\b|\bwithin\s+normal\s+limits\b|"
-    r"\bNAD\b|\bgiven\b|\breported\s+as\b|\bnil\s+acute\b",
+    r"\bNAD\b|\bgiven\b|\breported\s+as\b|\bnil\s+acute\b|"
+    # A point marked on absence cannot be sourced: no search returns a scan
+    # showing no bony destruction. One station wanted exactly that.
+    r"\bnegative\s+finding\w*\b|\babsence\s+of\b|\bno\s+evidence\s+of\b",
     re.IGNORECASE,
 )
 
@@ -94,13 +103,23 @@ def _strip_instruction(point: str) -> str:
     The rubric is written as instructions to the marker. Searching for the
     instruction returns teaching slides about how to examine, not the sign.
     """
-    text = re.sub(
+    # Repeated until stable: "Identifies and describes X" carries two of these,
+    # and stripping the first consumes the "and", leaving "describes X".
+    #
+    # (?:\s|,|and)* not [\s,and]* - a character class matches the letters a, n
+    # and d individually, so the pattern ate the leading d of "describe" and
+    # searched for "escribe globe dystopia".
+    lead = re.compile(
         r"^\s*(?:identif(?:y|ies)|describ(?:e|es)|not(?:e|es)|recognis(?:e|es)|"
-        r"comment(?:s)?\s+on|mention(?:s)?)\b[\s,and]*",
-        "",
-        point.strip(),
-        flags=re.IGNORECASE,
+        r"comment(?:s)?\s+on|mention(?:s)?)\b(?:\s|,|\band\b)*",
+        re.IGNORECASE,
     )
+    text = point.strip()
+    while True:
+        stripped = lead.sub("", text)
+        if stripped == text:
+            break
+        text = stripped
     text = re.sub(r"^\s*(?:and\s+describes?\b|and\b)\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\s+in\s+the\s+(?:right|left|both)\s+eyes?\b", "", text, flags=re.IGNORECASE)
     # "the OCT shows cystoid macular oedema" -> "cystoid macular oedema". The
