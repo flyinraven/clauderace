@@ -4,7 +4,27 @@
       "PowerShell(python --version)",
       "PowerShell(py --version)",
       "WebSearch",
-      "WebFetch(domain:www.siteground.com)"
+      "WebFetch(domain:www.siteground.com)",
+      "Bash(npx tsc *)",
+      "Bash(python -c \"from app.api.osce import StationSummary; print\\(sorted\\(StationSummary.model_fields\\)\\)\")",
+      "Bash(git add *)",
+      "Bash(git commit -m '@ *)",
+      "Bash(git push *)",
+      "Bash(git commit *)",
+      "PowerShell(.\\\\scripts\\\\deploy_frontend.ps1 -ApiUrl https://clauderace.onrender.com 2>&1)",
+      "PowerShell($env:e = @{}; Get-Content backend\\\\.env.production | Where-Object { $_ -match '^SITEGROUND_' } | ForEach-Object { $k,$v = $_ -split '=',2; Set-Variable -Name $k -Value $v.Trim\\('\"'\\) }; ssh -i \"$HOME\\\\.ssh\\\\race_siteground\" -p $SITEGROUND_SSH_PORT -o BatchMode=yes -o StrictHostKeyChecking=accept-new \"$SITEGROUND_SSH_USER@$SITEGROUND_SSH_HOST\" \"ls $SITEGROUND_REMOTE_PATH | head -20; echo ---; ls $SITEGROUND_REMOTE_PATH/assets | wc -l\")",
+      "PowerShell(Get-Content backend\\\\.env.production | Where-Object { $_ -match '^SITEGROUND_' } | ForEach-Object { $k,$v = $_ -split '=',2; Set-Variable -Name $k -Value $v.Trim\\('\"'\\) }; ssh -i \"$HOME\\\\.ssh\\\\race_siteground\" -p $SITEGROUND_SSH_PORT \"$SITEGROUND_SSH_USER@$SITEGROUND_SSH_HOST\" \"cd $SITEGROUND_REMOTE_PATH && mkdir -p ~/deploy_backup_20260726 && cp index.html .htaccess ~/deploy_backup_20260726/ && ls -la ~/deploy_backup_20260726/\")",
+      "PowerShell(Get-Content backend\\\\.env.production | Where-Object { $_ -match '^SITEGROUND_' } | ForEach-Object { $k,$v = $_ -split '=',2; Set-Variable -Name $k -Value $v.Trim\\('\"'\\) }; .\\\\scripts\\\\deploy_frontend.ps1 -ApiUrl https://clauderace.onrender.com -SshHost $SITEGROUND_SSH_HOST -SshUser $SITEGROUND_SSH_USER -SshPort $SITEGROUND_SSH_PORT -RemotePath $SITEGROUND_REMOTE_PATH -IdentityFile \"$HOME\\\\.ssh\\\\race_siteground\" 2>&1 | Select-Object -Last 12)",
+      "PowerShell($r = Invoke-WebRequest -Uri \"https://exam.txglobal.com.au/?cb=$\\(Get-Random\\)\" -UseBasicParsing; \"status=$\\($r.StatusCode\\)\"; if \\($r.Content -match 'index-Canjrmrj\\\\.js'\\) { \"index.html -> new bundle OK\" } else { \"MISMATCH\"; \\($r.Content | Select-String -Pattern 'assets/[^\"]+' -AllMatches\\).Matches.Value }; $a = Invoke-WebRequest -Uri \"https://exam.txglobal.com.au/assets/index-Canjrmrj.js\" -UseBasicParsing; \"bundle=$\\($a.StatusCode\\) bytes=$\\($a.RawContentLength\\)\"; if \\($a.Content -match 'Past paper'\\) { \"badge string present in live bundle\" } else { \"badge string MISSING\" })",
+      "PowerShell($r = Invoke-WebRequest -Uri \"https://exam.txglobal.com.au/\" -UseBasicParsing; \"status=$\\($r.StatusCode\\)\"; \\($r.Content | Select-String -Pattern 'assets/[^\"]+' -AllMatches\\).Matches.Value)",
+      "PowerShell(try { $r = Invoke-WebRequest -Uri \"https://exam.txglobal.com.au/index.html\" -UseBasicParsing -Headers @{ \"User-Agent\"=\"Mozilla/5.0 \\(Windows NT 10.0; Win64; x64\\)\" }; \"status=$\\($r.StatusCode\\)\"; \\($r.Content | Select-String -Pattern 'assets/[^\"]+' -AllMatches\\).Matches.Value } catch { \"index.html failed: $\\($_.Exception.Response.StatusCode\\)\" })",
+      "PowerShell(Get-Content backend\\\\.env.production | Where-Object { $_ -match '^SITEGROUND_' } | ForEach-Object { $k,$v = $_ -split '=',2; Set-Variable -Name $k -Value $v.Trim\\('\"'\\) }; ssh -i \"$HOME\\\\.ssh\\\\race_siteground\" -p $SITEGROUND_SSH_PORT \"$SITEGROUND_SSH_USER@$SITEGROUND_SSH_HOST\" \"cd $SITEGROUND_REMOTE_PATH && ls -la && echo --- && ls -la assets | head -5 && echo ---BACKUP--- && ls -la ~/deploy_backup_20260726/\")",
+      "Bash(python -)",
+      "Bash(.venv/Scripts/python -)",
+      "PowerShell(Get-Content backend\\\\.env.production | Where-Object { $_ -match '^SITEGROUND_SSH' } | ForEach-Object { $k,$v = $_ -split '=',2; Set-Variable -Name $k -Value $v.Trim\\('\"'\\) }; .\\\\scripts\\\\deploy_frontend.ps1 -ApiUrl https://clauderace.onrender.com -SshHost $SITEGROUND_SSH_HOST -SshUser $SITEGROUND_SSH_USER -SshPort $SITEGROUND_SSH_PORT -IdentityFile \"$HOME\\\\.ssh\\\\race_siteground\" 2>&1 | Select-String -Pattern 'Built|Uploading|Deployed|error')",
+      "Bash(.venv/Scripts/python -c \"import app.services.ingest.pipeline as p; print\\('imports ok'\\)\")",
+      "Bash(.venv/Scripts/python -m pytest tests -q)",
+      "Bash(backend/.venv/Scripts/python scripts/check_orphaned_content.py *)"
     ]
   }
 }
