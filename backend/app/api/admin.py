@@ -312,13 +312,14 @@ def stats(admin: AdminUser, db: DbSession) -> dict[str, Any]:
             select(Question.question_type, func.count(Question.id)).group_by(Question.question_type)
         ).all()
     )
-    by_subspecialty = dict(
-        db.execute(
-            select(Question.subspecialty, func.count(Question.id))
-            .where(Question.subspecialty.is_not(None))
-            .group_by(Question.subspecialty)
-        ).all()
-    )
+    # Questions with no subspecialty still have to appear somewhere, or the
+    # breakdown silently disagrees with the questions_total beside it.
+    by_subspecialty: dict[str, int] = {}
+    for subspecialty, total in db.execute(
+        select(Question.subspecialty, func.count(Question.id)).group_by(Question.subspecialty)
+    ).all():
+        label = (subspecialty or "").strip() or "Unclassified"
+        by_subspecialty[label] = by_subspecialty.get(label, 0) + int(total)
     by_status = dict(
         db.execute(
             select(Question.status, func.count(Question.id)).group_by(Question.status)

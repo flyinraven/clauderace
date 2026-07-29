@@ -33,6 +33,32 @@ FIGURE_CAPTION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# PDF text layers carry the typesetter's ligature glyphs, so "a useful negative
+# finding" extracts as "ﬁnding" (U+FB01). It renders acceptably and then breaks
+# every search, and it reaches the grading model as a word it has to guess at.
+# Targeted rather than a blanket NFKC pass, which would also rewrite the micro
+# sign, fraction slashes and superscripts that clinical text uses deliberately.
+TEXT_SUBSTITUTIONS = {
+    "ﬀ": "ff", "ﬁ": "fi", "ﬂ": "fl", "ﬃ": "ffi",
+    "ﬄ": "ffl", "ﬅ": "st", "ﬆ": "st",
+    "Ĳ": "IJ", "ĳ": "ij", "Œ": "OE", "œ": "oe",
+    # Smart punctuation, for the same searchability reason.
+    "‘": "'", "’": "'", "‚": "'", "‛": "'",
+    "“": '"', "”": '"', "„": '"', "‟": '"',
+    "′": "'", "″": '"',
+    # Separators that survive a copy-paste and then break word splitting.
+    " ": " ", " ": " ", " ": " ", "​": "", "﻿": "",
+    "­": "",
+}
+_SUBSTITUTION_RE = re.compile("|".join(map(re.escape, TEXT_SUBSTITUTIONS)))
+
+
+def normalise_extracted_text(text: str) -> str:
+    """Fold typesetter glyphs back into the characters people search for."""
+    if not text:
+        return text
+    return _SUBSTITUTION_RE.sub(lambda m: TEXT_SUBSTITUTIONS[m.group(0)], text)
+
 
 @dataclass
 class ExtractedImage:
@@ -59,6 +85,11 @@ class ExtractedPage:
     number: int
     text: str
     images: list[ExtractedImage] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        # Every extractor funnels through here, so this is the one place the
+        # normalisation has to happen.
+        self.text = normalise_extracted_text(self.text)
 
 
 @dataclass
@@ -216,7 +247,8 @@ def _attach_captions(page: ExtractedPage, source) -> None:
     for block in blocks:
         if len(block) < 5:
             continue
-        y0, text = block[1], (block[4] or "")
+        # Captions come straight from the PDF, not via ExtractedPage.
+        y0, text = block[1], normalise_extracted_text(block[4] or "")
         for line in text.splitlines():
             match = FIGURE_CAPTION_RE.match(line.strip())
             if match:

@@ -11,7 +11,7 @@ from starlette.concurrency import run_in_threadpool
 from sqlalchemy import func, select
 
 from app.api.deps import AdminUser, DbSession
-from app.models import Question, SourceDocument
+from app.models import OsceStation, Question, SourceDocument
 from app.services.ingest import detect_document_kind, extract_document
 from app.services.ingest.pipeline import JOB_INGEST_DOCUMENT
 from app.services.jobs.runner import create_job
@@ -50,13 +50,18 @@ def list_documents(admin: AdminUser, db: DbSession) -> list[DocumentOut]:
     docs = db.execute(
         select(SourceDocument).order_by(SourceDocument.created_at.desc())
     ).scalars().all()
-    counts = dict(
-        db.execute(
-            select(Question.source_document_id, func.count(Question.id))
-            .where(Question.source_document_id.is_not(None))
-            .group_by(Question.source_document_id)
+    # A written report yields Questions and an OSCE report yields OsceStations,
+    # so counting only one of them reports zero for half the library.
+    counts: dict[int, int] = {}
+    for model in (Question, OsceStation):
+        rows = db.execute(
+            select(model.source_document_id, func.count(model.id))
+            .where(model.source_document_id.is_not(None))
+            .group_by(model.source_document_id)
         ).all()
-    )
+        for document_id, count in rows:
+            counts[document_id] = counts.get(document_id, 0) + count
+
     out: list[DocumentOut] = []
     for doc in docs:
         item = DocumentOut.model_validate(doc)
@@ -219,16 +224,23 @@ def delete_document(
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    questions = db.execute(
-        select(Question).where(Question.source_document_id == document_id)
-    ).scalars().all()
-    if questions and not delete_questions:
+    # An OSCE report produces stations rather than questions; both have to be
+    # accounted for or deleting an OSCE document silently orphans 18 stations.
+    derived = [
+        *db.execute(
+            select(Question).where(Question.source_document_id == document_id)
+        ).scalars().all(),
+        *db.execute(
+            select(OsceStation).where(OsceStation.source_document_id == document_id)
+        ).scalars().all(),
+    ]
+    if derived and not delete_questions:
         raise HTTPException(
             status_code=409,
-            detail=f"{len(questions)} question(s) came from this document. Pass "
+            detail=f"{len(derived)} item(s) came from this document. Pass "
                    f"delete_questions=true to remove them as well.",
         )
-    for question in questions:
-        db.delete(question)
+    for item in derived:
+        db.delete(item)
     db.delete(document)
     db.commit()

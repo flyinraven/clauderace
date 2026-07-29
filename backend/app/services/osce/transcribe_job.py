@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 
 from app.models import OsceResponse
-from app.services.errors import log_error
 from app.services.jobs.runner import JobContext, JobHandlerError, register_handler
 from app.services.osce.transcribe import transcribe_response
 
@@ -39,12 +38,12 @@ def handle_transcribe_response(ctx: JobContext) -> bool:
     except Exception as exc:  # noqa: BLE001 - recorded on the response itself
         ctx.db.rollback()
         logger.exception("Transcription failed for response %s", response_id)
-        log_error(
-            ctx.db, source="transcription", message=str(exc),
-            context={"response_id": response_id},
-        )
         # Re-raise so the job runner retries: a 429 here is usually transient,
-        # and the candidate can also retry from the review screen.
+        # and the candidate can also retry from the review screen. The runner
+        # writes the error-log entry, with the traceback and the attempt count;
+        # logging here as well put every transcription failure in the log
+        # twice. The note rides along in the traceback the runner records.
+        exc.add_note(f"OSCE response id: {response_id}")
         raise
 
     return True

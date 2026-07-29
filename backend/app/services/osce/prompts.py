@@ -23,7 +23,7 @@ from app.services.ai.client import AIError
 from app.services.coerce import as_float
 from app.services.errors import log_error
 from app.services.jobs.runner import JobContext, JobHandlerError, register_handler
-from app.services.marking import absorb_mark_drift
+from app.services.marking import absorb_mark_drift, rescale_marks_to_whole
 
 logger = logging.getLogger(__name__)
 
@@ -657,17 +657,25 @@ def _normalise(raw_prompts: list[Any]) -> tuple[list[dict[str, Any]], list[str]]
         drift = STATION_SECONDS - sum(p["seconds"] for p in prompts)
         prompts[-1]["seconds"] = max(15, prompts[-1]["seconds"] + drift)
 
-    # Marks must total 20, for the same reason they must in a written paper.
-    total_marks = sum(pt["marks"] for p in prompts for pt in p["rubric"])
+    # Marks must total 20, for the same reason they must in a written paper,
+    # and they must be whole - an examiner cannot award 3.06 of a mark.
+    all_points = [pt for p in prompts for pt in p["rubric"]]
+    total_marks = sum(pt["marks"] for pt in all_points)
     if total_marks > 0 and abs(total_marks - STATION_MARKS) > 0.01:
         warnings.append(
             f"Rubric totalled {total_marks:g} marks; rescaled to {STATION_MARKS}."
         )
-        factor = STATION_MARKS / total_marks
-        for prompt in prompts:
-            for point in prompt["rubric"]:
+        if not rescale_marks_to_whole(all_points, STATION_MARKS):
+            # More rubric lines than marks available: fall back to proportional
+            # fractions rather than dropping lines from the key.
+            warnings.append(
+                f"{len(all_points)} rubric lines share {STATION_MARKS} marks, so "
+                f"marks could not be kept whole."
+            )
+            factor = STATION_MARKS / total_marks
+            for point in all_points:
                 point["marks"] = round(point["marks"] * factor, 2)
-        absorb_mark_drift([pt for p in prompts for pt in p["rubric"]], STATION_MARKS)
+            absorb_mark_drift(all_points, STATION_MARKS)
     elif total_marks == 0:
         warnings.append("No rubric marks were produced for this station.")
 

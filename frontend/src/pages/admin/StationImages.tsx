@@ -23,7 +23,17 @@ interface Station {
   subspecialty: string | null
   title: string | null
   case_summary: string | null
+  exam_period: string | null
   prompts_status: string
+}
+
+/** Most likely to be wrong: representative rather than faithful, or scraped
+ *  in near the acceptance threshold. Drives both the tab and its count. */
+function needsLook(figure: StationFigure): boolean {
+  return Boolean(
+    figure.image_id &&
+      (figure.verification_status === 'representative' || (figure.match_confidence ?? 1) < 0.78),
+  )
 }
 
 export default function StationImages() {
@@ -123,19 +133,14 @@ export default function StationImages() {
     if (filter === 'all') return figures
     if (filter === 'approved') return figures.filter((f) => f.is_approved)
     if (filter === 'rejected') return figures.filter((f) => !f.image_id)
-    // "Needs a look" surfaces the ones most likely to be wrong first: anything
-    // representative rather than faithful, or scraped in near the threshold.
-    return figures.filter(
-      (f) =>
-        f.image_id &&
-        (f.verification_status === 'representative' || (f.match_confidence ?? 1) < 0.78),
-    )
+    return figures.filter(needsLook)
   }, [figures, filter])
 
   if (loading) return <Loading label="Loading station images…" />
 
   const withImage = figures.filter((f) => f.image_id).length
   const approved = figures.filter((f) => f.is_approved).length
+  const needsLookCount = figures.filter(needsLook).length
 
   return (
     <div className="space-y-6">
@@ -143,7 +148,8 @@ export default function StationImages() {
         <div>
           <h1 className="text-xl font-semibold text-slate-900">Station images</h1>
           <p className="mt-1 text-sm text-slate-500">
-            {withImage} sourced · {approved} approved · {figures.length - withImage} without an image
+            {withImage} sourced · {approved} live · {needsLookCount} worth a look ·{' '}
+            {figures.length - withImage} without an image
           </p>
         </div>
         <Button onClick={sourceImages}>Source missing images</Button>
@@ -232,7 +238,15 @@ function FigureCard({
 
   return (
     <Card
-      title={`Station ${station?.station_number ?? figure.station_id} — ${station?.subspecialty ?? ''}`}
+      // Station numbers repeat across sittings, so the period is what makes
+      // this heading identify one station rather than four.
+      title={[
+        station?.title || `Station ${station?.station_number ?? figure.station_id}`,
+        station?.subspecialty,
+        station?.exam_period,
+      ]
+        .filter(Boolean)
+        .join(' — ')}
       description={station?.case_summary?.slice(0, 110)}
       actions={
         <div className="flex gap-1.5">

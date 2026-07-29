@@ -350,6 +350,10 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
 
   const ready = stations.filter((s) => s.prompts_status === 'complete')
   const notReady = stations.length - ready.length
+  // The card's own summary describes what the filters left on screen, so it
+  // has to count the visible stations rather than the whole library.
+  const visibleReady = visible.filter((s) => s.prompts_status === 'complete').length
+  const visibleNotReady = visible.length - visibleReady
   const unattempted = ready.filter((s) => !s.attempted)
   const attemptedCount = stations.filter((s) => s.attempted).length
   const needSplit = stations.filter((s) => ['none', 'failed'].includes(s.findings_split_status)).length
@@ -442,7 +446,7 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
 
       <Card
         title="All stations"
-        description={`${visible.length} of ${stations.length} shown · ${ready.length} ready${notReady ? `, ${notReady} awaiting preparation` : ''}`}
+        description={`${visible.length} of ${stations.length} shown · ${visibleReady} ready${visibleNotReady ? `, ${visibleNotReady} awaiting preparation` : ''}`}
       >
         {stations.length === 0 ? (
           <EmptyState title="No stations ingested yet" />

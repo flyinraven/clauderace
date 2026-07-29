@@ -152,10 +152,59 @@ def absorb_mark_drift(points: list[dict[str, Any]], available: float) -> None:
     target["marks"] = round(max(0.0, as_float(target.get("marks"), 0.0) + drift), 2)
 
 
+def rescale_marks_to_whole(points: list[dict[str, Any]], available: float) -> bool:
+    """Rescale `points` in place so their marks are whole and total `available`.
+
+    A rubric line worth 3.06 marks is not something an examiner could ever
+    award, so proportional rescaling followed by 2dp rounding produces a key
+    no candidate can be marked against. Largest-remainder apportionment keeps
+    the proportions the model intended while landing on whole marks that sum
+    exactly. Every point gets at least one mark where there are enough to go
+    round, since a zero-mark rubric line is not a rubric line.
+
+    Returns False and leaves the points untouched when whole marks are
+    impossible - more points than marks available, or nothing to scale.
+    """
+    target = int(round(available))
+    if not points or target <= 0 or len(points) > target:
+        return False
+
+    raw = [max(0.0, as_float(p.get("marks"), 0.0)) for p in points]
+    total = sum(raw)
+    if total <= 0:
+        return False
+
+    # Floor each share, then hand the leftover marks to the largest remainders.
+    exact = [value * target / total for value in raw]
+    awarded = [max(1, int(value)) for value in exact]
+    leftover = target - sum(awarded)
+
+    order = sorted(range(len(points)), key=lambda i: exact[i] - int(exact[i]), reverse=True)
+    while leftover > 0:
+        for index in order:
+            if leftover == 0:
+                break
+            awarded[index] += 1
+            leftover -= 1
+    # The `max(1, ...)` floor can overshoot when many points round down to zero;
+    # claw the excess back off the largest, never below one mark each.
+    while leftover < 0:
+        index = max(range(len(points)), key=lambda i: awarded[i])
+        if awarded[index] <= 1:
+            return False
+        awarded[index] -= 1
+        leftover += 1
+
+    for point, marks in zip(points, awarded):
+        point["marks"] = marks
+    return True
+
+
 __all__ = [
     "Aggregate",
     "EXAMINER_TEMPERATURES",
     "absorb_mark_drift",
+    "rescale_marks_to_whole",
     "aggregate_by_key",
     "aggregate_passes",
     "clamp_award",

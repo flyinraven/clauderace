@@ -206,11 +206,14 @@ export function Pagination({
   const pageCount = Math.ceil(total / pageSize)
   const current = Math.floor(offset / pageSize) + 1
 
-  // First, last, and a window around the current page.
+  // First, last, and a window around the current page — but eliding one or two
+  // numbers out of a handful buys no space and hides pages you can reach, so
+  // short runs are always shown in full.
+  const ALWAYS_SHOW_UP_TO = 7
   const pages: (number | 'gap')[] = []
   for (let page = 1; page <= pageCount; page += 1) {
     const near = Math.abs(page - current) <= 1
-    if (page === 1 || page === pageCount || near) {
+    if (pageCount <= ALWAYS_SHOW_UP_TO || page === 1 || page === pageCount || near) {
       pages.push(page)
     } else if (pages[pages.length - 1] !== 'gap') {
       pages.push('gap')

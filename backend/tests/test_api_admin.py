@@ -477,3 +477,21 @@ def test_the_bootstrap_admin_is_created_and_promoted(db):
         assert db.query(User).filter_by(email="boss@example.com").count() == 1
     finally:
         settings.bootstrap_admin_email, settings.bootstrap_admin_password = original
+
+
+def test_the_subspecialty_breakdown_accounts_for_every_question(client, db, admin):
+    """It sat beside questions_total and quietly disagreed with it.
+
+    Questions with no subspecialty were filtered out of the breakdown, so the
+    dashboard showed "99 questions" above a list adding up to 98.
+    """
+    from tests.test_api_exams import make_question
+
+    make_question(db, subspecialty="Glaucoma")
+    make_question(db, subspecialty="Cataract")
+    make_question(db, subspecialty=None)
+
+    stats = client.get("/api/admin/stats", headers=auth(admin)).json()
+    breakdown = stats["questions_by_subspecialty"]
+    assert sum(breakdown.values()) == stats["questions_total"] == 3
+    assert breakdown["Unclassified"] == 1
