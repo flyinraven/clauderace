@@ -245,6 +245,10 @@ def describe_findings(
             "Discarded a description of station %s: it gave away %r", station.id, leak
         )
         return None
+    problem = grounding_problem(text, station, rubric_points)
+    if problem:
+        logger.warning("Discarded a description of station %s: %s", station.id, problem)
+        return None
     return text
 
 
@@ -265,6 +269,92 @@ _CONCLUSION_RE = re.compile(
     r"\bcompatible\s+with\b|\bclassic\s+(?:for|of)\b",
     re.IGNORECASE,
 )
+
+
+# Ordinary examination vocabulary: words that carry no clinical claim, so they
+# are not evidence that anything was invented.
+_GENERIC_WORDS = frozenset("""
+about above across applied appears apparent are both cover covered covering
+distance during each either examination examined eye eyes fixation from full
+glasses greater half have here his however inspection into left less light
+limited lower measured measures measuring more movement movements near noted
+normal note observed other outward outwards over patient position positions
+present primary reduced removed reveals right same seen shows side slight
+slightly small some testing tests than that the their there these this
+through under upper upward upwards visible when where which while with
+within without would degrees prism prisms cover-test uncover uncovered
+correction distance-correction bilateral unilateral symmetric asymmetric
+mild moderate marked dense partial complete good poor
+turned away feel feels felt pulled loose looser sits lies held lifted
+globe globes eyelid eyelids lids lid lash lashes cornea conjunctiva sclera
+pupil pupils iris lens disc discs fundus macula retina orbit face
+poorly well fully partially freely easily readily barely equally briskly
+sluggishly incompletely symmetrically evenly clearly visibly obviously
+appears appear appeared seems looks looking towards along across between
+""".split())
+
+# Words are matched on a shared opening, not by stripping suffixes. A suffix
+# stemmer reduced "elevation" to "elev" and "elevates" to "elevat", so a
+# description that used the verb where the findings used the noun was reported
+# as having invented the word.
+_ROOT = 5
+
+
+def _words(text: str | None) -> set[str]:
+    return set(re.findall(r"[a-z][a-z'\-]{3,}", (text or "").lower()))
+
+
+def _grounded(word: str, allowed: set[str]) -> bool:
+    if word in allowed:
+        return True
+    if len(word) < _ROOT:
+        return False
+    root = word[:_ROOT]
+    return any(len(a) >= _ROOT and a[:_ROOT] == root for a in allowed)
+
+
+def grounding_problem(
+    text: str, station: OsceStation, wanted: str | None
+) -> str | None:
+    """Why this description is not a faithful account of the station, or None.
+
+    Instructing the model was not enough. Told the recorded findings were the
+    only facts it could state, it described a retracted upper lid and a
+    forward-displaced globe for a station whose findings are a cicatricial
+    ectropion of the lower lids - a different condition, stated confidently.
+
+    Invention shows up as a clinical term appearing nowhere in the findings,
+    because paraphrasing into plainer words reaches for ordinary vocabulary
+    instead: "the lower lids are turned outwards" borrows nothing.
+    """
+    allowed = (
+        _words(station.findings_elicited)
+        | _words(station.findings)
+        | _words(wanted)
+        | _words(station.subspecialty)
+        | _GENERIC_WORDS
+    )
+    if not (_words(station.findings_elicited) | _words(station.findings)):
+        return "the station has no recorded findings to be faithful to"
+
+    invented = sorted(
+        w for w in _words(text) if len(w) >= _ROOT and not _grounded(w, allowed)
+    )
+    if invented:
+        return f"states {', '.join(invented[:4])}, which the findings do not"
+
+    # Requiring overlap with the findings' own distinctive words was tried and
+    # removed. On the stations where it would matter most, the diagnosis IS the
+    # physical sign - "bilateral lower lid ectropion" - so a description that
+    # may not name the answer has to reach for plain words instead: "both lower
+    # lids are turned outwards". That shares no vocabulary with the findings and
+    # is exactly what a good description looks like.
+    #
+    # It also means a description that states the opposite of the findings - a
+    # cover test reported as showing no movement on a station about a squint -
+    # invents no term and passes. Nothing deterministic catches that, which is
+    # why no description reaches a candidate until it has been read.
+    return None
 
 
 def leaked_term(text: str, station: OsceStation) -> str | None:
@@ -391,6 +481,13 @@ def source_image_for_station(
             # the one this was first tested on.
             figure.wanted_description = opening
             db.flush()
+
+    # Whatever this run finds replaces what the last one said, so the previous
+    # attempt's wording must not survive it - and approval must not survive the
+    # wording. Leaving it in place kept two wrong descriptions on the station
+    # through a re-run that was meant to replace them.
+    figure.described_findings = None
+    figure.described_findings_approved = False
 
     expected = expected_modalities_for(station, wanted)
     queries = build_search_queries(db, client, station, wanted)
@@ -558,23 +655,31 @@ def source_coverage_images(
 
     # The opening figure already covers the first view; it was sourced from the
     # first task and is what the candidate sees on entering.
-    existing = {
-        (f.wanted_description or "").strip().lower()
-        for f in station.figures
-        if f.image_id is not None
-    }
+    #
+    # Indexed by what each figure wants, not just the ones that found an image.
+    # Keying on `image_id is not None` meant a view that had come back with
+    # nothing - or with a written description instead - was treated as absent,
+    # so every re-run added another figure for it and left the old one behind
+    # with its stale text still attached to the station.
+    by_wanted: dict[str, OsceFigure] = {}
+    for existing in station.figures:
+        key = (existing.wanted_description or "").strip().lower()
+        if key and key not in by_wanted:
+            by_wanted[key] = existing
     attached, failed = 0, 0
 
     for view in views[1:]:
         wanted = view.wanted_description
-        if wanted.strip().lower() in existing:
-            continue
-        figure = OsceFigure(
-            station_id=station.id,
-            position=len(station.figures) + 1,
-            wanted_description=wanted,
-        )
-        db.add(figure)
+        figure = by_wanted.get(wanted.strip().lower())
+        if figure is not None and figure.image_id is not None:
+            continue  # already answered by a real image
+        if figure is None:
+            figure = OsceFigure(
+                station_id=station.id,
+                position=len(station.figures) + 1,
+                wanted_description=wanted,
+            )
+            db.add(figure)
         db.flush()
         try:
             outcome = source_image_for_station(db, client, station, job_id, figure=figure)

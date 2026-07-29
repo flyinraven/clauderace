@@ -154,3 +154,75 @@ def test_drawing_any_conclusion_is_refused() -> None:
         "The features are suggestive of inflammation.",
     ):
         assert leaked_term(phrase, station), phrase
+
+
+# --- Grounding: a description may only state the station's own findings ---
+# Told the recorded findings were the only facts it could use, the model still
+# described a retracted upper lid and a forward-displaced globe for a station
+# whose findings are a cicatricial ectropion of the LOWER lids. Instruction was
+# not enough, so the result is checked.
+
+from app.services.osce.station_images import grounding_problem  # noqa: E402
+
+
+class _StationWithFindings:
+    def __init__(self, findings: str | None, subspecialty: str = "Oculoplastics & Orbit"):
+        self.findings_elicited = findings
+        self.findings = None
+        self.subspecialty = subspecialty
+        self.diagnosis = None
+        self.case_summary = None
+        self.id = 1
+
+
+ECTROPION = _StationWithFindings(
+    "The patient has bilateral lower lid cicatricial ectropion with anterior "
+    "lamellar shortening, mild horizontal lid laxity, and tarsal thickening."
+)
+
+
+def test_a_description_of_a_different_condition_is_refused() -> None:
+    """The exact sentence the live run produced."""
+    problem = grounding_problem(
+        "The patient's right upper eyelid is retracted, and the globe is displaced forwards.",
+        ECTROPION,
+        None,
+    )
+    assert problem
+    assert "retracted" in problem
+
+
+def test_plain_words_for_the_recorded_sign_are_allowed() -> None:
+    """The diagnosis IS the sign here, so a faithful description must avoid
+    naming it and reach for ordinary words instead."""
+    assert grounding_problem(
+        "Both lower lids are turned outwards away from the globe. The lower lids "
+        "feel slightly loose when pulled.",
+        ECTROPION,
+        None,
+    ) is None
+
+
+def test_the_verb_form_of_a_recorded_finding_is_not_an_invention() -> None:
+    """A suffix stemmer made "elevation" and "elevates" different words."""
+    station = _StationWithFindings(
+        "There is limited elevation of the right eye. Cover test shows a large "
+        "right hypotropia measuring 50 prism dioptres.",
+        "Ocular Motility",
+    )
+    assert grounding_problem(
+        "The right eye elevates poorly. On cover testing the right eye sits lower, "
+        "measuring 50 prism dioptres.",
+        station,
+        None,
+    ) is None
+
+
+def test_signs_from_another_station_entirely_are_refused() -> None:
+    assert grounding_problem(
+        "There is a dense cataract and the optic disc is pale.", ECTROPION, None
+    )
+
+
+def test_a_station_with_no_findings_cannot_be_described() -> None:
+    assert grounding_problem("Anything at all.", _StationWithFindings(None), None)
