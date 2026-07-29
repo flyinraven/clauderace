@@ -332,6 +332,13 @@ class OsceFigure(TimestampMixin, Base):
     # so the station describes it instead of leaving the marks unearnable.
     # Last resort only: an image, even a representative one, is preferred.
     described_findings: Mapped[str | None] = mapped_column(Text)
+    # Held back until an administrator has read it. A wrong image is
+    # obvious at a glance; a fluent wrong sentence is not, and the first
+    # live run produced horizontal motility findings for a station about
+    # elevation. Nothing written here reaches a candidate unreviewed.
+    described_findings_approved: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
 
     # Vision check: "pending" | "verified" | "rejected" | "unverified"
     verification_status: Mapped[str] = mapped_column(

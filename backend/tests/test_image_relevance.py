@@ -83,23 +83,24 @@ def test_an_unknown_modality_answer_does_not_gate() -> None:
 # twitch are manoeuvres over time; a thymectomy scar is on the chest. The
 # station states them instead, and must not name the diagnosis while doing it.
 
-from app.services.osce.station_images import leaks_diagnosis  # noqa: E402
+from app.services.osce.station_images import leaked_term  # noqa: E402
 
 
 class _DiagnosedStation:
-    def __init__(self, diagnosis: str | None):
+    def __init__(self, diagnosis: str | None, case_summary: str | None = None):
         self.diagnosis = diagnosis
+        self.case_summary = case_summary
         self.id = 1
 
 
 def test_a_description_naming_the_diagnosis_is_refused() -> None:
     station = _DiagnosedStation("Myasthenia gravis with ocular involvement")
-    assert leaks_diagnosis("There is bilateral ptosis due to myasthenia gravis.", station)
+    assert leaked_term("There is bilateral ptosis due to myasthenia gravis.", station)
 
 
 def test_naming_only_part_of_it_still_leaks() -> None:
     station = _DiagnosedStation("Myasthenia gravis with ocular involvement")
-    assert leaks_diagnosis("The findings are those of ocular myasthenia.", station)
+    assert leaked_term("The findings are those of ocular myasthenia.", station)
 
 
 def test_describing_the_signs_alone_passes() -> None:
@@ -109,14 +110,47 @@ def test_describing_the_signs_alone_passes() -> None:
         "right lid increases when the left lid is held up, and a brief upward "
         "overshoot of the lid is seen on refixation from downgaze."
     )
-    assert not leaks_diagnosis(text, station)
+    assert not leaked_term(text, station)
 
 
 def test_common_words_in_a_diagnosis_do_not_trip_the_guard() -> None:
     """"Left", "eye" and "syndrome" appear in half the descriptions written."""
     station = _DiagnosedStation("Chronic left ocular syndrome")
-    assert not leaks_diagnosis("There is ptosis of the left eye.", station)
+    assert not leaked_term("There is ptosis of the left eye.", station)
 
 
 def test_a_station_with_no_recorded_diagnosis_has_nothing_to_leak() -> None:
-    assert not leaks_diagnosis("Any description at all.", _DiagnosedStation(None))
+    assert not leaked_term("Any description at all.", _DiagnosedStation(None))
+
+
+def test_characterising_the_sign_leaks_even_without_naming_it() -> None:
+    """The failure that made this more than a word check.
+
+    A visual field station was told the defect was "congruous" and that the
+    macula was "spared". Neither word appears in the diagnosis, and together
+    they are the entire answer to the question being asked.
+    """
+    station = _DiagnosedStation("Left homonymous hemianopia due to occipital infarct")
+    assert leaked_term(
+        "The patient has a congruous visual field defect. The macula appears to be spared.",
+        station,
+    )
+
+
+def test_reporting_the_same_field_defect_plainly_is_allowed() -> None:
+    station = _DiagnosedStation("Left homonymous hemianopia due to occipital infarct")
+    assert not leaked_term(
+        "There is reduced sensitivity in the left half of each field. The optic discs are normal.",
+        station,
+    )
+
+
+def test_drawing_any_conclusion_is_refused() -> None:
+    station = _DiagnosedStation("Something unrelated")
+    for phrase in (
+        "Findings are consistent with an anterior lesion.",
+        "The appearance is typical of this condition.",
+        "This is pathognomonic.",
+        "The features are suggestive of inflammation.",
+    ):
+        assert leaked_term(phrase, station), phrase

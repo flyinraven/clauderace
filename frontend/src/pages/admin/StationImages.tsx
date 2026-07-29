@@ -14,6 +14,10 @@ interface StationFigure {
   verification_notes: string | null
   match_confidence: number | null
   is_approved: boolean
+  // Written when no image could answer the rubric. Held back until read: a
+  // wrong image is obvious at a glance, a fluent wrong sentence is not.
+  described_findings: string | null
+  described_findings_approved: boolean
   rejection_count: number
 }
 
@@ -77,6 +81,18 @@ export default function StationImages() {
   const setApproved = async (figure: StationFigure, approved: boolean) => {
     await api(`/osce/figures/${figure.id}/approve?approved=${approved}`, { method: 'POST' })
     load()
+  }
+
+  const setDescriptionApproved = async (figure: StationFigure, approved: boolean) => {
+    setError(null)
+    try {
+      await api(`/osce/figures/${figure.id}/approve-description?approved=${approved}`, {
+        method: 'POST',
+      })
+      load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not update the description')
+    }
   }
 
   // Rejecting remembers the source URL, so the replacement search cannot hand
@@ -199,6 +215,8 @@ export default function StationImages() {
               station={stations[figure.station_id]}
               onApprove={() => setApproved(figure, true)}
               onUnapprove={() => setApproved(figure, false)}
+              onApproveDescription={() => setDescriptionApproved(figure, true)}
+              onWithdrawDescription={() => setDescriptionApproved(figure, false)}
               onRejectAndReplace={() => reject(figure, true)}
               onRejectOnly={() => reject(figure, false)}
               onAddAnother={() => addFigure(figure.station_id)}
@@ -216,6 +234,8 @@ function FigureCard({
   station,
   onApprove,
   onUnapprove,
+  onApproveDescription,
+  onWithdrawDescription,
   onRejectAndReplace,
   onRejectOnly,
   onAddAnother,
@@ -225,6 +245,8 @@ function FigureCard({
   station?: Station
   onApprove: () => void
   onUnapprove: () => void
+  onApproveDescription: () => void
+  onWithdrawDescription: () => void
   onRejectAndReplace: () => void
   onRejectOnly: () => void
   onAddAnother: () => void
@@ -311,6 +333,43 @@ function FigureCard({
               <dd className="font-mono text-slate-600">{figure.search_query ?? '—'}</dd>
             </div>
           </dl>
+
+          {/* Written by a model and clinically wrong often enough that it must
+              be read before a candidate is examined on it. The first live run
+              produced horizontal motility findings for a station about
+              elevation, and a cover test with no movement for a squint. */}
+          {figure.described_findings && (
+            <div
+              className={cx(
+                'mt-3 rounded-lg border p-3',
+                figure.described_findings_approved
+                  ? 'border-green-200 bg-green-50'
+                  : 'border-amber-300 bg-amber-50',
+              )}
+            >
+              <p className="text-xs font-semibold text-slate-700">
+                {figure.described_findings_approved
+                  ? 'Stated to the candidate'
+                  : 'Proposed wording — not shown to anyone yet'}
+              </p>
+              <p className="mt-1 text-sm text-slate-800">{figure.described_findings}</p>
+              <p className="mt-2 text-xs text-slate-600">
+                Read this against the station's own findings before releasing it. A wrong
+                sentence here is a mark the candidate cannot earn.
+              </p>
+              <div className="mt-2 flex gap-1.5">
+                {figure.described_findings_approved ? (
+                  <Button variant="secondary" size="sm" onClick={onWithdrawDescription}>
+                    Withdraw it
+                  </Button>
+                ) : (
+                  <Button size="sm" onClick={onApproveDescription}>
+                    Use this wording
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="mt-4 flex flex-wrap gap-2">
             <Button size="sm" onClick={onRejectAndReplace}>

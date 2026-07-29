@@ -169,21 +169,31 @@ def build_search_queries(
         return fallback
 
 
-DESCRIBE_SYSTEM = """You are the examiner at an ophthalmology OSCE station. No photograph exists
-for what the candidate is meant to look at, so you state the findings aloud
-instead, exactly as the patient in front of them would demonstrate.
+DESCRIBE_SYSTEM = """You are the examiner at an ophthalmology OSCE station. No photograph exists of
+what the candidate is meant to look at, so you state the findings aloud, as the
+patient in front of them would have demonstrated.
 
-Write 1-3 short sentences in the present tense, describing ONLY what is
-visible or demonstrable on examination. Use the wording an examiner would
-use at the bedside.
+You are given THIS station's recorded findings. State only what those findings
+say. You must not add, complete, infer or embellish a single sign. If the
+findings do not mention a test, do not report its result. Inventing a plausible
+examination finding is the worst thing you can do here: the candidate is marked
+against the station's rubric, so a sign you made up is a mark they cannot earn
+and an answer that will be marked wrong.
 
-You must NOT name, spell out, abbreviate or hint at the diagnosis, the
-syndrome, the causative organism or the underlying disease. The candidate is
-being marked on reaching it themselves; naming it hands them the answer and
-makes the station worthless. Describe signs, never conclusions.
+Write 1-4 short sentences in the present tense, in the words an examiner would
+use at the bedside. Report raw appearances and measurements only.
 
-Do not mention management, investigations, prognosis or history. Do not say
-that an image is missing or refer to a photograph.
+Do NOT characterise, classify or interpret what you report. Say what is seen,
+not what it amounts to. Naming the pattern is the candidate's job and the thing
+being marked - so no "congruous", "incongruous", "macular sparing", "consistent
+with", "suggestive of", "in keeping with", "typical of", "pathognomonic", and no
+naming of the diagnosis, syndrome, causative organism or underlying disease.
+
+Do not mention management, investigations, prognosis or history. Do not say that
+an image is missing or refer to a photograph.
+
+If the findings given are too thin to state anything faithfully, return an empty
+description rather than filling the gap.
 
 Return ONLY a JSON object: {"description": "..."}"""
 
@@ -191,26 +201,36 @@ Return ONLY a JSON object: {"description": "..."}"""
 def describe_findings(
     client: AIClient, station: OsceStation, wanted: str | None
 ) -> str | None:
-    """State the signs aloud, for a view no photograph could be found for.
+    """State the signs aloud, for what no photograph could be found for.
 
-    Guarded twice over. The model is told not to name the diagnosis, and the
-    result is then checked against the station's own diagnosis wording - a
-    model that leaks it anyway must not reach a candidate, because the station
-    marks them on working it out.
+    The station's own recorded findings are the source of truth, and the rubric
+    only says which of them to cover. Given the rubric alone this wrote fluent,
+    confident and wrong examination findings - horizontal motility defects for a
+    station about elevation, an orthophoric cover test for a station about a
+    squint. It had nothing to be faithful to, so it invented.
+
+    Marked with the model answer task, not the utility one. This is text a
+    candidate is examined on, not a mechanical rewording.
     """
-    signs = (wanted or station.findings_elicited or station.findings or "").strip()
-    if not signs:
+    rubric_points = (wanted or "").strip()
+    truth = (station.findings_elicited or station.findings or "").strip()
+    if not truth and not rubric_points:
         return None
     try:
         data = client.complete_json(
-            task="utility",
+            task="model_answer",
             system=DESCRIBE_SYSTEM,
             user=(
-                f"SUBSPECIALTY: {station.subspecialty or 'unknown'}\n"
-                f"SIGNS TO STATE: {signs}"
+                f"SUBSPECIALTY: {station.subspecialty or 'unknown'}\n\n"
+                f"THIS STATION'S RECORDED FINDINGS - the only facts you may state:\n"
+                f"{truth or '(none recorded)'}\n\n"
+                f"THE RUBRIC EXPECTS THE CANDIDATE TO DESCRIBE:\n"
+                f"{rubric_points or '(not specified)'}\n\n"
+                f"State the findings above that the rubric asks about. Say nothing "
+                f"the recorded findings do not contain."
             ),
-            max_tokens=220,
-            temperature=0.2,
+            max_tokens=320,
+            temperature=0.0,
         )
     except (AIError, ValueError, AttributeError):
         logger.warning("Could not describe findings for station %s", station.id)
@@ -219,8 +239,11 @@ def describe_findings(
     text = str((data or {}).get("description") or "").strip()
     if not text:
         return None
-    if leaks_diagnosis(text, station):
-        logger.warning("Discarded a description that named the diagnosis (station %s)", station.id)
+    leak = leaked_term(text, station)
+    if leak:
+        logger.warning(
+            "Discarded a description of station %s: it gave away %r", station.id, leak
+        )
         return None
     return text
 
@@ -229,25 +252,45 @@ def describe_findings(
 _DIAGNOSIS_STOPWORDS = frozenset({
     "left", "right", "bilateral", "eye", "eyes", "with", "and", "the", "of", "a", "an",
     "syndrome", "disease", "chronic", "acute", "secondary", "primary", "ocular",
+    "presenting", "presents", "patient", "both", "from", "due", "this", "that",
 })
 
+# Language that draws the conclusion instead of reporting the sign. A station
+# on reading a visual field was told the defect was "congruous" with "macular
+# sparing" - never naming the diagnosis, and handing over the whole answer.
+_CONCLUSION_RE = re.compile(
+    r"\bcongruous\b|\bincongruous\b|\bspar(?:ed|ing)\b|\bconsistent\s+with\b|"
+    r"\bsuggestive\s+of\b|\bin\s+keeping\s+with\b|\btypical\s+of\b|"
+    r"\bcharacteristic\s+of\b|\bpathognomonic\b|\bdiagnos\w+\b|\bindicativ\w+\b|"
+    r"\bcompatible\s+with\b|\bclassic\s+(?:for|of)\b",
+    re.IGNORECASE,
+)
 
-def leaks_diagnosis(text: str, station: OsceStation) -> bool:
-    """Does this description hand the candidate the answer?
 
-    Deterministic rather than another model call: the check has to be reliable
-    and it has to be free. Any distinctive word from the station's diagnosis
-    appearing in the description fails it.
+def leaked_term(text: str, station: OsceStation) -> str | None:
+    """What this description gives away, or None if it only reports signs.
+
+    Deterministic rather than another model call: it has to be reliable, it
+    runs on every description, and it has to be free.
+
+    Two ways to give the game away. Naming the condition is the obvious one,
+    and is checked against the station's diagnosis and its case summary, since
+    the summary names it too. The subtler one is characterising the sign -
+    "congruous, with macular sparing" names no diagnosis at all and is still
+    the answer to the question being asked.
     """
-    diagnosis = (station.diagnosis or "").lower()
-    if not diagnosis.strip():
-        return False
+    conclusion = _CONCLUSION_RE.search(text)
+    if conclusion:
+        return conclusion.group(0)
+
+    # Only the diagnosis, not the case summary. The summary is prose full of
+    # ordinary clinical vocabulary - checking it rejected "there is a defect in
+    # the left half of each field" because the summary happened to say "field".
     lowered = text.lower()
-    words = {
-        w for w in re.findall(r"[a-z][a-z'\-]{3,}", diagnosis)
-        if w not in _DIAGNOSIS_STOPWORDS
-    }
-    return any(w in lowered for w in words)
+    for word in re.findall(r"[a-z][a-z'\-]{3,}", (station.diagnosis or "").lower()):
+        if word not in _DIAGNOSIS_STOPWORDS and word in lowered:
+            return word
+    return None
 
 
 def verify_image(
