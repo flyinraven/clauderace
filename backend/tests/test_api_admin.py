@@ -495,3 +495,42 @@ def test_the_subspecialty_breakdown_accounts_for_every_question(client, db, admi
     breakdown = stats["questions_by_subspecialty"]
     assert sum(breakdown.values()) == stats["questions_total"] == 3
     assert breakdown["Unclassified"] == 1
+
+
+def test_an_upload_and_its_ingestion_job_land_together(client, db, admin):
+    """They were two commits, and the gap between them lost a real report.
+
+    A free-tier instance restarting mid-upload stored the document and never
+    queued the job: nothing running, nothing failed, nothing in the error log,
+    and a 160-page report sitting at "uploaded" with zero items.
+    """
+    from app.models import Job, SourceDocument
+
+    response = client.post(
+        "/api/documents",
+        headers=auth(admin),
+        files={"file": ("report.txt", io.BytesIO(b"Question 1 (5 marks)\nDiscuss.\n"), "text/plain")},
+        data={"start_ingestion": "true"},
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["job_id"] != 0, "ingestion was requested, so it must be queued"
+
+    db.expire_all()
+    document = db.get(SourceDocument, body["document"]["id"])
+    job = db.get(Job, body["job_id"])
+    assert document is not None
+    assert job is not None, "a stored document with no job is the failure this guards"
+    assert job.payload["document_id"] == document.id
+
+
+def test_a_document_stored_without_ingestion_is_still_committed(client, db, admin):
+    """The other half: no job to carry the commit, so the endpoint must."""
+    from app.models import SourceDocument
+
+    response = upload(client, admin, "report.txt", b"Question 1 (5 marks)\nDiscuss.\n")
+    assert response.status_code == 201
+    assert response.json()["job_id"] == 0
+
+    db.expire_all()
+    assert db.get(SourceDocument, response.json()["document"]["id"]) is not None

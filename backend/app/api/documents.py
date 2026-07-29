@@ -141,8 +141,15 @@ async def upload_document(
         uploaded_by_id=admin.id,
     )
     db.add(document)
-    db.commit()
-    db.refresh(document)
+    # Flush rather than commit, so the document and the job that ingests it
+    # land in one transaction - `create_job` commits this same session, which
+    # persists both together.
+    #
+    # They used to be two commits. An instance restarting in between (which a
+    # free-tier upload can provoke) left the document stored and no job queued:
+    # nothing running, nothing failed, nothing logged, and a report sitting at
+    # "uploaded" with zero items until someone noticed and pressed Re-ingest.
+    db.flush()
 
     job_id = 0
     if start_ingestion:
@@ -155,6 +162,9 @@ async def upload_document(
             message="Queued for ingestion",
         )
         job_id = job.id
+    else:
+        db.commit()
+    db.refresh(document)
 
     return UploadResponse(
         document=DocumentOut.model_validate(document),
