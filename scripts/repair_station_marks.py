@@ -4,7 +4,8 @@ Rubrics are scaled to fit the station's 20 marks. That scaling used to round to
 two decimals, which produced rubric lines worth 1.54 and 3.06 marks and
 sub-questions headed "9.99 marks" - allocations no examiner could award and no
 candidate could be marked against. Apportionment now keeps the proportions and
-lands on whole marks (see `marking.rescale_marks_to_whole`).
+lands on half marks, the granularity clamp_award has always accepted (see
+`marking.rescale_marks_to_awardable`).
 
 Stations built after that fix are already whole; this repairs the ones built
 before it, in place, without spending anything on the model. It is the cheap
@@ -37,13 +38,14 @@ from sqlalchemy.orm import Session  # noqa: E402
 from sqlalchemy.orm.attributes import flag_modified  # noqa: E402
 
 from app.models import OsceSession, OsceStation  # noqa: E402
-from app.services.marking import rescale_marks_to_whole  # noqa: E402
+from app.services.marking import rescale_marks_to_awardable  # noqa: E402
 
 STATION_MARKS = 20
 
 
-def _is_whole(points: list[dict]) -> bool:
-    return all(float(p.get("marks") or 0) == int(float(p.get("marks") or 0)) for p in points)
+def _is_awardable(points: list[dict]) -> bool:
+    """Already a whole or half mark, so an examiner could award it."""
+    return all((float(p.get("marks") or 0) * 2).is_integer() for p in points)
 
 
 def _marks(points: list[dict]) -> float:
@@ -81,7 +83,7 @@ def main() -> int:
             flat_points = list(station.rubric or [])
             if not prompt_points and not flat_points:
                 continue
-            if _is_whole(prompt_points) and _is_whole(flat_points):
+            if _is_awardable(prompt_points) and _is_awardable(flat_points):
                 continue
 
             was_sat = station.id in sat_station_ids
@@ -100,7 +102,7 @@ def main() -> int:
             # separately rather than one being derived from the other.
             ok = True
             for points in (prompt_points, flat_points):
-                if points and not rescale_marks_to_whole(points, STATION_MARKS):
+                if points and not rescale_marks_to_awardable(points, STATION_MARKS):
                     ok = False
             if not ok:
                 declined += 1

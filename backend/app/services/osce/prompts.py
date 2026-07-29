@@ -23,7 +23,7 @@ from app.services.ai.client import AIError
 from app.services.coerce import as_float
 from app.services.errors import log_error
 from app.services.jobs.runner import JobContext, JobHandlerError, register_handler
-from app.services.marking import absorb_mark_drift, rescale_marks_to_whole
+from app.services.marking import absorb_mark_drift, rescale_marks_to_awardable
 
 logger = logging.getLogger(__name__)
 
@@ -665,7 +665,7 @@ def _normalise(raw_prompts: list[Any]) -> tuple[list[dict[str, Any]], list[str]]
         warnings.append(
             f"Rubric totalled {total_marks:g} marks; rescaled to {STATION_MARKS}."
         )
-        if not rescale_marks_to_whole(all_points, STATION_MARKS):
+        if not rescale_marks_to_awardable(all_points, STATION_MARKS):
             # More rubric lines than marks available: fall back to proportional
             # fractions rather than dropping lines from the key.
             warnings.append(

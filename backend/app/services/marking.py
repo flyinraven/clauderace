@@ -152,21 +152,30 @@ def absorb_mark_drift(points: list[dict[str, Any]], available: float) -> None:
     target["marks"] = round(max(0.0, as_float(target.get("marks"), 0.0) + drift), 2)
 
 
-def rescale_marks_to_whole(points: list[dict[str, Any]], available: float) -> bool:
-    """Rescale `points` in place so their marks are whole and total `available`.
+def rescale_marks_to_awardable(points: list[dict[str, Any]], available: float) -> bool:
+    """Rescale `points` in place to half marks totalling `available`.
 
     A rubric line worth 3.06 marks is not something an examiner could ever
     award, so proportional rescaling followed by 2dp rounding produces a key
-    no candidate can be marked against. Largest-remainder apportionment keeps
-    the proportions the model intended while landing on whole marks that sum
-    exactly. Every point gets at least one mark where there are enough to go
-    round, since a zero-mark rubric line is not a rubric line.
+    no candidate can be marked against. Largest-remainder apportionment fixes
+    that, but the granularity it apportions in matters more than it looks.
 
-    Returns False and leaves the points untouched when whole marks are
-    impossible - more points than marks available, or nothing to scale.
+    Half marks, not whole ones. `clamp_award` has always accepted 2.5 as a
+    legitimate award, and forcing whole marks moves far more than it repairs:
+    the minimum award per line has to be a whole mark, so a sub-question made
+    of eight half-mark lines inflates to eight marks and a genuinely heavy one
+    is stripped to pay for it. Measured against the live bank that shifted 23%
+    of sub-questions by more than a mark, one of them from 3.97 to 8 - a
+    redistribution of what candidates are marked out of, dressed up as
+    rounding. In half marks the same bank moves by a quarter mark on average
+    and nothing by more than one.
+
+    Returns False and leaves the points untouched when even half marks cannot
+    be shared out - more lines than half marks available, or nothing to scale.
     """
-    target = int(round(available))
-    if not points or target <= 0 or len(points) > target:
+    # Work in half-mark units so the arithmetic stays in integers.
+    units = int(round(available * 2))
+    if not points or units <= 0 or len(points) > units:
         return False
 
     raw = [max(0.0, as_float(p.get("marks"), 0.0)) for p in points]
@@ -174,20 +183,25 @@ def rescale_marks_to_whole(points: list[dict[str, Any]], available: float) -> bo
     if total <= 0:
         return False
 
-    # Floor each share, then hand the leftover marks to the largest remainders.
-    exact = [value * target / total for value in raw]
+    # Floor each share, then hand the leftover units to the largest remainders.
+    exact = [value * units / total for value in raw]
     awarded = [max(1, int(value)) for value in exact]
-    leftover = target - sum(awarded)
+    leftover = units - sum(awarded)
 
-    order = sorted(range(len(points)), key=lambda i: exact[i] - int(exact[i]), reverse=True)
+    # Rank by how far each line still falls short of its exact share, not by
+    # its raw fractional part. A line the `max(1, ...)` floor already lifted
+    # has been paid above its share, and ordering on the raw fraction handed
+    # it a second unit as well - which is how eight lines worth 0.44 became a
+    # sub-question worth 7 marks instead of 4.
     while leftover > 0:
+        order = sorted(range(len(points)), key=lambda i: exact[i] - awarded[i], reverse=True)
         for index in order:
             if leftover == 0:
                 break
             awarded[index] += 1
             leftover -= 1
-    # The `max(1, ...)` floor can overshoot when many points round down to zero;
-    # claw the excess back off the largest, never below one mark each.
+    # The `max(1, ...)` floor can overshoot when many lines round down to zero;
+    # claw the excess back off the largest, never below half a mark each.
     while leftover < 0:
         index = max(range(len(points)), key=lambda i: awarded[i])
         if awarded[index] <= 1:
@@ -196,7 +210,8 @@ def rescale_marks_to_whole(points: list[dict[str, Any]], available: float) -> bo
         leftover += 1
 
     for point, marks in zip(points, awarded):
-        point["marks"] = marks
+        # Whole marks stay ints so a key reads "2 marks", not "2.0 marks".
+        point["marks"] = marks // 2 if marks % 2 == 0 else marks / 2
     return True
 
 
@@ -204,7 +219,7 @@ __all__ = [
     "Aggregate",
     "EXAMINER_TEMPERATURES",
     "absorb_mark_drift",
-    "rescale_marks_to_whole",
+    "rescale_marks_to_awardable",
     "aggregate_by_key",
     "aggregate_passes",
     "clamp_award",

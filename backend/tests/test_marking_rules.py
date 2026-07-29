@@ -17,7 +17,7 @@ from app.services.marking import (
     aggregate_passes,
     clamp_award,
     examiner_passes,
-    rescale_marks_to_whole,
+    rescale_marks_to_awardable,
     temperature_for,
     upsert_grade,
     verdict,
@@ -210,51 +210,86 @@ def test_no_points_is_not_an_error():
     absorb_mark_drift([], 20.0)  # a station whose rubric came back empty
 
 
-# --- Whole-mark rescaling -------------------------------------------------
+# --- Awardable-mark rescaling ---------------------------------------------
 # Proportional rescaling followed by 2dp rounding produced rubric lines worth
-# 1.54 and 3.06 marks, and station totals like 9.99. No examiner can award a
-# fraction of a mark, so the OSCE builder apportions whole ones instead.
+# 1.54 and 3.06 marks, and station totals like 9.99. No examiner can award
+# those, so the OSCE builder apportions half marks instead - the granularity
+# clamp_award has always accepted.
 
 
-def test_rescaled_marks_are_whole_and_total_exactly():
+def _marks(points):
+    return [p["marks"] for p in points]
+
+
+def test_rescaled_marks_are_awardable_and_total_exactly():
     # The rubric that shipped as 1.54 / 2.31 / 3.06 / ... on a real station.
     points = [
         {"marks": m}
         for m in (1.54, 2.31, 3.06, 1.54, 1.54, 1.54, 2.31, 3.08, 1.54, 1.54)
     ]
-    assert rescale_marks_to_whole(points, 20) is True
-    marks = [p["marks"] for p in points]
-    assert all(isinstance(m, int) for m in marks), marks
+    assert rescale_marks_to_awardable(points, 20) is True
+    marks = _marks(points)
+    assert all((m * 2) == int(m * 2) for m in marks), marks
     assert sum(marks) == 20
+
+
+def test_whole_marks_stay_ints_so_a_key_reads_2_not_2_point_0():
+    points = [{"marks": 1.0}, {"marks": 1.0}]
+    assert rescale_marks_to_awardable(points, 20) is True
+    assert _marks(points) == [10, 10]
+    assert all(isinstance(m, int) for m in _marks(points))
 
 
 def test_proportions_survive_the_rescale():
     points = [{"marks": 1.0}, {"marks": 1.0}, {"marks": 2.0}]
-    assert rescale_marks_to_whole(points, 20) is True
-    assert [p["marks"] for p in points] == [5, 5, 10]
+    assert rescale_marks_to_awardable(points, 20) is True
+    assert _marks(points) == [5, 5, 10]
+
+
+def test_a_sub_question_of_small_lines_is_not_inflated():
+    """The bug that made this half marks rather than whole ones.
+
+    Eight lines worth half a mark each are worth four marks. Forcing a whole
+    mark minimum made them worth eight, taken off whoever was heaviest.
+    """
+    small = [{"marks": 0.5} for _ in range(8)]
+    large = [{"marks": 16.0}]
+    points = small + large
+    assert rescale_marks_to_awardable(points, 20) is True
+    assert sum(_marks(points[:8])) == 4, "the small lines keep their weight"
+    assert points[8]["marks"] == 16
+    assert sum(_marks(points)) == 20
 
 
 def test_no_rubric_line_is_left_worth_nothing():
     points = [{"marks": 100.0}, {"marks": 0.1}, {"marks": 0.1}]
-    assert rescale_marks_to_whole(points, 20) is True
-    assert all(p["marks"] >= 1 for p in points)
-    assert sum(p["marks"] for p in points) == 20
+    assert rescale_marks_to_awardable(points, 20) is True
+    assert all(p["marks"] >= 0.5 for p in points)
+    assert sum(_marks(points)) == 20
 
 
-def test_more_lines_than_marks_declines_rather_than_dropping_any():
-    points = [{"marks": 1.0} for _ in range(25)]
-    assert rescale_marks_to_whole(points, 20) is False
-    # Untouched, so the caller can fall back to fractions with all 25 intact.
-    assert [p["marks"] for p in points] == [1.0] * 25
+def test_more_lines_than_half_marks_declines_rather_than_dropping_any():
+    points = [{"marks": 1.0} for _ in range(41)]
+    assert rescale_marks_to_awardable(points, 20) is False
+    # Untouched, so the caller can fall back to fractions with all 41 intact.
+    assert _marks(points) == [1.0] * 41
 
 
-def test_exactly_as_many_lines_as_marks_gives_one_each():
-    points = [{"marks": 3.0} for _ in range(20)]
-    assert rescale_marks_to_whole(points, 20) is True
-    assert [p["marks"] for p in points] == [1] * 20
+def test_the_stations_whole_marks_could_not_serve_are_now_fine():
+    """28 rubric lines over 20 marks: impossible whole, easy in halves."""
+    points = [{"marks": 0.71} for _ in range(28)]
+    assert rescale_marks_to_awardable(points, 20) is True
+    assert sum(_marks(points)) == 20
+    assert all(p["marks"] >= 0.5 for p in points)
+
+
+def test_exactly_as_many_lines_as_half_marks_gives_half_each():
+    points = [{"marks": 3.0} for _ in range(40)]
+    assert rescale_marks_to_awardable(points, 20) is True
+    assert _marks(points) == [0.5] * 40
 
 
 def test_nothing_to_scale_is_declined_not_crashed():
-    assert rescale_marks_to_whole([], 20) is False
-    assert rescale_marks_to_whole([{"marks": 0.0}], 20) is False
-    assert rescale_marks_to_whole([{"marks": 1.0}], 0) is False
+    assert rescale_marks_to_awardable([], 20) is False
+    assert rescale_marks_to_awardable([{"marks": 0.0}], 20) is False
+    assert rescale_marks_to_awardable([{"marks": 1.0}], 0) is False
