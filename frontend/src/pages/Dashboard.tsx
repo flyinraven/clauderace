@@ -49,8 +49,16 @@ export default function Dashboard() {
           ))}
         </div>
         <div className="mt-4">
-          <Alert tone="info" title="Exam simulator coming next">
-            The timed sitting experience is being built. In the meantime you can browse the{' '}
+          <Alert tone="info" title="Ready to sit">
+            Take a paper under exam conditions or untimed from{' '}
+            <Link to="/exams" className="font-medium underline">
+              mock examinations
+            </Link>
+            , practise spoken stations in the{' '}
+            <Link to="/osce" className="font-medium underline">
+              OSCE circuit
+            </Link>
+            , or browse the{' '}
             <Link to="/bank" className="font-medium underline">
               question bank
             </Link>{' '}

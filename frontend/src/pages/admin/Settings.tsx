@@ -22,7 +22,8 @@ const GROUP_META: Record<string, { title: string; description: string }> = {
   osce: {
     title: 'OSCE',
     description:
-      'Spoken-answer capture and marking for the 18-station clinical circuit.',
+      'Spoken-answer capture and marking for the clinical circuit. The real exam ' +
+      'runs 18 stations; your daily circuit length is set below.',
   },
   email: { title: 'Email notifications', description: 'SMTP details, e.g. your SiteGround mailbox.' },
   exam: { title: 'Exam behaviour', description: 'Defaults applied to new sittings.' },
