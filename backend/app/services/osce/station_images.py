@@ -740,6 +740,139 @@ def _attach(
     }
 
 
+JOB_VERIFY_STATION_FIGURES = "verify_station_figures"
+
+# What ingest wrote before its figures were checked. Anything else has been
+# through a vision model and must not be re-graded for free.
+UNCHECKED_STATUSES = frozenset({"verified", "unverified", "", None})
+
+
+def verify_ingested_figures(
+    db: Session, client: AIClient, station: OsceStation
+) -> dict[str, Any]:
+    """Check the photographs lifted out of the examiners' report.
+
+    Ingest attached every image on a block's pages, in page order, marked
+    verified and approved, on the reasoning that a photograph printed in the
+    report is by definition the real one. Two things are wrong with that.
+
+    The first is that a block spans pages, so "every image on them" is not the
+    station's photographs - it is those plus mark-distribution charts, tables
+    set as pictures, and whatever the neighbouring station used. One station
+    from the 2023 Semester 2 paper collected fifteen figures this way.
+
+    The second is that being genuine is not the same as answering the question.
+    A fundus photograph is no use to "please examine the anterior segment": the
+    candidate is asked for signs the image cannot show, and every mark for them
+    is unearnable - the exact failure the sourcing path was built to prevent,
+    reappearing through a door it does not watch.
+
+    So they go through the same gate: the same vision grader, the same modality
+    check against what the first task asks the candidate to do. What survives
+    keeps its place. What does not is unapproved rather than deleted, because
+    the image did come out of the real paper and an administrator may want to
+    put it back against a different question.
+    """
+    expected = expected_modalities_for(station, None)
+    signs = station.findings_elicited or station.findings or ""
+    kept, rejected, skipped = 0, 0, 0
+
+    for figure in sorted(station.figures, key=lambda f: f.position):
+        if figure.image_id is None or figure.verification_status not in UNCHECKED_STATUSES:
+            skipped += 1
+            continue
+        image = db.get(Image, figure.image_id)
+        if image is None or image.origin != "pdf":
+            skipped += 1
+            continue
+
+        try:
+            verdict = verify_image(db, client, station, image.data, image.content_type)
+        except Exception as exc:  # noqa: BLE001 - one figure must not stop the rest
+            logger.warning("Could not verify figure %s: %s", figure.id, exc)
+            skipped += 1
+            continue
+
+        tier = str(verdict.get("tier") or "reject").lower()
+        confidence = as_float(verdict.get("confidence"), 0.0)
+        mismatch = modality_mismatch(expected, verdict.get("modality"))
+        figure.match_confidence = confidence
+        figure.verification_notes = str(verdict.get("shows") or "").strip() or None
+        figure.caption = (
+            figure.caption or str(verdict.get("caption") or "").strip() or None
+        )
+
+        if mismatch or tier == "reject" or confidence < MIN_REPRESENTATIVE_CONFIDENCE:
+            figure.verification_status = "rejected"
+            figure.is_approved = False
+            figure.verification_notes = (
+                f"{figure.verification_notes or ''} "
+                f"[Not shown: {mismatch or verdict.get('reason') or 'rejected'}]"
+            ).strip()[:4000]
+            rejected += 1
+            continue
+
+        figure.verification_status = tier
+        # A lower bar than a web image, deliberately. This one came out of the
+        # examiners' report: it IS the photograph the real candidates were
+        # shown, so "representative" here means the grader could not tie every
+        # recorded sign to it, not that some stranger's eye was substituted for
+        # the patient's. Holding those back would throw away the best images in
+        # the bank. Only a chart, a diagram or the wrong examination is dropped.
+        figure.is_approved = True
+        kept += 1
+
+    db.commit()
+    return {"kept": kept, "rejected": rejected, "skipped": skipped}
+
+
+@register_handler(JOB_VERIFY_STATION_FIGURES)
+def handle_verify_station_figures(ctx: JobContext) -> bool:
+    """One station per chunk: grade the figures ingest took on trust."""
+    station_ids: list[int] = ctx.payload.get("station_ids") or []
+    if not station_ids:
+        raise JobHandlerError("No station_ids supplied")
+    if not ctx.job.total_steps:
+        ctx.set_total(len(station_ids))
+
+    index = ctx.cursor_get("index", 0)
+    if index >= len(station_ids):
+        return True
+
+    station = ctx.db.get(OsceStation, station_ids[index])
+    if station is not None:
+        try:
+            outcome = verify_ingested_figures(ctx.db, AIClient(ctx.db), station)
+            tally = dict((ctx.job.result or {}).get("figures", {}))
+            for key in ("kept", "rejected", "skipped"):
+                tally[key] = tally.get(key, 0) + outcome[key]
+            ctx.set_result(figures=tally)
+        except Exception as exc:  # noqa: BLE001
+            ctx.db.rollback()
+            logger.exception("Could not verify the figures of station %s", station.id)
+            log_error(ctx.db, source="osce_images", message=str(exc),
+                      context={"station_id": station.id})
+
+    ctx.cursor_set(index=index + 1)
+    ctx.advance(1, f"Figures: {index + 1} of {len(station_ids)}")
+    return index + 1 >= len(station_ids)
+
+
+def stations_with_unchecked_figures(db: Session) -> list[int]:
+    """Stations still showing images no vision model has ever looked at."""
+    ids = db.execute(
+        select(OsceFigure.station_id)
+        .join(Image, Image.id == OsceFigure.image_id)
+        .where(Image.origin == "pdf")
+        .where(
+            OsceFigure.verification_status.is_(None)
+            | OsceFigure.verification_status.in_(["verified", "unverified", ""])
+        )
+        .distinct()
+    ).scalars().all()
+    return sorted(set(ids))
+
+
 def source_coverage_images(
     db: Session, client: AIClient, station: OsceStation, job_id: int | None = None
 ) -> dict[str, Any]:

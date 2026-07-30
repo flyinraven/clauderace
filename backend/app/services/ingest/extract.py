@@ -19,6 +19,41 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# How often to empty MuPDF's cache while walking a document. Measured on the
+# 160-page 2024 Semester 1 paper: extraction left the process at 429 MB, of
+# which 258 MB was that cache. The instance it runs on has 512 MB, and the job
+# worker is a thread inside the API, so an ingest that overshoots takes the
+# whole site down with it - which is what the memory alerts were.
+SHRINK_EVERY_PAGES = 20
+
+
+def release_reader_memory() -> None:
+    """Give back what the PDF reader is holding but no longer needs.
+
+    Two steps, because they free different things. MuPDF keeps decoded page
+    content in a store of its own that `doc.close()` does not empty; shrinking
+    it is what recovers the 258 MB. `malloc_trim` then returns the freed heap
+    to the operating system rather than leaving it in the allocator's arenas,
+    which is what makes the difference visible to a container memory limit.
+
+    Both are best-effort: neither is available everywhere, and neither failing
+    changes the result of the extraction.
+    """
+    try:
+        import pymupdf
+
+        pymupdf.TOOLS.store_shrink(100)
+    except Exception:  # noqa: BLE001 - a cache that will not shrink is not fatal
+        logger.debug("Could not shrink the MuPDF store")
+
+    try:
+        import ctypes
+
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:  # noqa: BLE001 - glibc only; a no-op on Windows and musl
+        pass
+
+
 # --- Decorative-image heuristics -----------------------------------------
 # An image repeated on more than this many pages is a template, not a figure.
 MAX_PAGES_FOR_FIGURE = 2
@@ -175,6 +210,13 @@ def extract_pdf(data: bytes) -> ExtractedDocument:
             images.sort(key=lambda i: (i.bbox[1] if i.bbox else 0, i.bbox[0] if i.bbox else 0))
             raw_pages.append(ExtractedPage(number=page_number, text=text, images=images))
 
+            # Everything wanted from this page has been copied out, so MuPDF's
+            # decoded copy of it is dead weight from here on. Emptying the store
+            # periodically keeps the peak flat across a long document instead of
+            # letting it climb with the page count.
+            if page_number % SHRINK_EVERY_PAGES == 0:
+                release_reader_memory()
+
         kept_pages, discarded = _filter_decorative(raw_pages, hash_pages, len(doc))
         for page, source in zip(kept_pages, doc, strict=False):
             _attach_captions(page, source)
@@ -187,6 +229,8 @@ def extract_pdf(data: bytes) -> ExtractedDocument:
         )
     finally:
         doc.close()
+        # `close()` releases the document, not the store behind it.
+        release_reader_memory()
 
 
 def _filter_decorative(

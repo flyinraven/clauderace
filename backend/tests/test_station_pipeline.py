@@ -13,6 +13,7 @@ import json
 from PIL import Image as PILImage
 
 from app.models import Image, Job, OsceFigure, OsceStation, Setting
+from app.services.ai import AIClient
 from app.services.ai.images import MAX_EDGE
 from tests.conftest import auth
 from tests.test_api_osce import make_station
@@ -966,3 +967,117 @@ def test_an_exhausted_account_still_stops_the_run(
     )
     run_jobs()
     assert db.get(Job, response.json()["job_id"]).status == "failed"
+
+
+def test_an_ingested_figure_is_checked_before_a_candidate_sees_it(
+    client, db, admin, ai, run_jobs, monkeypatch
+):
+    """Ingest took every image on a block's pages on trust.
+
+    A 2023 Semester 2 station collected fifteen figures that way - mark charts,
+    tables set as pictures, the neighbouring station's photographs - all marked
+    verified and approved, none of them looked at. A genuine photograph of the
+    wrong thing is no better: a fundus shot cannot answer "examine the anterior
+    segment", and every mark for it is unearnable.
+    """
+    from app.models import OsceFigure
+    from app.services.osce.station_images import (
+        stations_with_unchecked_figures,
+        verify_ingested_figures,
+    )
+
+    station = make_station(db, prompts=[{
+        "label": "A", "text": "Please examine the anterior segment of both eyes.",
+        "seconds": 270, "rubric": [{"text": "Describes the corneal opacity", "marks": 10}],
+    }])
+    image = Image(sha256="d" * 64, content_type="image/jpeg", data=big_photo(),
+                  size_bytes=100, origin="pdf")
+    db.add(image)
+    db.flush()
+    # Exactly what ingest used to write.
+    figure = OsceFigure(station_id=station.id, position=0, image_id=image.id,
+                        verification_status="unverified", is_approved=False)
+    db.add(figure)
+    db.commit()
+
+    assert station.id in stations_with_unchecked_figures(db)
+
+    ai.responder = lambda body, n: json.dumps({
+        "tier": "faithful", "modality": "fundus", "confidence": 0.9,
+        "shows": "A fundus photograph of the right eye",
+        "reason": "It is a retinal photograph", "missing": None,
+        "caption": "Fundus photograph",
+    })
+    outcome = verify_ingested_figures(db, AIClient(db), station)
+
+    db.expire_all()
+    figure = db.query(OsceFigure).filter_by(id=figure.id).one()
+    assert outcome["rejected"] == 1
+    assert figure.is_approved is False, "a fundus photo cannot answer an anterior task"
+    assert figure.verification_status == "rejected"
+    assert "fundus" in (figure.verification_notes or "").lower()
+
+
+def test_the_reports_own_photograph_is_kept_even_when_imperfect(
+    client, db, admin, ai
+):
+    """These are the images the real candidates were shown.
+
+    "Representative" from a web search means a stranger's eye stood in for the
+    patient's. From the examiners' report it means the grader could not tie
+    every recorded sign to the photograph - which is not a reason to withhold
+    the best image in the bank.
+    """
+    from app.models import OsceFigure
+    from app.services.osce.station_images import verify_ingested_figures
+
+    station = make_station(db, prompts=[{
+        "label": "A", "text": "Please examine the anterior segment of both eyes.",
+        "seconds": 270, "rubric": [{"text": "Describes the opacity", "marks": 10}],
+    }])
+    image = Image(sha256="f" * 64, content_type="image/jpeg", data=big_photo(),
+                  size_bytes=100, origin="pdf")
+    db.add(image)
+    db.flush()
+    figure = OsceFigure(station_id=station.id, position=0, image_id=image.id,
+                        verification_status="unverified", is_approved=False)
+    db.add(figure)
+    db.commit()
+
+    ai.responder = lambda body, n: json.dumps({
+        "tier": "representative", "modality": "slit_lamp", "confidence": 0.6,
+        "shows": "A slit lamp photograph of a corneal opacity",
+        "reason": "The right examination", "missing": "the neovascularisation",
+        "caption": "Slit lamp photograph",
+    })
+    outcome = verify_ingested_figures(db, AIClient(db), station)
+
+    db.expire_all()
+    figure = db.query(OsceFigure).filter_by(id=figure.id).one()
+    assert outcome["kept"] == 1
+    assert figure.is_approved is True, "the report's own photograph is shown"
+
+
+def test_a_checked_figure_is_not_graded_twice(client, db, admin, ai):
+    """Re-running the check must not spend a vision call per figure per run."""
+    from app.models import OsceFigure
+    from app.services.osce.station_images import (
+        stations_with_unchecked_figures,
+        verify_ingested_figures,
+    )
+
+    station = make_station(db)
+    image = Image(sha256="e" * 64, content_type="image/jpeg", data=big_photo(),
+                  size_bytes=100, origin="pdf")
+    db.add(image)
+    db.flush()
+    db.add(OsceFigure(station_id=station.id, position=0, image_id=image.id,
+                      verification_status="faithful", match_confidence=0.9,
+                      is_approved=True))
+    db.commit()
+
+    assert station.id not in stations_with_unchecked_figures(db)
+    before = len(ai.requests)
+    outcome = verify_ingested_figures(db, AIClient(db), station)
+    assert outcome["skipped"] == 1 and outcome["kept"] == 0
+    assert len(ai.requests) == before, "no model call for a figure already graded"

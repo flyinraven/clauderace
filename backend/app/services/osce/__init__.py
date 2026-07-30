@@ -21,7 +21,9 @@ from app.services.osce.prompts import (
 )
 from app.services.osce.station_images import (
     JOB_SOURCE_STATION_IMAGES,
+    JOB_VERIFY_STATION_FIGURES,
     handle_source_station_images,
+    handle_verify_station_figures,
     opening_image_is_settled,
     source_image_for_station,
     stations_needing_images,
@@ -36,9 +38,11 @@ __all__ = [
     "JOB_BUILD_OSCE_PROMPTS",
     "JOB_GRADE_OSCE",
     "JOB_SOURCE_STATION_IMAGES",
+    "JOB_VERIFY_STATION_FIGURES",
     "JOB_SPLIT_OSCE_FINDINGS",
     "JOB_TRANSCRIBE_RESPONSE",
     "handle_source_station_images",
+    "handle_verify_station_figures",
     "handle_split_osce_findings",
     "source_image_for_station",
     "split_findings",

@@ -138,6 +138,7 @@ def _finalise(ctx: JobContext, source: SourceDocument, kind: str) -> bool:
     if kind == "osce" and result.get("station_ids"):
         _queue_findings_split(ctx, result["station_ids"])
         _queue_prompt_build(ctx, result["station_ids"])
+        _queue_figure_check(ctx, result["station_ids"])
     return True
 
 
@@ -173,6 +174,37 @@ def _queue_findings_split(ctx: JobContext, station_ids: list[int]) -> None:
         message=f"Splitting findings for {len(pending)} station(s)",
     )
     logger.info("Queued findings split job %s for %d station(s)", job.id, len(pending))
+
+
+def _queue_figure_check(ctx: JobContext, station_ids: list[int]) -> None:
+    """Grade the photographs taken out of the report before anyone is shown them.
+
+    They arrive unapproved, so without this a freshly ingested station has
+    images that no candidate can see. It is chained onto the ingest for the
+    same reason the prompt build is: every ingest needs it, so it is not really
+    a separate decision.
+    """
+    from app.services.jobs.runner import create_job
+    from app.services.osce.station_images import JOB_VERIFY_STATION_FIGURES
+
+    pending = [
+        s.id
+        for s in ctx.db.execute(
+            select(OsceStation).where(OsceStation.id.in_(station_ids))
+        ).scalars().all()
+        if any(f.image_id for f in s.figures)
+    ]
+    if not pending:
+        return
+    job = create_job(
+        ctx.db,
+        JOB_VERIFY_STATION_FIGURES,
+        payload={"station_ids": pending},
+        created_by_id=ctx.job.created_by_id,
+        total_steps=len(pending),
+        message=f"Checking the figures of {len(pending)} station(s)",
+    )
+    logger.info("Queued figure check job %s for %d station(s)", job.id, len(pending))
 
 
 def _queue_prompt_build(ctx: JobContext, station_ids: list[int]) -> None:
@@ -239,6 +271,13 @@ def _load_blocks(db: Session, source: SourceDocument) -> tuple[ExtractedDocument
     cached = _BLOCK_CACHE.get(source.id)
     if cached:
         return cached
+
+    # One document at a time. The entry is popped when a job finishes, but a
+    # job that dies mid-run - which on a 512 MB instance is exactly what a big
+    # ingest does - never reaches that line, and the next document then parses
+    # alongside the corpse of the last one.
+    for stale in [k for k in _BLOCK_CACHE if k != source.id]:
+        _BLOCK_CACHE.pop(stale, None)
 
     doc = extract_document(source.data, source.filename, source.content_type)
     kind, blocks = segment(doc, source.document_kind)
@@ -414,12 +453,22 @@ def _persist_station(
 def _attach_station_figures(
     db: Session, source: SourceDocument, block: Block, station: OsceStation
 ) -> None:
-    """Show the report's own clinical photographs at the station.
+    """Take the report's own clinical photographs, for checking.
 
     A station without an image cannot test visual recognition at all, and the
-    OSCE deck carries the real photograph the candidates were shown. Dropping
-    it and searching the web for a lookalike would be strictly worse: these
-    are already faithful, and need no vision check or approval.
+    OSCE deck carries the real photograph the candidates were shown, so these
+    are worth far more than a web lookalike.
+
+    They are not, however, self-evidently right. "Every image on this block's
+    pages" also collects mark-distribution charts, tables set as pictures, and
+    the neighbouring station's photographs - one 2023 Semester 2 station took
+    fifteen figures this way. And a genuine photograph of the wrong thing is
+    still no use to the question being asked: a fundus shot cannot answer
+    "examine the anterior segment", and every mark for it is unearnable.
+
+    So they are stored unapproved, and the verification job grades them against
+    the station the same way a sourced image is graded. Nothing reaches a
+    candidate until it has been looked at.
     """
     for position, extracted in enumerate(block.images):
         record = _get_or_create_image(db, extracted, source.id)
@@ -429,8 +478,8 @@ def _attach_station_figures(
                 image_id=record.id,
                 position=position,
                 caption=extracted.caption or extracted.label,
-                verification_status="verified",
-                is_approved=True,
+                verification_status="unverified",
+                is_approved=False,
             )
         )
 
