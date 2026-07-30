@@ -1081,3 +1081,80 @@ def test_a_checked_figure_is_not_graded_twice(client, db, admin, ai):
     outcome = verify_ingested_figures(db, AIClient(db), station)
     assert outcome["skipped"] == 1 and outcome["kept"] == 0
     assert len(ai.requests) == before, "no model call for a figure already graded"
+
+
+def test_the_reports_own_mri_answers_the_question_that_asks_for_one(
+    client, db, admin, ai
+):
+    """Station 158 printed four MRIs and had them all thrown away.
+
+    Its opening task is "examine the patient's eye movements", which expects an
+    external photograph, so every MRI failed the modality check - while question
+    C of the same station asks the candidate to read an MRI of the brain, and
+    the sourcing run was about to buy one off the web.
+    """
+    from app.models import OsceFigure
+    from app.services.osce.station_images import bind_ingested_figures_to_questions
+
+    station = make_station(db, prompts=[
+        {"label": "A", "text": "Please examine the patient's eye movements.",
+         "seconds": 270, "rubric": [{"text": "Describes the deficit", "marks": 10}]},
+        {"label": "C", "text": "What does this scan show?", "seconds": 90,
+         "image_wanted": "MRI of the brain, axial views, showing white matter lesions",
+         "rubric": [{"text": "Reads the scan", "marks": 5}]},
+    ])
+    image = Image(sha256="1" * 64, content_type="image/jpeg", data=big_photo(),
+                  size_bytes=100, origin="pdf")
+    db.add(image)
+    db.flush()
+    figure = OsceFigure(
+        station_id=station.id, position=1, image_id=image.id,
+        verification_status="rejected", is_approved=False,
+        caption="Axial T2-weighted MRI of the brain",
+    )
+    db.add(figure)
+    db.commit()
+
+    ai.responder = lambda body, n: json.dumps({
+        "tier": "faithful", "modality": "radiology", "confidence": 0.9,
+        "shows": "An axial T2 MRI of the brain", "reason": "The scan asked for",
+        "missing": None, "caption": "Axial MRI of the brain",
+    })
+    assert bind_ingested_figures_to_questions(db, AIClient(db), station)["bound"] == 1
+
+    db.expire_all()
+    station = db.query(OsceStation).filter_by(id=station.id).one()
+    figure = db.query(OsceFigure).filter_by(id=figure.id).one()
+    assert station.prompts[1]["figure_id"] == figure.id
+    assert figure.is_approved is True
+    assert figure.wanted_description.startswith("MRI of the brain")
+
+
+def test_a_topography_is_not_offered_for_a_question_asking_for_an_ultrasound(
+    client, db, admin, ai
+):
+    """The match must be the named investigation, not merely the same region."""
+    from app.models import OsceFigure
+    from app.services.osce.station_images import bind_ingested_figures_to_questions
+
+    station = make_station(db, prompts=[
+        {"label": "A", "text": "Please examine the anterior segment.", "seconds": 270,
+         "rubric": [{"text": "Describes it", "marks": 10}]},
+        {"label": "C", "text": "What does this show?", "seconds": 90,
+         "image_wanted": "UBM of the left anterior segment showing a shallow chamber",
+         "rubric": [{"text": "Reads it", "marks": 5}]},
+    ])
+    image = Image(sha256="2" * 64, content_type="image/jpeg", data=big_photo(),
+                  size_bytes=100, origin="pdf")
+    db.add(image)
+    db.flush()
+    db.add(OsceFigure(
+        station_id=station.id, position=1, image_id=image.id,
+        verification_status="rejected", is_approved=False,
+        caption="Pentacam corneal topography of the left eye",
+    ))
+    db.commit()
+
+    before = len(ai.requests)
+    assert bind_ingested_figures_to_questions(db, AIClient(db), station)["bound"] == 0
+    assert len(ai.requests) == before, "and it costs nothing to decline"

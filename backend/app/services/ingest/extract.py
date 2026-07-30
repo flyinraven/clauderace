@@ -62,6 +62,13 @@ MIN_DIMENSION_PX = 100
 # Banners are extremely wide relative to their height.
 MAX_ASPECT_RATIO = 4.0
 MIN_SIZE_BYTES = 4 * 1024
+# Anything sitting entirely inside these bands of the page is running header or
+# footer - a college crest, a page rule, an examiner-report watermark. A
+# clinical photograph is never printed in the top eighth of the page with text
+# flowing under it, and this costs nothing to check, where letting it through
+# costs a vision call to reach the same conclusion.
+HEADER_BAND = 0.12
+FOOTER_BAND = 0.92
 
 FIGURE_CAPTION_RE = re.compile(
     r"^\s*(?:figure|fig\.?|image)\s*([0-9]+[a-z]?)\s*[:.\-]?\s*(.*)$",
@@ -120,6 +127,8 @@ class ExtractedPage:
     number: int
     text: str
     images: list[ExtractedImage] = field(default_factory=list)
+    # Page height in PDF user space, for judging what is header and footer.
+    height: float = 0.0
 
     def __post_init__(self) -> None:
         # Every extractor funnels through here, so this is the one place the
@@ -208,7 +217,12 @@ def extract_pdf(data: bytes) -> ExtractedDocument:
                 )
 
             images.sort(key=lambda i: (i.bbox[1] if i.bbox else 0, i.bbox[0] if i.bbox else 0))
-            raw_pages.append(ExtractedPage(number=page_number, text=text, images=images))
+            raw_pages.append(
+                ExtractedPage(
+                    number=page_number, text=text, images=images,
+                    height=float(page.rect.height or 0),
+                )
+            )
 
             # Everything wanted from this page has been copied out, so MuPDF's
             # decoded copy of it is dead weight from here on. Emptying the store
@@ -231,6 +245,14 @@ def extract_pdf(data: bytes) -> ExtractedDocument:
         doc.close()
         # `close()` releases the document, not the store behind it.
         release_reader_memory()
+
+
+def _is_page_furniture(img: ExtractedImage, page_height: float) -> bool:
+    """Whether this image lies wholly in the running header or footer."""
+    if not img.bbox or page_height <= 0:
+        return False
+    top, bottom = img.bbox[1], img.bbox[3]
+    return bottom <= page_height * HEADER_BAND or top >= page_height * FOOTER_BAND
 
 
 def _filter_decorative(
@@ -260,6 +282,8 @@ def _filter_decorative(
                 reason = "banner aspect ratio"
             elif len(img.data) < MIN_SIZE_BYTES:
                 reason = "too few bytes"
+            elif _is_page_furniture(img, page.height):
+                reason = "sits in the header or footer band"
             elif seen_hashes[img.sha256]:
                 reason = "duplicate"
 

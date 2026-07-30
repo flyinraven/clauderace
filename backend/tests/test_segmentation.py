@@ -115,3 +115,33 @@ def test_written_paper_is_unaffected() -> None:
     kind, blocks = segment(doc)
     assert kind == "written"
     assert [b.label for b in blocks] == ["SEQ 1", "SEQ 2"]
+
+
+# --- Page furniture --------------------------------------------------------
+def test_a_header_crest_is_not_a_clinical_figure() -> None:
+    """Only clinical images belong on a question.
+
+    The examiners' reports carry a college crest at the top of every page and a
+    rule at the foot. The repeated-hash rule catches those that are byte
+    identical across pages; one re-encoded per page is not, and used to reach a
+    station as a figure - and then cost a vision call to say so.
+    """
+    from app.services.ingest.extract import ExtractedImage, _is_page_furniture
+
+    def img(top: float, bottom: float) -> ExtractedImage:
+        return ExtractedImage(
+            data=b"x" * 9000, content_type="image/png", width=300, height=200,
+            page_number=1, sha256="a" * 64, bbox=(50.0, top, 500.0, bottom),
+        )
+
+    page_height = 842.0  # A4 in PDF user space
+    assert _is_page_furniture(img(10, 80), page_height), "running header"
+    assert _is_page_furniture(img(790, 830), page_height), "running footer"
+    assert not _is_page_furniture(img(200, 600), page_height), "a figure in the body"
+    # A photograph that starts high but runs down the page is not furniture.
+    assert not _is_page_furniture(img(40, 500), page_height)
+    # Without placement information nothing can be concluded, so nothing is.
+    no_bbox = img(10, 80)
+    no_bbox.bbox = None
+    assert not _is_page_furniture(no_bbox, page_height)
+    assert not _is_page_furniture(img(10, 80), 0)

@@ -29,6 +29,7 @@ from app.services.imagesearch.base import ImageQueryError, ImageSearchError
 from app.services.imagesearch.relevance import (
     expected_modalities,
     modality_mismatch,
+    named_modality,
     split_investigations,
     unsourceable_reason,
     wants_gaze_positions,
@@ -826,6 +827,88 @@ def verify_ingested_figures(
     return {"kept": kept, "rejected": rejected, "skipped": skipped}
 
 
+def bind_ingested_figures_to_questions(
+    db: Session, client: AIClient, station: OsceStation
+) -> dict[str, Any]:
+    """Give a question the report's own investigation, rather than buying one.
+
+    Grading every ingested figure against the station's opening task was too
+    blunt. "Please examine the patient's eye movements" expects an external
+    photograph, so the four MRIs printed with that station were all marked the
+    wrong modality and dropped - while question C of the same station asks the
+    candidate to read an MRI of the brain, and the sourcing run was about to
+    search the web for one.
+
+    A figure nothing has claimed is therefore offered to each unanswered
+    question whose investigation it names. The match must be exact: a request
+    naming no modality of its own is skipped rather than guessed at, and a
+    Pentacam is not accepted for a question that asked for a UBM. The vision
+    grader then judges it against that question's own wording, so binding never
+    rests on the caption alone.
+    """
+    prompts = list(station.prompts or [])
+    claimed = {i for p in prompts for i in _bound_ids(p)}
+    spare = [
+        f for f in sorted(station.figures, key=lambda f: f.position)
+        if f.image_id and f.id not in claimed
+    ]
+    if not spare:
+        return {"bound": 0}
+
+    bound = 0
+    for prompt in prompts:
+        wanted = str(prompt.get("image_wanted") or "").strip()
+        if not wanted or _bound_ids(prompt) or prompt.get("image_impossible"):
+            continue
+        asked = named_modality(wanted)
+        if asked is None:
+            continue
+
+        for figure in list(spare):
+            image = db.get(Image, figure.image_id)
+            if image is None or image.origin != "pdf":
+                continue
+            if named_modality(f"{figure.caption or ''} {figure.verification_notes or ''}") != asked:
+                continue
+            try:
+                verdict = verify_image(
+                    db, client, station, image.data, image.content_type, wanted
+                )
+            except Exception as exc:  # noqa: BLE001 - try the next figure
+                logger.debug("Could not verify figure %s for a question: %s", figure.id, exc)
+                continue
+            tier = str(verdict.get("tier") or "reject").lower()
+            if tier == "reject" or modality_mismatch(
+                expected_modalities(wanted), verdict.get("modality")
+            ):
+                continue
+
+            figure.wanted_description = wanted
+            figure.verification_status = tier
+            figure.match_confidence = as_float(verdict.get("confidence"), 0.0)
+            figure.caption = str(verdict.get("caption") or "").strip() or figure.caption
+            figure.verification_notes = str(verdict.get("shows") or "").strip() or None
+            figure.is_approved = True
+            prompt["figure_id"] = figure.id
+            spare.remove(figure)
+            bound += 1
+            break
+
+    if bound:
+        station.prompts = [dict(p) for p in prompts]
+        flag_modified(station, "prompts")
+        db.commit()
+    return {"bound": bound}
+
+
+def _bound_ids(prompt: dict[str, Any]) -> list[int]:
+    ids = [i for i in (prompt.get("figure_ids") or []) if i]
+    first = prompt.get("figure_id")
+    if first and first not in ids:
+        ids.insert(0, first)
+    return ids
+
+
 @register_handler(JOB_VERIFY_STATION_FIGURES)
 def handle_verify_station_figures(ctx: JobContext) -> bool:
     """One station per chunk: grade the figures ingest took on trust."""
@@ -842,10 +925,14 @@ def handle_verify_station_figures(ctx: JobContext) -> bool:
     station = ctx.db.get(OsceStation, station_ids[index])
     if station is not None:
         try:
-            outcome = verify_ingested_figures(ctx.db, AIClient(ctx.db), station)
+            client = AIClient(ctx.db)
+            outcome = verify_ingested_figures(ctx.db, client, station)
+            # A figure the opening task had no use for may be exactly what a
+            # later question asks the candidate to read.
+            outcome.update(bind_ingested_figures_to_questions(ctx.db, client, station))
             tally = dict((ctx.job.result or {}).get("figures", {}))
-            for key in ("kept", "rejected", "skipped"):
-                tally[key] = tally.get(key, 0) + outcome[key]
+            for key in ("kept", "rejected", "skipped", "bound"):
+                tally[key] = tally.get(key, 0) + outcome.get(key, 0)
             ctx.set_result(figures=tally)
         except Exception as exc:  # noqa: BLE001
             ctx.db.rollback()

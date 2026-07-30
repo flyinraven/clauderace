@@ -67,7 +67,10 @@ _MODALITY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("angiogram", re.compile(r"\bfluorescein\b|\bangiogra\w+\b|\bFFA\b|\bICGA?\b|\bFA\b")),
     ("oct", re.compile(r"\bOCT\b|\boptical\s+coherence\b|\bOCT[- ]?A\b", re.IGNORECASE)),
     ("radiology", re.compile(r"\bCT\b|\bMRI\b|\bX[- ]?ray\b|\bradiograph\w*\b|\bscan\s+of\s+the\s+orbits?\b")),
-    ("ultrasound", re.compile(r"\bultrasound\b|\bB[- ]?scan\b|\bA[- ]?scan\b|\bechograph\w+\b", re.IGNORECASE)),
+    # UBM is an ultrasound, and naming no modality at all let a station's
+    # request for one be answered by a corneal topography of the same region.
+    ("ultrasound", re.compile(r"\bultrasound\b|\bB[- ]?scan\b|\bA[- ]?scan\b|\bechograph\w+\b|"
+                              r"\bUBM\b|\bultrasound\s+biomicroscop\w+\b", re.IGNORECASE)),
     ("visual_field", re.compile(r"\bvisual\s+field\w*\b|\bperimetr\w+\b|\bHumphrey\b|\bGoldmann\b", re.IGNORECASE)),
     ("topography", re.compile(r"\btopograph\w+\b|\btomograph\w+\b|\bPentacam\b|\bOrbscan\b", re.IGNORECASE)),
     ("pathology", re.compile(r"\bhistolog\w+\b|\bhistopatholog\w+\b|\bbiops\w+\b|\bcytolog\w+\b", re.IGNORECASE)),
