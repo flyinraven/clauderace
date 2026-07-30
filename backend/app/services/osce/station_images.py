@@ -238,6 +238,14 @@ def describe_findings(
 
     text = str((data or {}).get("description") or "").strip()
     if not text:
+        # The model is told to return nothing rather than fill a gap, so this
+        # is a legitimate outcome - but it used to be the one path that logged
+        # nothing at all, which made an absent description indistinguishable
+        # from a rejected one.
+        logger.info(
+            "No description for station %s: the model returned none for %r",
+            station.id, (rubric_points or truth)[:120],
+        )
         return None
     leak = leaked_term(text, station)
     if leak:

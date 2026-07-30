@@ -23,7 +23,13 @@ from app.models import Base  # noqa: E402  (registers every table)
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers defaults to True, and migrations run inside the
+    # API process at startup - after every app module has been imported and
+    # created its logger. Taking the default switched all of them off for the
+    # life of the instance, so nothing the application logged ever reached
+    # Render. It was found looking for the reason a description had been
+    # discarded and finding no application log lines at all, only alembic's.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
