@@ -265,3 +265,25 @@ def test_a_plain_rendering_of_the_findings_survives_both_checks() -> None:
     )
     assert leaked_term(text, station) is None
     assert grounding_problem(text, station, None) is None
+
+
+def test_grounding_reports_a_concern_rather_than_deciding() -> None:
+    """It cannot tell paraphrase from invention, so it must not have the vote.
+
+    Three consecutive live runs discarded a correct description for ordinary
+    examination words the findings happened not to contain - "larger",
+    "constricts", then "convergence" for how a near response is tested. The
+    reviewer is told what to look at; the description still reaches them.
+    """
+    station = _DiagnosedStation("Something unrelated")
+    station.findings_elicited = "There is a left dilated pupil with light-near dissociation."
+    station.findings = None
+    station.subspecialty = "Neuro-ophthalmology"
+
+    problem = grounding_problem(
+        "The near response is tested by convergence, which is better than to bright light.",
+        station,
+        None,
+    )
+    assert problem, "the reviewer should still be told"
+    assert "convergence" in problem

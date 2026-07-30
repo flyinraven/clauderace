@@ -200,7 +200,7 @@ Return ONLY a JSON object: {"description": "..."}"""
 
 def describe_findings(
     client: AIClient, station: OsceStation, wanted: str | None
-) -> str | None:
+) -> tuple[str | None, str | None]:
     """State the signs aloud, for what no photograph could be found for.
 
     The station's own recorded findings are the source of truth, and the rubric
@@ -215,7 +215,7 @@ def describe_findings(
     rubric_points = (wanted or "").strip()
     truth = (station.findings_elicited or station.findings or "").strip()
     if not truth and not rubric_points:
-        return None
+        return None, None
     try:
         data = client.complete_json(
             task="model_answer",
@@ -234,7 +234,7 @@ def describe_findings(
         )
     except (AIError, ValueError, AttributeError):
         logger.warning("Could not describe findings for station %s", station.id)
-        return None
+        return None, None
 
     text = str((data or {}).get("description") or "").strip()
     if not text:
@@ -246,18 +246,27 @@ def describe_findings(
             "No description for station %s: the model returned none for %r",
             station.id, (rubric_points or truth)[:120],
         )
-        return None
+        return None, None
     leak = leaked_term(text, station)
     if leak:
         logger.warning(
             "Discarded a description of station %s: it gave away %r", station.id, leak
         )
-        return None
+        return None, None
+    # Advisory, not a veto. Three runs in a row it discarded a correct
+    # description for using ordinary examination words the findings happened
+    # not to contain - "larger" and "constricts" for a dilated pupil with
+    # light-near dissociation, then "convergence" for how the near response is
+    # tested. Each time the answer was to widen a list that will never be
+    # complete, while the station went on having nothing to show.
+    #
+    # It cannot distinguish paraphrase from invention, so it now tells the
+    # reviewer what to look at instead of deciding for them. Naming the
+    # diagnosis is still a hard reject above: that one is unambiguous.
     problem = grounding_problem(text, station, rubric_points)
     if problem:
-        logger.warning("Discarded a description of station %s: %s", station.id, problem)
-        return None
-    return text
+        logger.info("Description of station %s wants checking: %s", station.id, problem)
+    return text, problem
 
 
 # Words too common to count as giving anything away on their own.
@@ -603,10 +612,17 @@ def source_image_for_station(
     # candidate survived, not even a representative. Rather than leave a
     # station whose marks cannot be earned, the examiner states the findings
     # the way a real patient would demonstrate them.
-    described = describe_findings(client, station, wanted or figure.wanted_description)
+    described, concern = describe_findings(
+        client, station, wanted or figure.wanted_description
+    )
     if described:
         figure.described_findings = described
         figure.verification_status = "described"
+        if concern:
+            figure.verification_notes = (
+                f"{figure.verification_notes or ''}  "
+                f"[Check the stated findings: {concern}]"
+            )[:4000]
     db.commit()
     return {"attached": False, "queries": queries, "reason": "all candidates rejected",
             "rejected": len(rejections)}
@@ -640,7 +656,10 @@ def _attach(
         # every expectation, and those are marks the candidate is about to be
         # asked for. State the ones it misses, the way the patient would have
         # demonstrated them, so the rubric stays earnable alongside the image.
-        figure.described_findings = describe_findings(client, station, missing)
+        described, concern = describe_findings(client, station, missing)
+        figure.described_findings = described
+        if described and concern:
+            notes = f"{notes}  [Check the stated findings: {concern}]"
     else:
         figure.described_findings = None
     figure.verification_notes = notes or None
