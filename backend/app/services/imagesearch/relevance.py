@@ -78,6 +78,39 @@ _MODALITY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 
+# Examinations that exist only as a sequence of positions. A motility deficit,
+# a cranial nerve palsy or a squint IS the difference between the gaze
+# positions, so one primary-position photograph shows a patient who looks
+# ordinary: "examine the ocular motility of the right eye" cannot be answered
+# from it, and every duction mark in the rubric is unearnable.
+_GAZE_RE = re.compile(
+    r"\bmotilit\w+\b|\bduction\w*\b|\bversion\w*\b|\bgaze\b|\bsquint\w*\b|"
+    r"\bstrabismus\b|\beso[- ]?tropi\w+\b|\bexo[- ]?tropi\w+\b|\bhyper[- ]?tropi\w+\b|"
+    r"\bhypo[- ]?tropi\w+\b|\bnystagmus\b|\bcover\s+test\b|\bdiplopia\b|"
+    r"\bunder[- ]?action\w*\b|\bover[- ]?action\w*\b|\bover[- ]?elevation\b|"
+    r"\bDuane\w*\b|\bBrown'?s\s+syndrome\b|\bophthalmopleg\w+\b|"
+    r"\b(?:third|fourth|sixth|III|IV|VI)\s+(?:cranial\s+)?nerve\b|"
+    r"\b(?:cranial\s+)?nerve\s+pals\w+\b|"
+    # The extraocular muscles, named the way a rubric names them: "deficits in
+    # right MR, SR, IR".
+    r"\b(?:MR|LR|SR|IR|SO|IO)\b|\bmedial\s+rectus\b|\blateral\s+rectus\b|"
+    r"\bsuperior\s+rectus\b|\binferior\s+rectus\b|\bsuperior\s+oblique\b|"
+    r"\binferior\s+oblique\b|\bextraocular\s+m\w+\b",
+    re.IGNORECASE,
+)
+
+# How the montage is filed. Photographers publish it as the nine (sometimes
+# five) positions of gaze, and `_MODALITY_PATTERNS` already reads that wording
+# back as an external photograph.
+GAZE_PHRASE = "external photograph montage of the nine positions of gaze"
+
+
+def wants_gaze_positions(*texts: str | None) -> bool:
+    """Whether this task can only be shown as a montage of gaze positions."""
+    blob = " ".join(t for t in texts if t)
+    return bool(blob.strip()) and bool(_GAZE_RE.search(blob))
+
+
 def expected_modalities(*texts: str | None) -> frozenset[str]:
     """The modalities that could answer this task, or empty if it does not say.
 
@@ -97,11 +130,19 @@ def expected_modalities(*texts: str | None) -> frozenset[str]:
         return frozenset(named)
 
     regions = {name for name, pattern in _REGION_PATTERNS if pattern.search(blob)}
-    if not regions:
-        return frozenset()
     allowed: set[str] = set()
     for region in regions:
         allowed |= _REGION_MODALITIES[region]
+    # A motility task is an examination in its own right, and one no scan can
+    # answer. Without this, "examine the ocular motility of the right eye" named
+    # neither a modality nor a region, so it was unconstrained - and, upstream,
+    # generated no view at all.
+    #
+    # Only when nothing else was read: a task that named the fundus and happens
+    # to mention diplopia still wants a fundus photograph, and widening it to
+    # external would let a face shot answer a retinal question.
+    if not allowed and _GAZE_RE.search(blob):
+        allowed.add("external")
     return frozenset(allowed)
 
 

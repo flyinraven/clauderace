@@ -26,7 +26,11 @@ from app.services.ai import AIClient, AIError, ImagePart, TextPart
 from app.services.coerce import as_float
 from app.services.errors import log_error
 from app.services.imagesearch.base import ImageSearchError
-from app.services.imagesearch.relevance import expected_modalities, modality_mismatch
+from app.services.imagesearch.relevance import (
+    GAZE_PHRASE,
+    expected_modalities,
+    modality_mismatch,
+)
 from app.services.imagesearch.service import (
     attach_image_to_figure,
     build_provider,
@@ -46,6 +50,11 @@ MIN_MATCH_CONFIDENCE = 0.7
 # A representative image only has to be a genuine, describable clinical image of
 # the right pathology, so it clears a lower bar - but it is labelled as such.
 MIN_REPRESENTATIVE_CONFIDENCE = 0.55
+# Above this an attached image is left alone by a batch re-source. It sits above
+# `MIN_MATCH_CONFIDENCE` deliberately: a picture that only scraped past the
+# attachment gate is worth one more search, whereas re-buying a confident one
+# costs a Brave call and a vision call to arrive back where it started.
+SETTLED_MATCH_CONFIDENCE = 0.78
 
 QUERY_SYSTEM = """\
 You write image search queries for ophthalmology teaching material.
@@ -61,6 +70,10 @@ the underlying pathologies are common and easy to find on their own.
 
 Name the modality as a photographer would: "slit lamp photograph", "fundus
 photograph", "external eye photograph", "OCT", "fluorescein angiogram".
+
+If the signs are a motility, gaze, squint or cranial nerve palsy deficit, keep
+"nine positions of gaze" in phrases 1 and 2: the deficit is only visible across
+the positions, and a single frontal photograph shows nothing to describe.
 
 Never include incidental surgical hardware, laterality, or a second unrelated
 condition in phrases 2 and 3 - those are what make a search return nothing.
@@ -101,6 +114,13 @@ photograph ocular motility, cranial nerve palsies, Duane's syndrome and lid
 disorders - such a montage is exactly what a candidate should be shown. Plain
 panel letters with no explanatory text are acceptable; it is annotation that
 identifies the abnormality which is not.
+
+If the signs describe ocular motility - a duction or muscle deficit, a gaze
+palsy, a squint, a cranial nerve palsy, nystagmus - the image MUST show more
+than one position of gaze. A single primary-position photograph cannot show a
+movement, so however good it is it can be "representative" at best, and you must
+say in "missing" that the gaze positions are not shown. A montage of the nine
+(or five) positions is what such a station calls for.
 
 DO NOT reject on the patient's age, sex or ethnicity. The candidate is being
 asked to describe a clinical sign, not to guess demographics, and a sign looks
@@ -827,11 +847,18 @@ def handle_source_station_images(ctx: JobContext) -> bool:
     if station is not None:
         try:
             client = AIClient(ctx.db)
-            outcome = source_image_for_station(ctx.db, client, station, job_id=ctx.job.id)
-            key = "attached" if outcome.get("attached") else "no_image"
-            done = list((ctx.job.result or {}).get(key, []))
-            done.append(station.id)
-            ctx.set_result(**{key: done})
+            # Sourcing the whole bank is dozens of stations that only want an
+            # ancillary image; `only_missing` keeps the spend on those.
+            if ctx.payload.get("only_missing") and opening_image_is_settled(station):
+                kept = list((ctx.job.result or {}).get("kept", []))
+                kept.append(station.id)
+                ctx.set_result(kept=kept)
+            else:
+                outcome = source_image_for_station(ctx.db, client, station, job_id=ctx.job.id)
+                key = "attached" if outcome.get("attached") else "no_image"
+                done = list((ctx.job.result or {}).get(key, []))
+                done.append(station.id)
+                ctx.set_result(**{key: done})
 
             # One photograph cannot carry a rubric that marks both eyes, so
             # the remaining views are filled before the station is called done.
@@ -868,6 +895,53 @@ def handle_source_station_images(ctx: JobContext) -> bool:
     ctx.cursor_set(index=index + 1)
     ctx.advance(1, f"Images: {index + 1} of {len(station_ids)}")
     return index + 1 >= len(station_ids)
+
+
+def wants_gaze_montage(station: OsceStation, figure: OsceFigure) -> bool:
+    """Whether this figure was sourced without knowing it needed gaze positions.
+
+    A motility station whose opening photograph is a single primary-position
+    face shot looks perfectly good to every other test here - right modality,
+    right pathology, high confidence - and still cannot be described. The
+    deficit only exists across the positions of gaze.
+
+    Detected from what the figure was asked for rather than from the image,
+    since nothing stored says how many panels it has: a figure whose recorded
+    requirement predates `GAZE_PHRASE` was searched for as one photograph.
+    """
+    views = station_views(station)
+    if not views or not views[0].gaze:
+        return False
+    return GAZE_PHRASE.lower() not in (figure.wanted_description or "").lower()
+
+
+def opening_image_is_settled(station: OsceStation) -> bool:
+    """Whether the station's own image is good enough to leave alone.
+
+    Every other image a station needs is missing or it is not, and the cost of
+    finding it is unavoidable. The opening one is different: most stations in a
+    batch already have a perfectly good photograph and are in the batch only
+    because a question further down wants an MRI. Re-sourcing those spends a
+    search and a vision call per station to replace a good image with another
+    good image - and drops the description an administrator already approved.
+
+    The test is deliberately the one `scripts/audit_station_images.py` applies to
+    a figure. The two disagreeing would mean a batch either paid for stations the
+    audit calls fine, or skipped ones it will flag again afterwards.
+    """
+    figure = min(station.figures, key=lambda f: f.position, default=None)
+    if figure is None or figure.image_id is None or not figure.is_approved:
+        return False
+    if wants_gaze_montage(station, figure):
+        return False
+    # A representative image is a picture of the right disease and the wrong
+    # patient; it is worth another search. `faithful` is what the vision model
+    # writes now, `verified` what it wrote before the tiers were named.
+    if figure.verification_status not in {"faithful", "verified"}:
+        return False
+    # No confidence at all is a figure from before the score was recorded, not a
+    # bad one - it is left alone, as the audit leaves it.
+    return (figure.match_confidence or 1.0) >= SETTLED_MATCH_CONFIDENCE
 
 
 def stations_needing_images(db: Session) -> list[int]:

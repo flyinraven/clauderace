@@ -223,6 +223,53 @@ def test_the_instruction_strip_does_not_eat_the_word_it_is_stripping() -> None:
     assert wanted.lower().startswith("globe dystopia"), wanted
 
 
+MOTILITY_TASK = {
+    "label": "A",
+    "text": "Please examine the ocular motility of the right eye.",
+    "rubric": [
+        {"text": "Systematically perform a motility examination."},
+        {"text": "Identify right ptosis and mydriasis."},
+        {"text": "Identify deficits in right MR, SR, IR."},
+        {"text": "Identify right LR deficit."},
+        {"text": "Identify right SO deficit (no intorsion on downgaze/left gaze)."},
+    ],
+}
+
+
+def test_a_motility_task_asks_for_the_positions_of_gaze() -> None:
+    """A duction deficit is invisible in one primary-position photograph.
+
+    The station this comes from opened with a frontal face shot in primary
+    position and then asked the candidate to examine the right eye's motility.
+    Twelve marks for MR, SR, IR, LR and SO deficits, none of them earnable from
+    a picture of a patient looking straight ahead.
+    """
+    views = required_views(MOTILITY_TASK)
+    assert views, "a motility task needs an image of its own"
+    wanted = views[0].wanted_description
+    assert "nine positions of gaze" in wanted.lower(), wanted
+
+
+def test_an_incidental_nystagmus_does_not_make_a_montage_of_an_anterior_task() -> None:
+    """Eight anterior signs and one about movement is a slit lamp station."""
+    for view in required_views(ANTERIOR_TASK):
+        assert "positions of gaze" not in view.wanted_description.lower()
+
+
+def test_a_named_investigation_keeps_its_own_modality_on_a_motility_task() -> None:
+    """Nine positions of gaze on an MRI would find nothing."""
+    task = {
+        "text": "Examine the ocular motility and describe the findings.",
+        "rubric": [
+            {"text": "Identifies a right sixth nerve palsy"},
+            {"text": "The MRI shows a right cavernous sinus mass"},
+        ],
+    }
+    by_modality = {v.modality: v.wanted_description for v in required_views(task)}
+    assert "positions of gaze" in by_modality[None].lower()
+    assert "positions of gaze" not in by_modality["radiology"].lower()
+
+
 # --- Questions worth asking -----------------------------------------------
 # A station that found no image states its findings instead. Opening by asking
 # the candidate to describe what they see then tests nothing - they have just

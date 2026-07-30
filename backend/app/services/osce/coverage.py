@@ -17,9 +17,11 @@ import re
 from dataclasses import dataclass
 
 from app.services.imagesearch.relevance import (
+    GAZE_PHRASE,
     MODALITY_PHRASES,
     expected_modalities,
     named_modality,
+    wants_gaze_positions,
 )
 
 # Laterality as the rubric writes it. "Both eyes" is deliberately absent: a
@@ -85,12 +87,15 @@ class View:
     # The examination this view is, when the rubric named one. A view that
     # knows it is an OCT is searched for and verified as an OCT.
     modality: str | None = None
+    # Whether the deficit only shows in the difference between gaze positions,
+    # in which case the view is a montage rather than a single photograph.
+    gaze: bool = False
 
     @property
     def wanted_description(self) -> str:
         """What to search for and verify against, in one phrase."""
         signs = "; ".join(_strip_instruction(p) for p in self.points)
-        phrase = MODALITY_PHRASES.get(self.modality or "", "")
+        phrase = GAZE_PHRASE if self.gaze else MODALITY_PHRASES.get(self.modality or "", "")
         described = f"{phrase} showing {signs}" if phrase else signs
         if self.laterality == "unspecified":
             return described
@@ -178,17 +183,27 @@ def required_views(prompt: dict, station_findings: str | None = None) -> list[Vi
 
     # Points that never named an eye belong with every eye that did, otherwise
     # a general sign becomes a view of its own and doubles the searching.
+    # The question is what decides: "examine the ocular motility of the right
+    # eye" says it once, and the rubric points beneath it are the individual
+    # muscles. A rubric point alone is not enough, and deliberately - an
+    # anterior segment station listing nystagmus among eight other signs wants a
+    # slit lamp photograph of the eight, not a montage. Only when most of the
+    # points are about movement is the task really a motility examination.
+    gaze = wants_gaze_positions(text) or (
+        sum(1 for p in points if wants_gaze_positions(p)) * 2 > len(points)
+    )
+
     shared = grouped.pop("unspecified", [])
     if not grouped:
-        return _by_modality("unspecified", shared)[:MAX_VIEWS]
+        return _by_modality("unspecified", shared, gaze)[:MAX_VIEWS]
 
     views: list[View] = []
     for laterality, own in sorted(grouped.items()):
-        views.extend(_by_modality(laterality, own + shared))
+        views.extend(_by_modality(laterality, own + shared, gaze))
     return views[:MAX_VIEWS]
 
 
-def _by_modality(laterality: str, points: list[str]) -> list[View]:
+def _by_modality(laterality: str, points: list[str], gaze: bool = False) -> list[View]:
     """Split one eye's points into the separate examinations they need.
 
     Grouping by eye alone was never enough. "The OCT shows intraretinal fluid"
@@ -215,7 +230,10 @@ def _by_modality(laterality: str, points: list[str]) -> list[View]:
         else:
             grouped.setdefault(modality, []).append(point)
 
-    views = [View(laterality, plain)] if plain else []
+    # Only the unnamed view becomes a montage. A point that named an OCT or an
+    # MRI wants that investigation whatever else the task examines - asking for
+    # nine positions of gaze on an OCT would find nothing.
+    views = [View(laterality, plain, gaze=gaze)] if plain else []
     views.extend(
         View(laterality, own, modality=modality)
         for modality, own in sorted(grouped.items())

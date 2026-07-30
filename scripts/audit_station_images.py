@@ -33,6 +33,10 @@ from sqlalchemy.orm import Session  # noqa: E402
 from app.models import OsceStation  # noqa: E402
 from app.services.imagesearch.relevance import is_non_visual_result  # noqa: E402
 from app.services.osce.coverage import station_views  # noqa: E402
+from app.services.osce.station_images import (  # noqa: E402
+    SETTLED_MATCH_CONFIDENCE,
+    wants_gaze_montage,
+)
 
 
 def url_from_env() -> str:
@@ -67,12 +71,19 @@ def faults_for(station: OsceStation) -> list[str]:
             if found:
                 missing = f": missing {found.group(1).strip()[:90]}"
             faults.append(f"{label} is representative only{missing}")
-        elif (figure.match_confidence or 1.0) < 0.78:
+        elif (figure.match_confidence or 1.0) < SETTLED_MATCH_CONFIDENCE:
             faults.append(
                 f"{label} scraped in at {figure.match_confidence:.0%} confidence"
             )
         if not figure.is_approved:
             faults.append(f"{label} is not approved, so nothing is shown for it")
+
+    opening = min(with_image, key=lambda f: f.position, default=None)
+    if opening is not None and wants_gaze_montage(station, opening):
+        faults.append(
+            f"figure {opening.position} was sourced as a single photograph, but the task "
+            f"examines ocular motility and needs the positions of gaze"
+        )
 
     # A sub-question that asks the candidate to read an investigation, with no
     # figure bound to it, is a question about an image that is not there.

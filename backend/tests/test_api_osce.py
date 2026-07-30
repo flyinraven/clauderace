@@ -579,3 +579,122 @@ def test_sourcing_with_no_body_still_does_everything_that_needs_it(client, db, a
     response = client.post("/api/osce/stations/source-images", headers=auth(admin))
     assert response.status_code == 202
     assert response.json()["station_count"] == 1
+
+
+def test_a_sweep_spends_only_on_what_is_missing_but_a_named_station_is_redone(
+    client, db, admin
+):
+    """Most of a batch is stations whose own image is fine.
+
+    They are in it because a question further down wants an MRI, and re-sourcing
+    the opening photograph costs a search and a vision call to arrive back where
+    it started. Naming a station is the opposite intent: redo it.
+    """
+    from app.models import Job, OsceStation
+
+    station = OsceStation(station_number=1, total_marks=20, source="past_paper",
+                          status="review", subspecialty="Glaucoma")
+    db.add(station)
+    db.commit()
+
+    sweep = client.post("/api/osce/stations/source-images", headers=auth(admin))
+    assert db.get(Job, sweep.json()["job_id"]).payload["only_missing"] is True
+
+    named = client.post(
+        "/api/osce/stations/source-images",
+        json={"station_ids": [station.id]},
+        headers=auth(admin),
+    )
+    assert db.get(Job, named.json()["job_id"]).payload["only_missing"] is False
+
+    forced = client.post(
+        "/api/osce/stations/source-images",
+        json={"only_missing": False},
+        headers=auth(admin),
+    )
+    assert db.get(Job, forced.json()["job_id"]).payload["only_missing"] is False
+
+
+def test_only_a_confident_approved_image_is_left_alone_by_a_sweep(db):
+    """The same test the audit applies, so the two cannot disagree."""
+    from app.models import Image, OsceFigure
+    from app.services.osce.station_images import opening_image_is_settled
+
+    station = make_station(db)
+    assert not opening_image_is_settled(station), "no figure at all"
+
+    image = Image(sha256="a" * 64, content_type="image/jpeg", data=b"jpeg",
+                  size_bytes=4, origin="web", source_url="https://example/x.jpg")
+    db.add(image)
+    db.flush()
+    figure = OsceFigure(station_id=station.id, position=0, image_id=image.id,
+                        is_approved=True, verification_status="faithful",
+                        match_confidence=0.9)
+    db.add(figure)
+    db.commit()
+    db.refresh(station)
+    assert opening_image_is_settled(station)
+
+    # A picture of the right disease and the wrong patient is worth one more
+    # search, and so is one that only scraped past the attachment gate.
+    figure.verification_status = "representative"
+    db.commit()
+    assert not opening_image_is_settled(station)
+
+    figure.verification_status = "faithful"
+    figure.match_confidence = 0.72
+    db.commit()
+    assert not opening_image_is_settled(station)
+
+    # An unapproved image shows the candidate nothing, so it is not settled.
+    figure.match_confidence = 0.9
+    figure.is_approved = False
+    db.commit()
+    assert not opening_image_is_settled(station)
+
+    # Sourced before the tier was named, or before the score was recorded.
+    figure.is_approved = True
+    figure.verification_status = "verified"
+    figure.match_confidence = None
+    db.commit()
+    assert opening_image_is_settled(station)
+
+
+def test_a_motility_station_is_re_sourced_however_good_its_single_photograph(db):
+    """One primary-position photograph passes every other test and still fails.
+
+    The station this comes from had a confident, approved, faithful frontal
+    photograph, and asked the candidate to examine the right eye's motility. A
+    sweep would have skipped it for ever.
+    """
+    from app.models import Image, OsceFigure
+    from app.services.imagesearch.relevance import GAZE_PHRASE
+    from app.services.osce.station_images import opening_image_is_settled
+
+    station = make_station(db, prompts=[{
+        "label": "A",
+        "text": "Please examine the ocular motility of the right eye.",
+        "seconds": 180,
+        "rubric": [
+            {"text": "Identify deficits in right MR, SR, IR."},
+            {"text": "Identify right LR deficit."},
+        ],
+    }])
+    image = Image(sha256="b" * 64, content_type="image/jpeg", data=b"jpeg",
+                  size_bytes=4, origin="web", source_url="https://example/y.jpg")
+    db.add(image)
+    db.flush()
+    figure = OsceFigure(station_id=station.id, position=0, image_id=image.id,
+                        is_approved=True, verification_status="faithful",
+                        match_confidence=0.95,
+                        wanted_description="external photograph of the right eye")
+    db.add(figure)
+    db.commit()
+    db.refresh(station)
+    assert not opening_image_is_settled(station)
+
+    # Once it has been sourced as a montage, it is settled like any other.
+    figure.wanted_description = f"{GAZE_PHRASE} showing right LR deficit"
+    db.commit()
+    db.refresh(station)
+    assert opening_image_is_settled(station)
