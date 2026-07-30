@@ -512,8 +512,8 @@ def test_a_question_gets_its_own_image_sourced_and_kept_off_the_opening(
     ).json()
     body = client.get(f"/api/osce/sittings/{sitting['id']}", headers=auth(student)).json()
     assert all(f["id"] != figure.id for f in body["station"]["figures"])
-    assert body["prompts"][1]["figure"]["id"] == figure.id
-    assert body["prompts"][0]["figure"] is None
+    assert [f["id"] for f in body["prompts"][1]["figures"]] == [figure.id]
+    assert body["prompts"][0]["figures"] == []
 
 
 def test_a_verification_call_never_sends_the_full_size_photograph(
@@ -779,3 +779,104 @@ def test_an_image_needs_a_token(client, db):
     db.add(image)
     db.commit()
     assert client.get(f"/api/images/{image.id}").status_code == 401
+
+
+def test_a_question_asking_for_two_investigations_gets_both(
+    client, db, admin, ai, run_jobs, monkeypatch, student
+):
+    """"The OCT and the fluorescein angiogram" is two images, not one.
+
+    Nine questions asked for two investigations in a single string. No image is
+    both, so searching the whole phrase returned nothing and the question went
+    on asking for something that was never going to arrive.
+    """
+    station = make_station(db)
+    station.prompts = [
+        {"label": "A", "step": 1, "text": "Please examine the fundus of both eyes.",
+         "seconds": 440, "rubric": [{"text": "Describes the signs", "marks": 18}]},
+        {"label": "B", "step": 3, "text": "What do these investigations show?",
+         "image_wanted": (
+             "OCT of the right macula showing a choroidal neovascular membrane and "
+             "fluorescein angiogram of both eyes showing multifocal choroiditis lesions "
+             "and leakage in the right eye"
+         ),
+         "seconds": 100, "rubric": [{"text": "Describes both", "marks": 2}]},
+    ]
+    _configure_image_search(db)
+    search = FakeSearch(["https://example.org/one.jpg", "https://example.org/two.jpg"])
+    photo = big_photo()
+    monkeypatch.setattr(
+        "app.services.osce.station_images.build_provider", lambda store: search
+    )
+    monkeypatch.setattr(
+        "app.services.osce.station_images.download_candidate",
+        lambda candidate: (photo, "image/jpeg", 2400, 1800),
+    )
+    db.commit()
+
+    client.post("/api/osce/stations/source-images", headers=auth(admin))
+    run_jobs()
+
+    db.expire_all()
+    station = db.query(OsceStation).filter_by(id=station.id).one()
+    prompt = station.prompts[1]
+    assert len(prompt["figure_ids"]) == 2, "one figure per investigation"
+    assert prompt["figure_id"] == prompt["figure_ids"][0], "the old binding still resolves"
+
+    wanted = [
+        db.query(OsceFigure).filter_by(id=i).one().wanted_description
+        for i in prompt["figure_ids"]
+    ]
+    assert any("OCT" in w for w in wanted)
+    assert any("angiogram" in w for w in wanted)
+    assert not any("OCT" in w and "angiogram" in w for w in wanted), (
+        "neither figure may still be asked for both"
+    )
+
+    # Both reach the candidate, at that question and nowhere else.
+    sitting = client.post(
+        "/api/osce/sittings", json={"station_id": station.id}, headers=auth(student)
+    ).json()
+    body = client.get(f"/api/osce/sittings/{sitting['id']}", headers=auth(student)).json()
+    assert len(body["prompts"][1]["figures"]) == 2
+    shown = {f["id"] for f in body["station"]["figures"]}
+    assert shown.isdisjoint(set(prompt["figure_ids"])), "not on screen from the start"
+
+
+def test_an_investigation_no_search_can_find_is_not_paid_for(
+    client, db, admin, ai, run_jobs, monkeypatch
+):
+    """A serology titre and a textbook diagram are not waiting on a better query.
+
+    The verifier rejects diagrams outright, and rightly - an illustration does
+    the candidate's describing for them. Left in the queue these were bought on
+    every run and reported as merely missing.
+    """
+    station = make_station(db)
+    station.prompts = [
+        {"label": "A", "step": 1, "text": "Please examine the anterior segment.",
+         "seconds": 440, "rubric": [{"text": "Describes the signs", "marks": 18}]},
+        {"label": "B", "step": 3, "text": "What does this show?",
+         "image_wanted": "QuantiFERON-TB Gold test result, showing a positive result.",
+         "seconds": 50, "rubric": [{"text": "Reads it", "marks": 1}]},
+        {"label": "C", "step": 4, "text": "Describe the operation.",
+         "image_wanted": "Diagram of a trabeculectomy showing the scleral flap and ostium.",
+         "seconds": 50, "rubric": [{"text": "Describes it", "marks": 1}]},
+    ]
+    _configure_image_search(db)
+    search = FakeSearch(["https://example.org/x.jpg"])
+    monkeypatch.setattr(
+        "app.services.osce.station_images.build_provider", lambda store: search
+    )
+    db.commit()
+
+    client.post("/api/osce/stations/source-images", headers=auth(admin))
+    run_jobs()
+
+    db.expire_all()
+    station = db.query(OsceStation).filter_by(id=station.id).one()
+    for prompt in station.prompts[1:]:
+        assert prompt.get("image_impossible"), "the reason must be recorded"
+        assert not prompt.get("figure_id"), "and nothing bought for it"
+    assert "result to be read" in station.prompts[1]["image_impossible"]
+    assert "diagram" in station.prompts[2]["image_impossible"]

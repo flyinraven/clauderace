@@ -309,7 +309,22 @@ def sittable_prompts(station) -> list[dict]:
 
 
 def _prompt_figure_ids(prompts: list[dict]) -> set[int]:
-    return {p.get("figure_id") for p in prompts if p.get("figure_id")}
+    """Every figure bound to a question, including the second and third.
+
+    A question asking for two investigations carries a list. Reading only
+    `figure_id` would treat the others as figures nobody claimed - which is the
+    test for "something is on screen from the start", so an angiogram bound to
+    question C would have looked like the station's opening image.
+    """
+    ids: set[int] = set()
+    for prompt in prompts:
+        for key in ("figure_id", "figure_ids"):
+            value = prompt.get(key)
+            if isinstance(value, list):
+                ids.update(i for i in value if i)
+            elif value:
+                ids.add(value)
+    return ids
 
 
 def _refill_time(prompts: list[dict], total_seconds: int) -> list[dict]:

@@ -29,6 +29,8 @@ from app.services.imagesearch.base import ImageSearchError
 from app.services.imagesearch.relevance import (
     expected_modalities,
     modality_mismatch,
+    split_investigations,
+    unsourceable_reason,
     wants_gaze_positions,
 )
 from app.services.imagesearch.service import (
@@ -803,55 +805,79 @@ def source_prompt_images(
     goes and gets it, and the figure is bound to that question so it appears
     when the question does - showing it from the start would hand the candidate
     the diagnosis before they have described anything.
+
+    A question may ask for more than one: "OCT of the right macula showing CNVM
+    and fluorescein angiogram of both eyes showing multifocal choroiditis" is
+    two investigations, and no one image is both. Searching the whole string
+    returned nothing at all, so nine such questions kept asking for something
+    that was never going to arrive. Each investigation gets its own figure and
+    the question carries them all.
     """
     prompts = list(station.prompts or [])
-    attached, failed = 0, 0
+    attached, failed, skipped = 0, 0, 0
 
     for index, prompt in enumerate(prompts):
         wanted = prompt.get("image_wanted")
         if not wanted or prompt.get("figure_id"):
             continue
 
-        figure = OsceFigure(
-            station_id=station.id,
-            # After every figure the station already has: position 0 is the
-            # patient, and ordering keeps the opening image first.
-            position=len(station.figures) + 1,
-            wanted_description=wanted,
-        )
-        db.add(figure)
-        db.flush()
-
-        try:
-            outcome = source_image_for_station(db, client, station, job_id, figure=figure)
-        except ImageSearchError:
-            raise
-        except Exception as exc:  # noqa: BLE001 - one question must not stop the rest
-            db.rollback()
-            logger.exception("Could not source the image for prompt %s", prompt.get("label"))
-            log_error(db, source="osce_images", message=str(exc),
-                      context={"station_id": station.id, "prompt": prompt.get("label")})
-            failed += 1
+        # No search will ever fill a serology titre or a textbook diagram. Left
+        # in, they were paid for on every run and reported as merely missing.
+        impossible = unsourceable_reason(wanted)
+        if impossible:
+            prompt["image_impossible"] = impossible
+            skipped += 1
             continue
 
-        if outcome.get("attached"):
-            # Bound by id, so the sitting can show it at this question alone.
-            prompt["figure_id"] = figure.id
-            attached += 1
-        else:
-            # Nothing suitable was found. The question would ask the candidate
-            # to read a blank screen, so the figure is left for an admin to
-            # fill by hand and the question keeps its unmet request.
-            failed += 1
+        bound: list[int] = []
+        for part in split_investigations(wanted):
+            figure = OsceFigure(
+                station_id=station.id,
+                # After every figure the station already has: position 0 is the
+                # patient, and ordering keeps the opening image first.
+                position=len(station.figures) + len(bound) + 1,
+                wanted_description=part,
+            )
+            db.add(figure)
+            db.flush()
 
-    if attached:
+            try:
+                outcome = source_image_for_station(db, client, station, job_id, figure=figure)
+            except ImageSearchError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - one question must not stop the rest
+                db.rollback()
+                logger.exception("Could not source the image for prompt %s", prompt.get("label"))
+                log_error(db, source="osce_images", message=str(exc),
+                          context={"station_id": station.id, "prompt": prompt.get("label")})
+                failed += 1
+                continue
+
+            if outcome.get("attached"):
+                bound.append(figure.id)
+                attached += 1
+            else:
+                # Nothing suitable was found. The question would ask the
+                # candidate to read a blank screen, so the figure is left for an
+                # admin to fill by hand and the request stays on the question.
+                failed += 1
+
+        if bound:
+            # Bound by id, so the sitting shows these at this question alone.
+            # `figure_id` stays the first of them: it is what every reader of a
+            # station still expects, and a question with one investigation - the
+            # common case - is unchanged by any of this.
+            prompt["figure_id"] = bound[0]
+            prompt["figure_ids"] = bound
+
+    if attached or skipped:
         # Rebinding alone does not survive: the intermediate commit inside
         # image attachment leaves the column looking unchanged, and the
         # figure_id is quietly dropped. Flagging it dirty is what persists it.
         station.prompts = [dict(p) for p in prompts]
         flag_modified(station, "prompts")
     db.commit()
-    return {"attached": attached, "failed": failed}
+    return {"attached": attached, "failed": failed, "impossible": skipped}
 
 
 @register_handler(JOB_SOURCE_STATION_IMAGES)
@@ -897,10 +923,10 @@ def handle_source_station_images(ctx: JobContext) -> bool:
             # The questions may each need an image of their own on top of the
             # one the candidate opens on.
             for_prompts = source_prompt_images(ctx.db, client, station, job_id=ctx.job.id)
-            if for_prompts["attached"] or for_prompts["failed"]:
+            if any(for_prompts.values()):
                 tally = dict((ctx.job.result or {}).get("prompt_images", {}))
-                tally["attached"] = tally.get("attached", 0) + for_prompts["attached"]
-                tally["failed"] = tally.get("failed", 0) + for_prompts["failed"]
+                for key in ("attached", "failed", "impossible"):
+                    tally[key] = tally.get(key, 0) + for_prompts.get(key, 0)
                 ctx.set_result(prompt_images=tally)
         except ImageSearchError as exc:
             # Quota or credentials: every remaining station would fail too.

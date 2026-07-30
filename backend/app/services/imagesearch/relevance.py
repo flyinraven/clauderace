@@ -62,7 +62,9 @@ _REGION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 # Explicitly named modalities. These win over region wording: "OCT of the
 # macula" wants an OCT, not any posterior image.
 _MODALITY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("angiogram", re.compile(r"\bfluorescein\b|\bangiogra\w+\b|\bFFA\b|\bICG\b|\bFA\b")),
+    # ICGA, not just ICG: the A is part of the acronym, so a word boundary after
+    # "ICG" never matched it and one station's third investigation went unread.
+    ("angiogram", re.compile(r"\bfluorescein\b|\bangiogra\w+\b|\bFFA\b|\bICGA?\b|\bFA\b")),
     ("oct", re.compile(r"\bOCT\b|\boptical\s+coherence\b|\bOCT[- ]?A\b", re.IGNORECASE)),
     ("radiology", re.compile(r"\bCT\b|\bMRI\b|\bX[- ]?ray\b|\bradiograph\w*\b|\bscan\s+of\s+the\s+orbits?\b")),
     ("ultrasound", re.compile(r"\bultrasound\b|\bB[- ]?scan\b|\bA[- ]?scan\b|\bechograph\w+\b", re.IGNORECASE)),
@@ -70,7 +72,12 @@ _MODALITY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("topography", re.compile(r"\btopograph\w+\b|\btomograph\w+\b|\bPentacam\b|\bOrbscan\b", re.IGNORECASE)),
     ("pathology", re.compile(r"\bhistolog\w+\b|\bhistopatholog\w+\b|\bbiops\w+\b|\bcytolog\w+\b", re.IGNORECASE)),
     ("fundus", re.compile(r"\bfundus\s+(?:photograph|photo|image)\w*\b|\bretinal\s+photograph\w*\b|"
-                          r"\bwide[- ]?field\s+(?:photo|image)\w*\b", re.IGNORECASE)),
+                          r"\bwide[- ]?field\s+(?:photo|image)\w*\b|"
+                          # Autofluorescence is taken with a fundus camera and
+                          # is what the vision model calls it. Two stations ask
+                          # for FAF, and without this it named no modality at
+                          # all, so a compound request would not split on it.
+                          r"\bauto[- ]?fluorescence\b|\bFAF\b", re.IGNORECASE)),
     ("slit_lamp", re.compile(r"\bslit[- ]?lamp\s+(?:photograph|photo|image)\w*\b", re.IGNORECASE)),
     ("external", re.compile(r"\bexternal\s+(?:photograph|photo|image|eye)\w*\b|"
                             r"\bclinical\s+photograph\s+of\s+the\s+face\b|"
@@ -190,6 +197,78 @@ _NON_VISUAL_RESULT_RE = re.compile(
     r"\bMantoux\b|\bbiochemistr\w+\b",
     re.IGNORECASE,
 )
+
+
+# A request for a drawing rather than a record of a patient. The verifier
+# rejects diagrams outright and must keep doing so - an illustration does the
+# candidate's describing for them - so a question asking for one can never be
+# filled by searching, however many times it is tried. Station 111 asks for a
+# diagram of a trabeculectomy: scleral flap, ostium, conjunctival closure.
+_DRAWING_RE = re.compile(
+    r"\bdiagram\w*\b|\billustrat\w+\b|\bschematic\w*\b|\bcartoon\w*\b|"
+    r"\bdrawing\w*\b|\bflow[- ]?chart\b|\bgraph\s+of\b|\bannotated\s+sketch\b",
+    re.IGNORECASE,
+)
+
+
+def unsourceable_reason(text: str | None) -> str | None:
+    """Why no search can ever fill this request, or None if one might.
+
+    Kept separate from "the search failed". A question whose investigation is a
+    serology titre or a textbook diagram is not waiting on a better query - it
+    is waiting on an administrator to reword it, and reporting the two the same
+    way means paying for the impossible ones on every run.
+    """
+    if not text or not text.strip():
+        return None
+    if _NON_VISUAL_RESULT_RE.search(text):
+        return "a result to be read, not an image"
+    if _DRAWING_RE.search(text):
+        return "a diagram, which is rejected as it does the describing for them"
+    return None
+
+
+# Every way these requests were actually written: sentences, semicolons,
+# commas, and "and". Splitting on all of them over-splits wildly - "showing
+# fluid and haemorrhage" becomes two - which is what the merge below is for.
+_REQUEST_SPLIT_RE = re.compile(
+    r"(?<=[a-z0-9)])\.\s+(?=[A-Z(])|\s*;\s*|,?\s+and\s+|\s*,\s*"
+)
+
+
+def split_investigations(text: str | None) -> list[str]:
+    """One phrase per investigation the question asks the candidate to read.
+
+    Half of the unfilled requests name two: "OCT of the right macula showing
+    CNVM and fluorescein angiogram of both eyes showing multifocal choroiditis".
+    No one image is both, so searching the whole string returns nothing and the
+    question keeps asking for something that was never going to arrive.
+
+    Only splits where each side names an investigation of its own. "OCT showing
+    fluid and haemorrhage" is one image with two findings, and breaking it apart
+    would buy two pictures of the same scan.
+    """
+    whole = text.strip()
+    pieces = [p.strip(" .,;") for p in _REQUEST_SPLIT_RE.split(whole) if p and p.strip(" .,;")]
+
+    # A piece that names no investigation is a continuation of the one before
+    # it, not a request of its own: "...showing multifocal choroiditis lesions"
+    # + "leakage in the right eye" is one angiogram. Without this the trailing
+    # clause looked like an unidentifiable investigation and defeated the split
+    # on half the stations that needed it.
+    groups: list[str] = []
+    for piece in pieces:
+        if named_modality(piece) is None and groups:
+            groups[-1] = f"{groups[-1]}, {piece}"
+        else:
+            groups.append(piece)
+
+    # Two investigations, and genuinely different ones. One scan described at
+    # length must stay whole, or the station buys two pictures of it.
+    named = [named_modality(g) for g in groups]
+    if len(groups) < 2 or any(m is None for m in named) or len(set(named)) < 2:
+        return [whole]
+    return groups
 
 
 def named_modality(text: str | None) -> str | None:

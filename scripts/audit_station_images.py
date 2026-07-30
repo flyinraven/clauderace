@@ -31,7 +31,10 @@ from sqlalchemy import create_engine, select  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
 from app.models import OsceStation  # noqa: E402
-from app.services.imagesearch.relevance import is_non_visual_result  # noqa: E402
+from app.services.imagesearch.relevance import (  # noqa: E402
+    split_investigations,
+    unsourceable_reason,
+)
 from app.services.osce.coverage import station_views  # noqa: E402
 from app.services.osce.station_images import (  # noqa: E402
     SETTLED_MATCH_CONFIDENCE,
@@ -89,14 +92,24 @@ def faults_for(station: OsceStation) -> list[str]:
     # figure bound to it, is a question about an image that is not there.
     for prompt in station.prompts or []:
         wanted = str(prompt.get("image_wanted") or "").strip()
-        if wanted and not prompt.get("figure_id"):
-            if is_non_visual_result(wanted):
-                faults.append(
-                    f"question {prompt.get('label')} wants '{wanted[:40]}', which is a "
-                    f"result to be read, not an image"
-                )
-            else:
-                faults.append(f"question {prompt.get('label')} has no image for its investigation")
+        if not wanted or prompt.get("figure_id"):
+            continue
+        impossible = unsourceable_reason(wanted)
+        if impossible:
+            # Not a search that failed - a request no search can satisfy. It
+            # wants rewording as data the examiner states, and until it is,
+            # counting it with the others makes the backlog look bigger than
+            # the work actually is.
+            faults.append(
+                f"question {prompt.get('label')} wants '{wanted[:40]}', which is "
+                f"{impossible} - reword it rather than re-sourcing"
+            )
+        else:
+            wants = len(split_investigations(wanted))
+            faults.append(
+                f"question {prompt.get('label')} has no image for its investigation"
+                + (f" ({wants} investigations asked for)" if wants > 1 else "")
+            )
 
     return faults
 

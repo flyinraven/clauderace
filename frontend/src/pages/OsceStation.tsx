@@ -13,9 +13,11 @@ interface OscePrompt {
   text: string
   seconds: number
   marks: number
-  // The investigation this question asks you to read. Held back until the
-  // question is reached: on screen from the start it would answer itself.
-  figure: StationFigure | null
+  // The investigations this question asks you to read. Held back until the
+  // question is reached: on screen from the start they would answer themselves.
+  // Usually one, but "the OCT and the angiogram" is two, and no single image
+  // is both.
+  figures: StationFigure[]
   transcript: string | null
   transcript_edited: string | null
   transcription_status: string
@@ -521,10 +523,21 @@ export default function OsceStation() {
               </p>
             )}
 
-            {/* The examiner hands over the investigation as they ask about it. */}
-            {prompt.figure && (
-              <div className="mt-4 max-w-md">
-                <StationFigureView figure={prompt.figure} />
+            {/* The examiner hands the investigations over as they ask about
+                them. Side by side where there is room: an OCT read without its
+                angiogram is half the question. */}
+            {prompt.figures.length > 0 && (
+              <div
+                className={cx(
+                  'mt-4 gap-3',
+                  prompt.figures.length > 1
+                    ? 'grid max-w-3xl sm:grid-cols-2'
+                    : 'max-w-md',
+                )}
+              >
+                {prompt.figures.map((figure) => (
+                  <StationFigureView key={figure.id} figure={figure} />
+                ))}
               </div>
             )}
 

@@ -209,6 +209,21 @@ class SourceImagesRequest(BaseModel):
     only_missing: bool | None = None
 
 
+def _bound_figure_ids(prompt: dict[str, Any]) -> list[int]:
+    """The figures this question carries, in order, first one first.
+
+    A question asking for two investigations holds `figure_ids`; one asking for
+    a single image holds only `figure_id`, which is every station written before
+    the list existed. `figure_id` is kept as the first of the list, so reading
+    both and de-duplicating is what covers all of them.
+    """
+    ids = [i for i in (prompt.get("figure_ids") or []) if i]
+    first = prompt.get("figure_id")
+    if first and first not in ids:
+        ids.insert(0, first)
+    return ids
+
+
 @router.post("/stations/source-images", status_code=status.HTTP_202_ACCEPTED)
 def source_images(
     admin: AdminUser, db: DbSession, payload: SourceImagesRequest | None = None
@@ -393,8 +408,16 @@ def delete_figure(figure_id: int, admin: AdminUser, db: DbSession) -> None:
         prompts = [dict(p) for p in station.prompts]
         changed = False
         for prompt in prompts:
-            if prompt.get("figure_id") == figure.id:
+            # A question asking for two investigations holds a list, and losing
+            # one of them must not unbind the other.
+            remaining = [i for i in _bound_figure_ids(prompt) if i != figure.id]
+            if remaining != _bound_figure_ids(prompt):
                 prompt.pop("figure_id", None)
+                prompt.pop("figure_ids", None)
+                if remaining:
+                    prompt["figure_id"] = remaining[0]
+                    if len(remaining) > 1:
+                        prompt["figure_ids"] = remaining
                 changed = True
         if changed:
             station.prompts = prompts
@@ -622,9 +645,15 @@ def preview_station(station_id: int, admin: AdminUser, db: DbSession) -> dict[st
                 "marks": sum(pt.get("marks", 0) for pt in (p.get("rubric") or [])),
                 "rubric": p.get("rubric") or [],
                 "figure_id": p.get("figure_id"),
+                # Every figure the question carries: two investigations in one
+                # question each get their own.
+                "figure_ids": _bound_figure_ids(p),
                 # Left set with no figure_id, this is a question asking for an
                 # image that could not be found - the thing to fix by hand.
                 "image_wanted": p.get("image_wanted"),
+                # ...unless no search could ever fill it, in which case this
+                # says why, and the request needs rewording rather than retrying.
+                "image_impossible": p.get("image_impossible"),
             }
             for i, p in enumerate(station.prompts or [])
         ],
@@ -667,35 +696,40 @@ def get_sitting(session_id: int, user: CurrentUser, db: DbSession) -> dict[str, 
     for index, prompt in enumerate(sittable_prompts(station)):
         label = prompt.get("label") or str(index)
         response = responses.get(label)
-        figure = by_id.get(prompt.get("figure_id"))
+        # A question may ask for two investigations - "the OCT and the
+        # angiogram" - and no one image is both, so each has its own figure and
+        # the question shows them together. `figure_ids` is the list;
+        # `figure_id` alone is the older single binding, still the common case.
+        shown = [
+            f for f in (by_id.get(i) for i in _bound_figure_ids(prompt))
+            if f
+            and (
+                (f.image_id and f.is_approved)
+                # A described view has no image to gate on: the examiner states
+                # the findings instead, and that must still reach the candidate
+                # or the question is unanswerable.
+                or (f.described_findings and f.described_findings_approved)
+            )
+        ]
         prompts.append(
             {
                 "label": label,
                 "index": index,
                 "text": prompt.get("text"),
                 "seconds": prompt.get("seconds"),
-                # The investigation this question asks them to read, shown only
+                # The investigations this question asks them to read, shown only
                 # once the question is reached.
-                "figure": (
+                "figures": [
                     {
-                        "id": figure.id,
-                        "image_id": figure.image_id,
-                        "caption": figure.caption,
+                        "id": f.id,
+                        "image_id": f.image_id,
+                        "caption": f.caption,
                         "described_findings": (
-                            figure.described_findings
-                            if figure.described_findings_approved else None
+                            f.described_findings if f.described_findings_approved else None
                         ),
                     }
-                    # A described view has no image to gate on: the examiner
-                    # states the findings instead, and that must still reach
-                    # the candidate or the question is unanswerable.
-                    if figure
-                    and (
-                        (figure.image_id and figure.is_approved)
-                        or (figure.described_findings and figure.described_findings_approved)
-                    )
-                    else None
-                ),
+                    for f in shown
+                ],
                 "marks": sum(pt.get("marks", 0) for pt in (prompt.get("rubric") or [])),
                 "transcript": response.transcript if response else None,
                 "transcript_edited": response.transcript_edited if response else None,
@@ -717,7 +751,7 @@ def get_sitting(session_id: int, user: CurrentUser, db: DbSession) -> dict[str, 
     # screen from the start answers the question before it is asked. It travels
     # with its own prompt instead, and appears when that prompt does.
     prompt_figure_ids = {
-        p.get("figure_id") for p in (station.prompts or []) if p.get("figure_id")
+        i for p in (station.prompts or []) for i in _bound_figure_ids(p)
     }
     figures = [
         {
