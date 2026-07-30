@@ -698,3 +698,49 @@ def test_a_motility_station_is_re_sourced_however_good_its_single_photograph(db)
     db.commit()
     db.refresh(station)
     assert opening_image_is_settled(station)
+
+
+def test_a_montage_already_found_is_not_paid_for_twice(db):
+    """Five of the fourteen stations first flagged already had a nine-panel series.
+
+    The searcher stumbled into them before the requirement was named, so nothing
+    in the recorded wanted_description says so. What does is the description the
+    vision model wrote when it attached the image, and reading it is free.
+    """
+    from app.models import Image, OsceFigure
+    from app.services.osce.station_images import wants_gaze_montage
+
+    station = make_station(db, prompts=[{
+        "label": "A",
+        "text": "Examine the ocular motility and describe the findings.",
+        "seconds": 180,
+        "rubric": [{"text": "Identifies limitation of elevation of the right eye"}],
+    }])
+    image = Image(sha256="c" * 64, content_type="image/jpeg", data=b"jpeg",
+                  size_bytes=4, origin="web", source_url="https://example/z.jpg")
+    db.add(image)
+    db.flush()
+    figure = OsceFigure(
+        station_id=station.id, position=0, image_id=image.id, is_approved=True,
+        verification_status="faithful", match_confidence=0.9,
+        wanted_description="Marked limitation of elevation of the right eye",
+        verification_notes="A nine-panel montage of the eyes in different gaze positions.",
+        caption="External photographs of the eyes in nine positions of gaze.",
+    )
+    db.add(figure)
+    db.commit()
+    db.refresh(station)
+    assert not wants_gaze_montage(station, figure)
+
+    # Panels of something else are not positions of gaze.
+    figure.verification_notes = "A multi-panel photograph of a child's eyes without and with glasses."
+    figure.caption = "External photograph of a child's eyes, without and with glasses."
+    db.commit()
+    assert wants_gaze_montage(station, figure)
+
+    # And one photograph that merely says which position it is in is the very
+    # thing being caught.
+    figure.verification_notes = "A frontal photograph of the eyes in primary gaze."
+    figure.caption = "Frontal photograph of the face in primary position"
+    db.commit()
+    assert wants_gaze_montage(station, figure)

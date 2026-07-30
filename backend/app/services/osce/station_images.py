@@ -897,6 +897,22 @@ def handle_source_station_images(ctx: JobContext) -> bool:
     return index + 1 >= len(station_ids)
 
 
+# More than one picture of the eyes, as the vision model reports it. Both of
+# these must match: a "multi-panel photograph, without and with glasses" is a
+# montage of nothing to do with movement, and one photograph "in primary gaze"
+# is the single position the whole check exists to catch.
+_MONTAGE_RE = re.compile(
+    r"\bmontage\b|\bmulti[- ]panel\b|\bnine[- ](?:panel|gaze)\b|\bpanels\b|"
+    r"\b(?:series|serial|several|multiple|composite)\b.{0,40}\bphotograph",
+    re.IGNORECASE,
+)
+_GAZE_POSITION_RE = re.compile(
+    r"\bgaze\b|\bpositions?\s+of\s+gaze\b|\bup[- ]?gaze\b|\bdown[- ]?gaze\b|"
+    r"\bpositions?\s+of\s+(?:the\s+)?eyes?\b|\bductions?\b|\bversions?\b",
+    re.IGNORECASE,
+)
+
+
 def wants_gaze_montage(station: OsceStation, figure: OsceFigure) -> bool:
     """Whether this figure was sourced without knowing it needed gaze positions.
 
@@ -905,14 +921,20 @@ def wants_gaze_montage(station: OsceStation, figure: OsceFigure) -> bool:
     right pathology, high confidence - and still cannot be described. The
     deficit only exists across the positions of gaze.
 
-    Detected from what the figure was asked for rather than from the image,
-    since nothing stored says how many panels it has: a figure whose recorded
-    requirement predates `GAZE_PHRASE` was searched for as one photograph.
+    A figure asked for the montage by name needs nothing. Neither does one that
+    already found a montage before this existed - of the fourteen stations first
+    flagged, five had a nine-panel series the searcher had stumbled into, and
+    re-sourcing those would have paid to replace a perfect image. What says so is
+    the description the vision model wrote when it attached it, which is free to
+    read and is the only record of how many panels the image has.
     """
     views = station_views(station)
     if not views or not views[0].gaze:
         return False
-    return GAZE_PHRASE.lower() not in (figure.wanted_description or "").lower()
+    if GAZE_PHRASE.lower() in (figure.wanted_description or "").lower():
+        return False
+    described = f"{figure.verification_notes or ''} {figure.caption or ''}"
+    return not (_MONTAGE_RE.search(described) and _GAZE_POSITION_RE.search(described))
 
 
 def opening_image_is_settled(station: OsceStation) -> bool:
