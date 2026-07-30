@@ -202,6 +202,11 @@ class SourceImagesRequest(BaseModel):
 
     station_ids: list[int] | None = None
     limit: int | None = Field(default=None, ge=1, le=200)
+    # Leave a station's own image alone when it is already a confident, approved
+    # match, and spend only on the views and questions still without one.
+    # Unset, it follows the intent: a sweep of the whole bank spends only on
+    # what is missing, whereas naming a station is asking for it to be redone.
+    only_missing: bool | None = None
 
 
 @router.post("/stations/source-images", status_code=status.HTTP_202_ACCEPTED)
@@ -215,12 +220,17 @@ def source_images(
         ids = ids[: payload.limit]
     if not ids:
         raise HTTPException(status_code=400, detail="Every station already has a verified image")
+    only_missing = (
+        payload.only_missing if payload.only_missing is not None
+        else payload.station_ids is None
+    )
     job = create_job(
-        db, JOB_SOURCE_STATION_IMAGES, payload={"station_ids": ids},
+        db, JOB_SOURCE_STATION_IMAGES,
+        payload={"station_ids": ids, "only_missing": only_missing},
         created_by_id=admin.id, total_steps=len(ids),
         message=f"Sourcing images for {len(ids)} station(s)",
     )
-    return {"job_id": job.id, "station_count": len(ids)}
+    return {"job_id": job.id, "station_count": len(ids), "only_missing": only_missing}
 
 
 class StationFigureOut(BaseModel):

@@ -22,6 +22,7 @@ from app.services.osce.prompts import (
 from app.services.osce.station_images import (
     JOB_SOURCE_STATION_IMAGES,
     handle_source_station_images,
+    opening_image_is_settled,
     source_image_for_station,
     stations_needing_images,
 )
@@ -51,6 +52,7 @@ __all__ = [
     "handle_build_osce_prompts",
     "handle_grade_osce_session",
     "handle_transcribe_response",
+    "opening_image_is_settled",
     "stations_needing_prompts",
     "summarise_osce_session",
     "transcribe_audio",

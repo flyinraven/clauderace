@@ -334,43 +334,6 @@ function FigureCard({
             </div>
           </dl>
 
-          {/* Written by a model and clinically wrong often enough that it must
-              be read before a candidate is examined on it. The first live run
-              produced horizontal motility findings for a station about
-              elevation, and a cover test with no movement for a squint. */}
-          {figure.described_findings && (
-            <div
-              className={cx(
-                'mt-3 rounded-lg border p-3',
-                figure.described_findings_approved
-                  ? 'border-green-200 bg-green-50'
-                  : 'border-amber-300 bg-amber-50',
-              )}
-            >
-              <p className="text-xs font-semibold text-slate-700">
-                {figure.described_findings_approved
-                  ? 'Stated to the candidate'
-                  : 'Proposed wording — not shown to anyone yet'}
-              </p>
-              <p className="mt-1 text-sm text-slate-800">{figure.described_findings}</p>
-              <p className="mt-2 text-xs text-slate-600">
-                Read this against the station's own findings before releasing it. A wrong
-                sentence here is a mark the candidate cannot earn.
-              </p>
-              <div className="mt-2 flex gap-1.5">
-                {figure.described_findings_approved ? (
-                  <Button variant="secondary" size="sm" onClick={onWithdrawDescription}>
-                    Withdraw it
-                  </Button>
-                ) : (
-                  <Button size="sm" onClick={onApproveDescription}>
-                    Use this wording
-                  </Button>
-                )}
-              </div>
-            </div>
-          )}
-
           <div className="mt-4 flex flex-wrap gap-2">
             <Button size="sm" onClick={onRejectAndReplace}>
               Reject &amp; find another
@@ -427,6 +390,46 @@ function FigureCard({
             </Button>
           </div>
         </>
+      )}
+
+      {/* Written by a model and clinically wrong often enough that it must
+          be read before a candidate is examined on it. The first live run
+          produced horizontal motility findings for a station about elevation,
+          and a cover test with no movement for a squint.
+
+          Outside the image branch on purpose: a figure that found no image is
+          exactly the one whose stated findings are all the candidate gets. */}
+      {figure.described_findings && (
+        <div
+          className={cx(
+            'mt-3 rounded-lg border p-3',
+            figure.described_findings_approved
+              ? 'border-green-200 bg-green-50'
+              : 'border-amber-300 bg-amber-50',
+          )}
+        >
+          <p className="text-xs font-semibold text-slate-700">
+            {figure.described_findings_approved
+              ? 'Stated to the candidate'
+              : 'Proposed wording — not shown to anyone yet'}
+          </p>
+          <p className="mt-1 text-sm text-slate-800">{figure.described_findings}</p>
+          <p className="mt-2 text-xs text-slate-600">
+            Read this against the station's own findings before releasing it. A wrong
+            sentence here is a mark the candidate cannot earn.
+          </p>
+          <div className="mt-2 flex gap-1.5">
+            {figure.described_findings_approved ? (
+              <Button variant="secondary" size="sm" onClick={onWithdrawDescription}>
+                Withdraw it
+              </Button>
+            ) : (
+              <Button size="sm" onClick={onApproveDescription}>
+                Use this wording
+              </Button>
+            )}
+          </div>
+        </div>
       )}
 
       {zoomed && url && (
