@@ -182,6 +182,26 @@ export default function Osce() {
     }
   }
 
+  /** Remove a circuit from the list. The sittings it ran are kept: a circuit
+      is a plan for a day, not the record of the work done in it. */
+  const removeCircuit = async (circuit: Circuit) => {
+    if (
+      !confirm(
+        `Delete "${circuit.title}"?
+
+The circuit goes; the stations you sat in it keep their answers and marks.`,
+      )
+    ) {
+      return
+    }
+    try {
+      await api(`/osce/circuits/${circuit.id}`, { method: 'DELETE' })
+      load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not delete the circuit')
+    }
+  }
+
   /** Delete a station outright — for one that ingested badly. */
   const removeStation = async (station: Station) => {
     const label = station.title ?? `Station ${station.station_number ?? station.id}`
@@ -431,13 +451,22 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
                       ` · ${circuit.progress.total_awarded}/${circuit.progress.total_available} marks (${circuit.progress.percentage}%)`}
                   </p>
                 </div>
-                <ProgressBar
-                  value={
-                    circuit.progress.stations
-                      ? circuit.progress.completed / circuit.progress.stations
-                      : 0
-                  }
-                />
+                <div className="flex items-center gap-3">
+                  <ProgressBar
+                    value={
+                      circuit.progress.stations
+                        ? circuit.progress.completed / circuit.progress.stations
+                        : 0
+                    }
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => removeCircuit(circuit)}
+                  >
+                    Delete
+                  </Button>
+                </div>
               </li>
             ))}
           </ul>

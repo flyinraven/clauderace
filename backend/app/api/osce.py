@@ -487,6 +487,40 @@ def create_circuit(
     )
 
 
+@router.delete("/circuits/{circuit_id}", status_code=status.HTTP_200_OK)
+def delete_circuit(circuit_id: int, user: CurrentUser, db: DbSession) -> dict[str, Any]:
+    """Remove a circuit from the list, keeping every sitting it ran.
+
+    A circuit is a plan - nine stations chosen for one day - not a record of
+    work. Deleting it must not take the candidate's recorded answers and marks
+    with it, so its sittings are detached and survive as ordinary attempts at
+    those stations. The model would otherwise cascade them away, which is the
+    one outcome nobody would ask for when tidying a list.
+
+    Clearing the attempts as well is `DELETE /stations/{id}/attempts`, which
+    says what it does.
+    """
+    circuit = db.get(OsceCircuit, circuit_id)
+    if circuit is None:
+        raise HTTPException(status_code=404, detail="Circuit not found")
+    if circuit.user_id != user.id and user.role != ROLE_ADMIN:
+        raise HTTPException(status_code=403, detail="That circuit belongs to someone else")
+
+    sittings = db.execute(
+        select(OsceSession).where(OsceSession.circuit_id == circuit_id)
+    ).scalars().all()
+    for sitting in sittings:
+        sitting.circuit_id = None
+    # Detach before deleting: the relationship is delete-orphan, so a circuit
+    # deleted with its sittings still attached takes them, their transcripts
+    # and their marks with it.
+    db.flush()
+    circuit.sittings = []
+    db.delete(circuit)
+    db.commit()
+    return {"deleted": circuit_id, "sittings_kept": len(sittings)}
+
+
 # --- Sittings -------------------------------------------------------------
 class StartSittingRequest(BaseModel):
     station_id: int

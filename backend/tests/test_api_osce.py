@@ -753,3 +753,62 @@ def test_a_montage_already_found_is_not_paid_for_twice(db):
     figure.caption = "Frontal photograph of the face in primary position"
     db.commit()
     assert wants_gaze_montage(station, figure)
+
+
+def test_deleting_a_circuit_keeps_the_sittings_it_ran(client, db, student):
+    """A circuit is a plan for a day, not the record of the work done in it.
+
+    The relationship cascades delete-orphan, so deleting one with its sittings
+    attached would take every recorded answer and mark with it - which is not
+    what anyone tidying a list is asking for.
+    """
+    from app.models import OsceCircuit, OsceSession
+
+    station = make_station(db)
+    circuit = OsceCircuit(
+        user_id=student.id, title="Tuesday circuit", station_ids=[station.id],
+    )
+    db.add(circuit)
+    db.commit()
+    circuit_id = circuit.id
+
+    sitting_id = client.post(
+        "/api/osce/sittings",
+        json={"station_id": station.id, "circuit_id": circuit_id, "is_timed": True},
+        headers=auth(student),
+    ).json()["id"]
+
+    response = client.delete(f"/api/osce/circuits/{circuit_id}", headers=auth(student))
+    assert response.status_code == 200
+    assert response.json()["sittings_kept"] == 1
+
+    db.expire_all()
+    assert db.get(OsceCircuit, circuit_id) is None
+    kept = db.get(OsceSession, sitting_id)
+    assert kept is not None, "the attempt must survive"
+    assert kept.circuit_id is None
+    assert client.get("/api/osce/circuits", headers=auth(student)).json() == []
+
+
+def test_another_candidates_circuit_cannot_be_deleted(client, db, student, admin):
+    from app.constants import ROLE_STUDENT
+    from app.models import OsceCircuit
+    from tests.conftest import _make_user
+
+    station = make_station(db)
+    circuit = OsceCircuit(user_id=student.id, title="Mine", station_ids=[station.id])
+    db.add(circuit)
+    db.commit()
+
+    intruder = _make_user(db, "nosy@example.com", ROLE_STUDENT)
+    assert client.delete(
+        f"/api/osce/circuits/{circuit.id}", headers=auth(intruder)
+    ).status_code == 403
+    # An administrator may tidy anyone's.
+    assert client.delete(
+        f"/api/osce/circuits/{circuit.id}", headers=auth(admin)
+    ).status_code == 200
+
+
+def test_deleting_a_circuit_that_is_not_there_is_a_404(client, db, student):
+    assert client.delete("/api/osce/circuits/9999", headers=auth(student)).status_code == 404
