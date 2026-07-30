@@ -693,8 +693,17 @@ def test_a_motility_station_is_re_sourced_however_good_its_single_photograph(db)
     db.refresh(station)
     assert not opening_image_is_settled(station)
 
-    # Once it has been sourced as a montage, it is settled like any other.
+    # Asking for the montage is not the same as having one. This assertion used
+    # to be the other way round, keyed on wanted_description, and five stations
+    # still showing a single position went quiet the moment they had been
+    # searched - the re-source writes the phrase whatever it finds.
     figure.wanted_description = f"{GAZE_PHRASE} showing right LR deficit"
+    db.commit()
+    db.refresh(station)
+    assert not opening_image_is_settled(station)
+
+    # What settles it is a montage actually being there.
+    figure.verification_notes = "A nine-panel montage of the eyes in nine positions of gaze."
     db.commit()
     db.refresh(station)
     assert opening_image_is_settled(station)

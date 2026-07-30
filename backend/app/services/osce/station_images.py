@@ -27,7 +27,6 @@ from app.services.coerce import as_float
 from app.services.errors import log_error
 from app.services.imagesearch.base import ImageSearchError
 from app.services.imagesearch.relevance import (
-    GAZE_PHRASE,
     expected_modalities,
     modality_mismatch,
     wants_gaze_positions,
@@ -947,17 +946,23 @@ def wants_gaze_montage(station: OsceStation, figure: OsceFigure) -> bool:
     right pathology, high confidence - and still cannot be described. The
     deficit only exists across the positions of gaze.
 
-    A figure asked for the montage by name needs nothing. Neither does one that
-    already found a montage before this existed - of the fourteen stations first
-    flagged, five had a nine-panel series the searcher had stumbled into, and
-    re-sourcing those would have paid to replace a perfect image. What says so is
-    the description the vision model wrote when it attached it, which is free to
-    read and is the only record of how many panels the image has.
+    What answers it is the description the vision model wrote when the image was
+    attached, which is free to read and is the only stored record of how many
+    panels the image has. Of the fourteen stations first flagged, five already
+    had a nine-panel series the searcher had stumbled into, and re-sourcing those
+    would have paid to replace a perfect image.
+
+    Deliberately NOT read from `wanted_description`. Asking for the montage was
+    the first test written, and it answered the wrong question: after a
+    re-source the phrase is there whether or not a montage was found, so five
+    stations still showing one position went quiet the moment they had been
+    searched. What matters is the image, not the request.
+
+    An image with nothing recorded about it counts as needing one. That is the
+    figure sourced before any of this, which is exactly the case to look at.
     """
     views = station_views(station)
     if not views or not views[0].gaze:
-        return False
-    if GAZE_PHRASE.lower() in (figure.wanted_description or "").lower():
         return False
     described = f"{figure.verification_notes or ''} {figure.caption or ''}"
     return not (_MONTAGE_RE.search(described) and _GAZE_POSITION_RE.search(described))
