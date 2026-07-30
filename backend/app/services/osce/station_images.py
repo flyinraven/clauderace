@@ -30,6 +30,7 @@ from app.services.imagesearch.relevance import (
     GAZE_PHRASE,
     expected_modalities,
     modality_mismatch,
+    wants_gaze_positions,
 )
 from app.services.imagesearch.service import (
     attach_image_to_figure,
@@ -184,9 +185,29 @@ def build_search_queries(
             for q in (data.get("queries") if isinstance(data, dict) else data) or []
             if str(q).strip()
         ]
-        return queries or fallback
+        return _gaze_first(queries or fallback, signs, station)
     except (AIError, ValueError, AttributeError):
-        return fallback
+        return _gaze_first(fallback, signs, station)
+
+
+def _gaze_first(queries: list[str], signs: str, station: OsceStation) -> list[str]:
+    """Put the montage phrasing in front, for a station about eye movement.
+
+    Station 7 ran through all three of the model's phrasings and attached from
+    the broad one, "multiple cranial nerve palsies" - which had dropped the gaze
+    wording altogether and returned a face in primary position. The phrase a
+    montage is actually filed under is short, fixed and free to write, so it
+    does not need a model to guess it.
+    """
+    if not wants_gaze_positions(signs, station.diagnosis):
+        return queries
+    subject = station.diagnosis or station.subspecialty or "ocular motility"
+    lead = [
+        f"nine positions of gaze photograph {subject}",
+        f"ocular motility photographs {subject}",
+        "nine positions of gaze photograph montage",
+    ]
+    return lead + [q for q in queries if q not in lead]
 
 
 DESCRIBE_SYSTEM = """You are the examiner at an ophthalmology OSCE station. No photograph exists of

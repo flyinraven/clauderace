@@ -287,3 +287,33 @@ def test_grounding_reports_a_concern_rather_than_deciding() -> None:
     )
     assert problem, "the reviewer should still be told"
     assert "convergence" in problem
+
+
+def test_the_montage_phrasing_leads_the_search_for_a_motility_station() -> None:
+    """Station 7 attached from the broad phrase, which had dropped the gaze wording.
+
+    "multiple cranial nerve palsies" returned a face in primary position, and
+    the three phrasings the model wrote had all been tried first. The words a
+    montage is filed under are fixed and free to write.
+    """
+    from app.services.osce.station_images import _gaze_first
+
+    station = _DiagnosedStation("Right third nerve palsy from a carotid aneurysm")
+    station.subspecialty = "Neuro-ophthalmology"
+    queries = _gaze_first(
+        ["multiple cranial nerve palsies"],
+        "nine positions of gaze showing deficits in right MR, SR, IR",
+        station,
+    )
+    assert "nine positions of gaze" in queries[0]
+    assert queries[-1] == "multiple cranial nerve palsies", "the broad phrase is kept last"
+
+
+def test_a_station_about_nothing_moving_keeps_its_own_queries() -> None:
+    from app.services.osce.station_images import _gaze_first
+
+    station = _DiagnosedStation("Hypermature cataract")
+    station.subspecialty = "Cataract"
+    assert _gaze_first(["slit lamp photograph of a hypermature cataract"], "dense white lens", station) == [
+        "slit lamp photograph of a hypermature cataract"
+    ]
