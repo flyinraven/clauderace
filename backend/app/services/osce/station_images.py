@@ -25,7 +25,7 @@ from app.models import Image, OsceFigure, OsceStation
 from app.services.ai import AIClient, AIError, ImagePart, TextPart
 from app.services.coerce import as_float
 from app.services.errors import log_error
-from app.services.imagesearch.base import ImageSearchError
+from app.services.imagesearch.base import ImageQueryError, ImageSearchError
 from app.services.imagesearch.relevance import (
     expected_modalities,
     modality_mismatch,
@@ -586,6 +586,14 @@ def source_image_for_station(
         try:
             check_and_consume_quota(db, store)
             candidates = provider.search(query, per_query)
+        except ImageQueryError as exc:
+            # This phrase, not this account. Brave answered HTTP 500 to "nine
+            # positions of gaze photograph Congenital fibrosis of extraocular
+            # muscles." and both batches then running were failed outright,
+            # leaving 35 stations unsourced over one bad query.
+            logger.info("Search failed for %r: %s", query, exc)
+            rejections.append(f"search failed for '{query}': {exc}")
+            continue
         except ImageSearchError:
             raise
         if not candidates:

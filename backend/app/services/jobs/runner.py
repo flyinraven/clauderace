@@ -226,19 +226,27 @@ def _claim_next(db: Session) -> Job | None:
     now = datetime.now(timezone.utc)
     stale_before = now - timedelta(seconds=STALE_AFTER_SECONDS)
 
+    # Waiting work and abandoned work are one queue, taken oldest first. They
+    # used to be two, with pending checked before any reclaim, so a job the
+    # instance died in the middle of was overtaken by everything queued after
+    # it: station images stopped at 3 of 10, a 28-station batch queued later
+    # jumped ahead, and the first job would not have been touched again until
+    # that finished - or ever, had anything else been queued meanwhile.
+    #
+    # A job is reclaimed only once its heartbeat has gone quiet for
+    # STALE_AFTER_SECONDS, so this cannot steal one from a live worker.
     job = db.execute(
-        select(Job).where(Job.status == JOB_PENDING).order_by(Job.id).limit(1)
+        select(Job)
+        .where(
+            (Job.status == JOB_PENDING)
+            | (
+                (Job.status == JOB_RUNNING)
+                & ((Job.heartbeat_at.is_(None)) | (Job.heartbeat_at < stale_before))
+            )
+        )
+        .order_by(Job.id)
+        .limit(1)
     ).scalar_one_or_none()
-
-    if job is None:
-        # Reclaim jobs abandoned by a process restart.
-        job = db.execute(
-            select(Job)
-            .where(Job.status == JOB_RUNNING)
-            .where((Job.heartbeat_at.is_(None)) | (Job.heartbeat_at < stale_before))
-            .order_by(Job.id)
-            .limit(1)
-        ).scalar_one_or_none()
 
     if job is None:
         return None

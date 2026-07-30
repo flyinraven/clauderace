@@ -9,15 +9,41 @@ free, key-less fallback restricted to openly licensed material.
 from __future__ import annotations
 
 import logging
+import re
 
 import httpx
 
 from app.services.coerce import as_int
-from app.services.imagesearch.base import ImageCandidate, ImageSearchError
+from app.services.imagesearch.base import (
+    ImageCandidate,
+    ImageQueryError,
+    ImageSearchError,
+)
 
 logger = logging.getLogger(__name__)
 
 TIMEOUT_SECONDS = 20
+
+# Brave accepts 400 characters and 50 words. Long before either, a phrase built
+# from a station's whole diagnosis stops being a search and starts being a
+# sentence, and the results get worse rather than better.
+MAX_QUERY_CHARS = 160
+
+
+def tidy_query(query: str) -> str:
+    """What to actually send: no trailing full stop, no brackets, not too long.
+
+    Brave answered HTTP 500 to "nine positions of gaze photograph Congenital
+    fibrosis of extraocular muscles." - seventy-seven characters, and the only
+    thing unusual about it was the full stop the rubric ended on.
+    """
+    text = re.sub(r"[<>\[\]{}|\^~]", " ", query or "")
+    text = re.sub(r"\(.*?\)", ' ', text)
+    text = re.sub(r"\s+", " ", text).strip(" .,;:-")
+    if len(text) <= MAX_QUERY_CHARS:
+        return text
+    cut = text[:MAX_QUERY_CHARS].rsplit(" ", 1)[0]
+    return cut.strip(" .,;:-")
 
 
 class BraveImageSearch:
@@ -42,7 +68,7 @@ class BraveImageSearch:
             "X-Subscription-Token": self.api_key,
         }
         params = {
-            "q": query,
+            "q": tidy_query(query),
             "count": max(1, min(count, 50)),
             "safesearch": "strict",
         }
@@ -50,19 +76,26 @@ class BraveImageSearch:
             with httpx.Client(timeout=TIMEOUT_SECONDS) as client:
                 response = client.get(self.ENDPOINT, headers=headers, params=params)
         except httpx.HTTPError as exc:
-            raise ImageSearchError(f"Brave request failed: {exc}") from exc
+            # A dropped connection says nothing about the next phrase.
+            raise ImageQueryError(f"Brave request failed: {exc}") from exc
 
-        if response.status_code == 401:
-            raise ImageSearchError("Brave rejected the API key (401).")
-        if response.status_code == 429:
-            raise ImageSearchError("Brave rate limit or credit exhausted (429).")
+        # Only the account-level answers stop the run. Anything else is this
+        # query, and the next one deserves its turn.
+        if response.status_code in (401, 403):
+            raise ImageSearchError(f"Brave rejected the API key ({response.status_code}).")
+        if response.status_code in (402, 429):
+            raise ImageSearchError(
+                f"Brave rate limit or credit exhausted ({response.status_code})."
+            )
         if response.status_code >= 400:
-            raise ImageSearchError(f"Brave returned HTTP {response.status_code}: {response.text[:300]}")
+            raise ImageQueryError(
+                f"Brave returned HTTP {response.status_code}: {response.text[:300]}"
+            )
 
         try:
             payload = response.json()
         except ValueError as exc:
-            raise ImageSearchError("Brave returned a non-JSON response") from exc
+            raise ImageQueryError("Brave returned a non-JSON response") from exc
 
         candidates: list[ImageCandidate] = []
         for item in payload.get("results") or []:
@@ -110,15 +143,15 @@ class OpenverseImageSearch:
                     headers={"User-Agent": "RACE-Exam-Simulator/0.1 (education)"},
                 )
         except httpx.HTTPError as exc:
-            raise ImageSearchError(f"Openverse request failed: {exc}") from exc
+            raise ImageQueryError(f"Openverse request failed: {exc}") from exc
 
         if response.status_code >= 400:
-            raise ImageSearchError(f"Openverse returned HTTP {response.status_code}")
+            raise ImageQueryError(f"Openverse returned HTTP {response.status_code}")
 
         try:
             payload = response.json()
         except ValueError as exc:
-            raise ImageSearchError("Openverse returned a non-JSON response") from exc
+            raise ImageQueryError("Openverse returned a non-JSON response") from exc
 
         candidates: list[ImageCandidate] = []
         for item in payload.get("results") or []:
@@ -165,10 +198,12 @@ class SerpApiImageSearch:
             with httpx.Client(timeout=TIMEOUT_SECONDS) as client:
                 response = client.get(self.ENDPOINT, params=params)
         except httpx.HTTPError as exc:
-            raise ImageSearchError(f"SerpAPI request failed: {exc}") from exc
+            raise ImageQueryError(f"SerpAPI request failed: {exc}") from exc
 
         if response.status_code >= 400:
-            raise ImageSearchError(f"SerpAPI returned HTTP {response.status_code}: {response.text[:200]}")
+            raise ImageQueryError(
+                f"SerpAPI returned HTTP {response.status_code}: {response.text[:200]}"
+            )
 
         payload = response.json()
         if payload.get("error"):

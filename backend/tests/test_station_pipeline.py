@@ -12,7 +12,7 @@ import json
 
 from PIL import Image as PILImage
 
-from app.models import Image, OsceFigure, OsceStation, Setting
+from app.models import Image, Job, OsceFigure, OsceStation, Setting
 from app.services.ai.images import MAX_EDGE
 from tests.conftest import auth
 from tests.test_api_osce import make_station
@@ -880,3 +880,89 @@ def test_an_investigation_no_search_can_find_is_not_paid_for(
         assert not prompt.get("figure_id"), "and nothing bought for it"
     assert "result to be read" in station.prompts[1]["image_impossible"]
     assert "diagram" in station.prompts[2]["image_impossible"]
+
+
+def test_one_provider_error_does_not_abandon_the_whole_batch(
+    client, db, admin, ai, run_jobs, monkeypatch
+):
+    """Brave answered HTTP 500 to one phrase and 35 stations went unsourced.
+
+    A failure on a single query says nothing about the next query or the next
+    station. Only an account-level answer - a rejected key, an exhausted credit
+    - means every remaining search would fail the same way.
+    """
+    from app.services.imagesearch.base import ImageCandidate, ImageQueryError
+
+    first = make_station(db)
+    second = make_station(db, station_number=2)
+    _configure_image_search(db)
+    photo = big_photo()
+
+    class HalfBrokenSearch:
+        def __init__(self):
+            self.queries: list[str] = []
+
+        def search(self, query: str, count: int):
+            self.queries.append(query)
+            if len(self.queries) == 1:
+                raise ImageQueryError("Brave returned HTTP 500: {}")
+            return [
+                ImageCandidate(
+                    image_url="https://example.org/ok.jpg",
+                    page_url="https://example.org/ok",
+                    title="A clinical photograph", source="example.org",
+                )
+            ]
+
+    search = HalfBrokenSearch()
+    monkeypatch.setattr(
+        "app.services.osce.station_images.build_provider", lambda store: search
+    )
+    monkeypatch.setattr(
+        "app.services.osce.station_images.download_candidate",
+        lambda candidate: (photo, "image/jpeg", 2400, 1800),
+    )
+    db.commit()
+
+    response = client.post(
+        "/api/osce/stations/source-images",
+        json={"station_ids": [first.id, second.id], "only_missing": False},
+        headers=auth(admin),
+    )
+    run_jobs()
+
+    job = db.get(Job, response.json()["job_id"])
+    assert job.status == "completed", f"the batch must finish: {job.error}"
+    assert len(search.queries) > 1, "it must have gone on to the next query"
+
+    db.expire_all()
+    assert db.query(OsceFigure).filter(OsceFigure.image_id.is_not(None)).count() >= 1, (
+        "and the stations after the failing query still get their images"
+    )
+
+
+def test_an_exhausted_account_still_stops_the_run(
+    client, db, admin, ai, run_jobs, monkeypatch
+):
+    """The distinction has to cut both ways, or a dead key burns the whole bank."""
+    from app.services.imagesearch.base import ImageSearchError
+
+    station = make_station(db)
+    _configure_image_search(db)
+
+    class DeadAccount:
+        def search(self, query: str, count: int):
+            raise ImageSearchError("Brave rate limit or credit exhausted (429).")
+
+    monkeypatch.setattr(
+        "app.services.osce.station_images.build_provider", lambda store: DeadAccount()
+    )
+    db.commit()
+
+    response = client.post(
+        "/api/osce/stations/source-images",
+        json={"station_ids": [station.id], "only_missing": False},
+        headers=auth(admin),
+    )
+    run_jobs()
+    assert db.get(Job, response.json()["job_id"]).status == "failed"
