@@ -29,6 +29,7 @@ from app.services.ai import AIClient
 from app.services.coerce import as_float, as_int
 from app.services.errors import log_error
 from app.services.jobs.runner import JobContext, JobHandlerError, register_handler
+from app.services.osce.coverage import sittable_prompts
 from app.services.marking import (
     aggregate_by_key,
     clamp_award,
@@ -329,7 +330,11 @@ def handle_grade_osce_session(ctx: JobContext) -> bool:
     if station is None or not station.prompts:
         raise JobHandlerError("This station has no examiner prompts to mark against")
 
-    prompts = station.prompts
+    # The same questions the candidate was actually asked. A station with
+    # no image drops its opening "describe what you see", and marking it
+    # anyway would count a question nobody was asked as unanswered, which
+    # makes every such result "incomplete".
+    prompts = sittable_prompts(station)
     if not ctx.job.total_steps:
         ctx.set_total(len(prompts))
         session.grading_status = "running"
@@ -379,7 +384,7 @@ def handle_grade_osce_session(ctx: JobContext) -> bool:
 def summarise_osce_session(db: Session, session: OsceSession) -> OsceResult:
     """Average the two examiners and produce the station result."""
     station = db.get(OsceStation, session.station_id)
-    prompts = (station.prompts if station else None) or []
+    prompts = sittable_prompts(station) if station else []
     expected = {p.get("label") or str(i) for i, p in enumerate(prompts)}
 
     grades = db.execute(

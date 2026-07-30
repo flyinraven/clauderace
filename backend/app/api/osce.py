@@ -25,6 +25,7 @@ from app.models import (
     OsceStation,
 )
 from app.services.jobs.runner import create_job
+from app.services.osce.coverage import sittable_prompts
 from app.services.osce.circuit import (
     JOB_GRADE_OSCE,
     build_circuit,
@@ -650,7 +651,10 @@ def get_sitting(session_id: int, user: CurrentUser, db: DbSession) -> dict[str, 
 
     by_id = {f.id: f for f in station.figures}
     prompts = []
-    for index, prompt in enumerate(station.prompts or []):
+    # Not every question the station holds is one worth asking. A station
+    # that found no image states its findings instead, so opening with
+    # "describe what you see" tests nothing and spends a minute doing it.
+    for index, prompt in enumerate(sittable_prompts(station)):
         label = prompt.get("label") or str(index)
         response = responses.get(label)
         figure = by_id.get(prompt.get("figure_id"))

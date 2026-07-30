@@ -221,3 +221,100 @@ def test_the_instruction_strip_does_not_eat_the_word_it_is_stripping() -> None:
     wanted = required_views(task)[0].wanted_description
     assert "escribe" not in wanted, wanted
     assert wanted.lower().startswith("globe dystopia"), wanted
+
+
+# --- Questions worth asking -----------------------------------------------
+# A station that found no image states its findings instead. Opening by asking
+# the candidate to describe what they see then tests nothing - they have just
+# been told - and spends a minute of nine doing it.
+
+from app.services.osce.coverage import sittable_prompts  # noqa: E402
+
+
+class _Figure:
+    def __init__(
+        self,
+        fid: int,
+        image_id: int | None,
+        approved: bool = True,
+        described: str | None = "The left pupil is dilated compared with the right.",
+    ):
+        self.id = fid
+        self.image_id = image_id
+        self.is_approved = approved
+        # What the candidate reads instead of looking. Without it there is
+        # nothing to replace the examination with.
+        self.described_findings = described
+        self.described_findings_approved = described is not None
+
+
+class _StationWithFigures:
+    def __init__(self, prompts, figures):
+        self.prompts = prompts
+        self.figures = figures
+
+
+PROMPTS = [
+    {"label": "A", "text": "Please examine the pupils and describe what you see.",
+     "seconds": 180, "figure_id": 1},
+    {"label": "B", "text": "What is your differential diagnosis?", "seconds": 120},
+    {"label": "C", "text": "How would you investigate this patient?", "seconds": 120},
+    {"label": "D", "text": "How would you manage this patient?", "seconds": 120},
+]
+
+
+def test_the_opening_examination_is_dropped_when_nothing_is_shown() -> None:
+    kept = sittable_prompts(_StationWithFigures(PROMPTS, [_Figure(1, None)]))
+    assert [p["label"] for p in kept] == ["B", "C", "D"]
+
+
+def test_its_time_goes_back_to_the_questions_that_remain() -> None:
+    """The candidate is still entitled to the full nine minutes."""
+    station = _StationWithFigures(PROMPTS, [_Figure(1, None)])
+    kept = sittable_prompts(station)
+    assert sum(p["seconds"] for p in kept) == sum(p["seconds"] for p in PROMPTS)
+
+
+def test_a_station_with_an_image_keeps_its_examination() -> None:
+    kept = sittable_prompts(_StationWithFigures(PROMPTS, [_Figure(1, 99)]))
+    assert [p["label"] for p in kept] == ["A", "B", "C", "D"]
+    assert kept[0]["seconds"] == 180, "and its timing is untouched"
+
+
+def test_a_later_investigation_question_is_never_dropped() -> None:
+    """"What does this OCT show" carries its own image and is the point."""
+    prompts = [
+        {"label": "A", "text": "Please examine the disc and describe what you see.",
+         "seconds": 180, "figure_id": 1},
+        {"label": "B", "text": "What does this OCT show?", "seconds": 180, "figure_id": 2},
+        {"label": "C", "text": "How would you manage this?", "seconds": 180},
+    ]
+    station = _StationWithFigures(prompts, [_Figure(1, None), _Figure(2, 77)])
+    kept = sittable_prompts(station)
+    assert [p["label"] for p in kept] == ["B", "C"]
+
+
+def test_a_station_of_nothing_but_examination_is_left_whole() -> None:
+    """Dropping every question would leave no station at all."""
+    prompts = [
+        {"label": "A", "text": "Examine the eye and describe what you see.", "seconds": 270},
+        {"label": "B", "text": "Describe the findings in the other eye.", "seconds": 270},
+    ]
+    station = _StationWithFigures(prompts, [_Figure(1, None)])
+    assert [p["label"] for p in sittable_prompts(station)] == ["A", "B"]
+
+
+def test_a_station_with_neither_image_nor_statement_keeps_its_question() -> None:
+    """Nothing to look at and nothing to read is broken, not imageless.
+
+    Dropping the opening question there would leave the candidate with no
+    context at all, which is worse than a question they cannot answer.
+    """
+    station = _StationWithFigures(PROMPTS, [_Figure(1, None, described=None)])
+    assert [p["label"] for p in sittable_prompts(station)] == ["A", "B", "C", "D"]
+
+
+def test_a_station_with_no_figures_at_all_is_untouched() -> None:
+    assert [p["label"] for p in sittable_prompts(_StationWithFigures(PROMPTS, []))] == [
+        "A", "B", "C", "D"
+    ]

@@ -232,3 +232,77 @@ def station_views(station) -> list[View]:
             if len(views) >= MAX_VIEWS:
                 return views
     return views
+
+
+def sittable_prompts(station) -> list[dict]:
+    """The questions worth asking, given what the candidate can actually see.
+
+    A station that could find no image states its findings instead, and the
+    candidate reads them on entering. Opening by asking them to describe what
+    they see, or to perform an examination, then tests nothing: they have just
+    been told. It also spends a minute of a nine-minute station on a question
+    with no answer to give.
+
+    Those opening questions are dropped and their time returned to the ones
+    that remain, so the station still fills its nine minutes and still marks
+    out of what it actually asked.
+
+    Only leading questions, and only while nothing has been shown. A later
+    "what does this OCT show" carries its own image and is the whole point of
+    the station reaching it.
+    """
+    prompts = list(station.prompts or [])
+    if not prompts:
+        return prompts
+
+    figures = list(getattr(station, "figures", []) or [])
+    with_image = {f.id for f in figures if f.image_id and f.is_approved}
+
+    if any(f.id in with_image and f.id not in _prompt_figure_ids(prompts) for f in figures):
+        return prompts  # something is on screen from the start
+
+    # Only when the station has something for the candidate to read instead.
+    # A station with neither an image nor a statement is broken rather than
+    # imageless, and dropping its opening question would leave a candidate
+    # with no context at all - worse than a question they cannot answer.
+    if not any(
+        getattr(f, "described_findings", None)
+        and getattr(f, "described_findings_approved", False)
+        for f in figures
+    ):
+        return prompts
+
+    keep = list(prompts)
+    while keep:
+        first = keep[0]
+        if first.get("figure_id") in with_image:
+            break
+        if not _EXAMINE_RE.search(str(first.get("text") or "")):
+            break
+        keep.pop(0)
+
+    if not keep or len(keep) == len(prompts):
+        # Never leave a station with no questions at all: if every one of them
+        # was an examination, the station is unusable either way and is better
+        # left whole for an administrator to see.
+        return prompts
+
+    return _refill_time(keep, sum(int(p.get("seconds") or 0) for p in prompts))
+
+
+def _prompt_figure_ids(prompts: list[dict]) -> set[int]:
+    return {p.get("figure_id") for p in prompts if p.get("figure_id")}
+
+
+def _refill_time(prompts: list[dict], total_seconds: int) -> list[dict]:
+    """Give the dropped questions' time back to the ones that remain."""
+    kept = sum(int(p.get("seconds") or 0) for p in prompts)
+    if kept <= 0 or total_seconds <= 0:
+        return prompts
+    factor = total_seconds / kept
+    out = [dict(p) for p in prompts]
+    for prompt in out:
+        prompt["seconds"] = max(15, int(round(int(prompt.get("seconds") or 0) * factor)))
+    drift = total_seconds - sum(p["seconds"] for p in out)
+    out[-1]["seconds"] = max(15, out[-1]["seconds"] + drift)
+    return out
