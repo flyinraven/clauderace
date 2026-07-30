@@ -226,3 +226,42 @@ def test_signs_from_another_station_entirely_are_refused() -> None:
 
 def test_a_station_with_no_findings_cannot_be_described() -> None:
     assert grounding_problem("Anything at all.", _StationWithFindings(None), None)
+
+
+def test_anatomy_in_the_diagnosis_is_not_a_forbidden_word() -> None:
+    """The log line that explained why no description was ever produced.
+
+    Station 87's diagnosis is "Adie's pupil", so the guard treated "pupil" as
+    giving the answer away - and a dilated pupil with light-near dissociation
+    cannot be described without it. Every attempt was discarded. The same trap
+    sits under optic disc drusen, band keratopathy and macular hole.
+    """
+    station = _DiagnosedStation("Adie's pupil")
+    assert leaked_term(
+        "The left pupil is larger than the right and constricts poorly to light.",
+        station,
+    ) is None
+    assert leaked_term("This is an Adie's pupil.", station), "the name still leaks"
+
+
+def test_a_plain_rendering_of_the_findings_survives_both_checks() -> None:
+    """Together the guards must still let a good description through."""
+    class _Station:
+        diagnosis = "Adie's pupil"
+        case_summary = None
+        subspecialty = "Neuro-ophthalmology"
+        findings_elicited = (
+            "Examination reveals a left dilated pupil with light-near dissociation, "
+            "where the difference is greater in light than in dark. Eye movements "
+            "are normal, and there is no ptosis."
+        )
+        findings = None
+        id = 87
+
+    station = _Station()
+    text = (
+        "The left pupil is larger than the right. It constricts poorly to light "
+        "but briskly to a near target."
+    )
+    assert leaked_term(text, station) is None
+    assert grounding_problem(text, station, None) is None

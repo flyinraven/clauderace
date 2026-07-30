@@ -299,6 +299,10 @@ pupil pupils iris lens disc discs fundus macula retina orbit face
 poorly well fully partially freely easily readily barely equally briskly
 sluggishly incompletely symmetrically evenly clearly visibly obviously
 appears appear appeared seems looks looking towards along across between
+larger smaller equal unequal bigger reacts react reacting reaction reactive
+responds response constricts constrict constricting dilates dilate dilated
+brisk sluggish target fixation blink blinks closes closed opens open
+greater lesser difference size shape position movement excursion range
 """.split())
 
 # Words are matched on a shared opening, not by stripping suffixes. A suffix
@@ -351,6 +355,14 @@ def grounding_problem(
     if invented:
         return f"states {', '.join(invented[:4])}, which the findings do not"
 
+    # This check is a floor, not a guarantee. It cannot tell a faithful
+    # paraphrase from an invention, because both reach for words the findings
+    # do not contain: "the pupil is larger and constricts poorly" is a correct
+    # rendering of "a dilated pupil with light-near dissociation", and reads
+    # exactly like the invented "the upper lid is retracted". The generic list
+    # is what separates them, and it will always be incomplete. What actually
+    # protects a candidate is that no description is shown until it is read.
+    #
     # Requiring overlap with the findings' own distinctive words was tried and
     # removed. On the stations where it would matter most, the diagnosis IS the
     # physical sign - "bilateral lower lid ectropion" - so a description that
@@ -384,9 +396,16 @@ def leaked_term(text: str, station: OsceStation) -> str | None:
     # Only the diagnosis, not the case summary. The summary is prose full of
     # ordinary clinical vocabulary - checking it rejected "there is a defect in
     # the left half of each field" because the summary happened to say "field".
+    # Anatomy is not a giveaway. "Adie's pupil" made "pupil" a forbidden word,
+    # and a dilated pupil with light-near dissociation cannot be described
+    # without it - so the only possible description was discarded every time.
+    # The same trap sits under every diagnosis named after a structure: optic
+    # disc drusen, band keratopathy, macular hole. What gives the answer away
+    # is the distinctive part, "Adie".
+    innocuous = _DIAGNOSIS_STOPWORDS | _GENERIC_WORDS
     lowered = text.lower()
     for word in re.findall(r"[a-z][a-z'\-]{3,}", (station.diagnosis or "").lower()):
-        if word not in _DIAGNOSIS_STOPWORDS and word in lowered:
+        if word not in innocuous and word in lowered:
             return word
     return None
 
