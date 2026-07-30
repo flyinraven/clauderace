@@ -570,7 +570,8 @@ def source_image_for_station(
     queries = build_search_queries(db, client, station, wanted)
     per_query = store.get_int("imagesearch.results_per_query", 6)
     rejections: list[str] = []
-    best_representative: tuple[float, Any, Any, dict[str, Any]] | None = None
+    # confidence, candidate, downloaded, verdict, and the query that found it
+    best_representative: tuple[float, Any, Any, dict[str, Any], str] | None = None
 
     # Never offer back an image the user has already turned down.
     already_rejected = set(figure.rejected_urls or [])
@@ -629,7 +630,7 @@ def source_image_for_station(
 
             if tier == "representative" and confidence >= MIN_REPRESENTATIVE_CONFIDENCE:
                 if best_representative is None or confidence > best_representative[0]:
-                    best_representative = (confidence, candidate, downloaded, verdict)
+                    best_representative = (confidence, candidate, downloaded, verdict, query)
                 continue
 
             rejections.append(
@@ -637,9 +638,13 @@ def source_image_for_station(
             )
 
     if best_representative is not None:
-        confidence, candidate, downloaded, verdict = best_representative
+        confidence, candidate, downloaded, verdict, found_by = best_representative
+        # The query that found it, not whichever was tried last. Station 7's
+        # montage was recorded against "multiple cranial nerve palsies", the
+        # broad phrase that had already failed, which reads as though the gaze
+        # wording had made no difference when it was the whole reason.
         return _attach(db, client, station, figure, candidate, downloaded, verdict,
-                       "representative", confidence, figure.search_query or queries[0],
+                       "representative", confidence, found_by,
                        len(rejections), auto_approve)
 
     figure.image_id = None
