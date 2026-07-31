@@ -49,7 +49,10 @@ _EXAMINE_RE = re.compile(
 # Rubric points the candidate answers by talking, not by seeing. They must not
 # drive an image search, and they are not marks an image can unlock.
 _NON_VISUAL_RE = re.compile(
-    r"^\s*(?:asks?\b|enquir\w+\b|elicits?\b|states?\b|explains?\b|discusses?\b|"
+    # `discusses?` matched "discusse" and "discusses", never the imperative
+    # "Discuss the differential diagnosis" a rubric actually uses - which then
+    # became a view, and a search for a photograph of a differential.
+    r"^\s*(?:asks?\b|enquir\w+\b|elicits?\b|states?\b|explains?\b|discuss(?:es)?\b|"
     r"offers?\b|arranges?\b|orders?\b|considers?\b|manages?\b|counsels?\b|"
     # Reasoning about findings already in hand. "Correlates findings with the
     # given acuity and normal OCT report" is not something to be shown - it
@@ -61,7 +64,27 @@ _NON_VISUAL_RE = re.compile(
     # identifies are deliberately absent: those are usually about a sign.
     r"proposes?\b|suggests?\b|recommends?\b|lists?\b|outlines?\b|formulat\w+\b|"
     r"plans?\b|advises?\b|selects?\b|prescribes?\b|includes?\b|organis\w+\b|"
-    r"organiz\w+\b|excludes?\b|investigat\w+\b|requests?\b)",
+    r"organiz\w+\b|excludes?\b|investigat\w+\b|requests?\b|"
+    # How the candidate examines, not what they see. Station 156's rubric is
+    # four technique marks and two signs - "demonstrates a good approach",
+    # "performs cover test correctly", "uses an appropriate distance fixation
+    # target", "performs a purposeful 9 positions of gaze assessment" - and
+    # each became a view demanding an image, so one photograph was attached to
+    # the station three times over and shown three times to the candidate.
+    r"demonstrat\w+\b|performs?\b|uses?\b|utilis\w+\b|applies\b|conducts?\b|"
+    r"undertakes?\b|instructs?\b|maintains?\b|ensures?\b|adopts?\b|employs?\b)",
+    re.IGNORECASE,
+)
+
+# Naming the condition, wherever it sits in the sentence. The opening verb is
+# not enough: "Recognises and states the diagnosis of Bilateral Brown's
+# Syndrome" begins with a word that is deliberately treated as visual, and then
+# asked for a photograph of a diagnosis being stated.
+_NAMES_THE_DIAGNOSIS_RE = re.compile(
+    r"\b(?:states?|state|gives?|provides?|offers?|reaches?|makes?|recognis\w+|"
+    r"recogniz\w+|names?)\s+(?:a\s+|the\s+|their\s+)?(?:most\s+likely\s+|"
+    r"correct\s+|final\s+|working\s+|differential\s+)*diagnos\w+\b|"
+    r"\bdifferential\s+diagnos\w+\b",
     re.IGNORECASE,
 )
 
@@ -165,10 +188,13 @@ def required_views(prompt: dict, station_findings: str | None = None) -> list[Vi
 
     rubric = prompt.get("rubric") or []
     points = [
-        str(p.get("text") if isinstance(p, dict) else p).strip()
-        for p in rubric
-        if str(p.get("text") if isinstance(p, dict) else p).strip()
-        and not _NON_VISUAL_RE.match(str(p.get("text") if isinstance(p, dict) else p).strip())
+        text
+        for text in (
+            str(p.get("text") if isinstance(p, dict) else p).strip() for p in rubric
+        )
+        if text
+        and not _NON_VISUAL_RE.match(text)
+        and not _NAMES_THE_DIAGNOSIS_RE.search(text)
     ]
     if not points:
         return []

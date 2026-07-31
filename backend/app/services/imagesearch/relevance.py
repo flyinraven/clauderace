@@ -95,6 +95,8 @@ _MODALITY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 # from it, and every duction mark in the rubric is unearnable.
 _GAZE_RE = re.compile(
     r"\bmotilit\w+\b|\bduction\w*\b|\bversion\w*\b|\bgaze\b|\bsquint\w*\b|"
+    # How the task is most often worded: "examine the ocular movements".
+    r"\b(?:eye|ocular|extraocular)\s+movements?\b|"
     r"\bstrabismus\b|\beso[- ]?tropi\w+\b|\bexo[- ]?tropi\w+\b|\bhyper[- ]?tropi\w+\b|"
     r"\bhypo[- ]?tropi\w+\b|\bnystagmus\b|\bcover\s+test\b|\bdiplopia\b|"
     r"\bunder[- ]?action\w*\b|\bover[- ]?action\w*\b|\bover[- ]?elevation\b|"
