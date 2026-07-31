@@ -544,13 +544,19 @@ def source_image_for_station(
             station.findings_elicited or station.findings
         )
 
-        figure = db.execute(
-            select(OsceFigure)
-            .where(OsceFigure.station_id == station.id)
-            .order_by(OsceFigure.position)
-        ).scalars().first()
+        # The station's own figure, never a question's. Taking the lowest
+        # position outright overwrote question C's MRI on station 158 with the
+        # gaze montage this run had just found: the montage ended up attached
+        # to "what does this scan show?", and the motility task it was searched
+        # for still opened on nothing. A figure a question owns is that
+        # question's, and is filled by its own request.
+        figure = next((f for f in opening_figures(station)), None)
         if figure is None:
-            figure = OsceFigure(station_id=station.id, position=0, wanted_description=opening)
+            figure = OsceFigure(
+                station_id=station.id,
+                position=max((f.position for f in station.figures), default=-1) + 1,
+                wanted_description=opening,
+            )
             db.add(figure)
             db.flush()
         elif views and figure.wanted_description != opening:

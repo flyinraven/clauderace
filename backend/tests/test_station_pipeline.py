@@ -1203,3 +1203,57 @@ def test_an_upload_with_no_stations_queues_no_sourcing(db, admin):
     _queue_image_sourcing(JobContext(db=db, job=ingest), [])
     db.commit()
     assert db.query(Job).filter_by(job_type=JOB_SOURCE_STATION_IMAGES).count() == 0
+
+
+def test_sourcing_does_not_steal_the_figure_a_question_owns(
+    client, db, admin, ai, monkeypatch
+):
+    """Station 158's MRI was overwritten by the montage searched for its task A.
+
+    Question C asks "what does this scan show?" and owned the report's own MRI
+    at position 0. Sourcing took the lowest-position figure as the station's
+    opening one, so the gaze montage it found for "examine the patient's eye
+    movements" was written over that MRI: the montage ended up attached to the
+    scan question, and the motility task still opened on nothing.
+    """
+    from app.models import OsceFigure
+    from app.services.osce.station_images import source_image_for_station
+
+    station = make_station(db, prompts=[
+        {"label": "A", "text": "Please examine the patient's eye movements.",
+         "seconds": 270, "rubric": [{"text": "Identifies the gaze palsy", "marks": 10}]},
+        {"label": "C", "text": "What does this scan show?", "seconds": 90,
+         "image_wanted": "MRI of the brain showing white matter lesions",
+         "rubric": [{"text": "Reads the scan", "marks": 5}]},
+    ])
+    mri_image = Image(sha256="7" * 64, content_type="image/jpeg", data=big_photo(),
+                      size_bytes=100, origin="pdf")
+    db.add(mri_image)
+    db.flush()
+    owned = OsceFigure(station_id=station.id, position=0, image_id=mri_image.id,
+                       is_approved=True, verification_status="faithful",
+                       caption="Axial MRI of the brain")
+    db.add(owned)
+    db.flush()
+    station.prompts = [station.prompts[0], {**station.prompts[1], "figure_id": owned.id}]
+    db.commit()
+
+    _configure_image_search(db)
+    monkeypatch.setattr(
+        "app.services.osce.station_images.build_provider",
+        lambda store: FakeSearch(["https://example.org/gaze.jpg"]),
+    )
+    monkeypatch.setattr(
+        "app.services.osce.station_images.download_candidate",
+        lambda candidate: (big_photo(), "image/jpeg", 2400, 1800),
+    )
+    source_image_for_station(db, AIClient(db), station)
+
+    db.expire_all()
+    owned = db.query(OsceFigure).filter_by(id=owned.id).one()
+    assert owned.image_id == mri_image.id, "question C keeps its own scan"
+    assert owned.caption == "Axial MRI of the brain"
+
+    station = db.query(OsceStation).filter_by(id=station.id).one()
+    opening = [f for f in station.figures if f.id != owned.id and f.image_id]
+    assert opening, "and the examination task gets a figure of its own"
