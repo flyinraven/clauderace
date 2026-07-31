@@ -526,6 +526,48 @@ def _generic_problems(
     return problems
 
 
+# A question that hands something over: "These are the corneal topography and
+# biometry for both eyes." The candidate is being told to look at a thing, so
+# the thing has to exist.
+PRESENTS_INVESTIGATION_RE = re.compile(
+    r"\b(?:this is|these are|here is|here are|shown (?:here|below) (?:is|are))\b"
+    r"[^.?!]{0,80}?\b(?:OCT\b|OCT-A|MRI|CT\b|B-?scan|A-?scan|ultrasound|UBM|"
+    r"angiogra\w+|topograph\w+|tomograph\w+|biometry|specular|autofluorescence|"
+    r"FAF|ERG|visual\s+field|perimetry|Hess\s+chart|photograph|image|scan|"
+    r"printout|x-?ray|radiograph)",
+    re.IGNORECASE,
+)
+
+
+def _unshowable_questions(prompts: list[dict[str, Any]]) -> list[str]:
+    """Questions that present an investigation without ever asking for one.
+
+    The station's own instructions already forbid this - "never present a
+    result you have not either been given or asked for" - but nothing checked,
+    and a candidate reached "These are the corneal topography and biometry for
+    both eyes. What do they show?" with an empty screen.
+
+    This is the invariant the pipeline never had: a question the candidate is
+    asked must be answerable from what they can see. It is enforced here, at
+    the point the question is written, because that is the only place where
+    fixing it costs nothing - by the time the station is sat, the wording is
+    baked in and the marks have been apportioned to it.
+    """
+    problems: list[str] = []
+    for prompt in prompts:
+        text = str(prompt.get("text") or "")
+        if not PRESENTS_INVESTIGATION_RE.search(text):
+            continue
+        if str(prompt.get("image_wanted") or "").strip():
+            continue
+        problems.append(
+            f"question {prompt.get('label') or '?'} presents an investigation "
+            f"({text[:48]!r}) but gives no image_wanted, so the candidate would "
+            f"be asked to read a blank screen"
+        )
+    return problems
+
+
 def _arc_problems(
     prompts: list[dict[str, Any]],
     has_image: bool = True,
@@ -537,6 +579,7 @@ def _arc_problems(
     problems: list[str] = []
     steps = [p.get("step") for p in prompts]
     problems.extend(_generic_problems(prompts, vocabulary, aims))
+    problems.extend(_unshowable_questions(prompts))
 
     # Step 3 reads an ancillary image. The station need not already have one -
     # a question that asks for it says what it needs and the image is sourced -

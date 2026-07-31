@@ -61,6 +61,9 @@ def full_arc() -> list[dict]:
         {"label": "B", "step": 2, "text": "What other investigations would you perform?",
          "seconds": 60, "rubric": [{"text": "Names OCT", "marks": 2, "is_critical": False}]},
         {"label": "C", "step": 3, "text": "This is her OCT. What does it show?",
+         # Presenting an investigation obliges the station to have asked for
+         # one; without this the candidate reads a blank screen.
+         "image_wanted": "OCT of the right macula showing subretinal fluid",
          "seconds": 60, "rubric": [{"text": "Reads the OCT", "marks": 2, "is_critical": False}]},
         {"label": "D", "step": 4, "text": "Summarise and give me 4 differential diagnoses.",
          "seconds": 90, "rubric": [{"text": "Four differentials", "marks": 3, "is_critical": False}]},
@@ -1257,3 +1260,33 @@ def test_sourcing_does_not_steal_the_figure_a_question_owns(
     station = db.query(OsceStation).filter_by(id=station.id).one()
     opening = [f for f in station.figures if f.id != owned.id and f.image_id]
     assert opening, "and the examination task gets a figure of its own"
+
+
+def test_a_question_may_not_present_an_investigation_it_never_asked_for():
+    """The invariant the pipeline never had, enforced where it is free to fix.
+
+    A candidate reached "These are the corneal topography and biometry for both
+    eyes. What do they show?" with an empty screen: the question was written
+    presenting an investigation, and no request for one was ever recorded, so
+    nothing was sourced and nothing could be. By the time a station is sat the
+    wording is baked in and the marks apportioned to it - so it is caught at
+    the point the question is written.
+    """
+    from app.services.osce.prompts import _unshowable_questions
+
+    presents = [{
+        "label": "C", "step": 3,
+        "text": "These are the corneal topography and biometry for both eyes. What do they show?",
+    }]
+    assert _unshowable_questions(presents), "must be rejected"
+
+    presents[0]["image_wanted"] = "Corneal topography of both eyes showing inferior steepening"
+    assert _unshowable_questions(presents) == [], "asked for, so it will be there"
+
+    # A question about signs the candidate has already described is not
+    # presenting anything, and must not be dragged into this.
+    about_findings = [{
+        "label": "B", "step": 4,
+        "text": "What does this pattern of findings tell you about her disease?",
+    }]
+    assert _unshowable_questions(about_findings) == []
