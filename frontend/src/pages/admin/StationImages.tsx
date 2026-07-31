@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../api/client'
 import { useImage } from '../../hooks/useImage'
 import { useJob } from '../../hooks/useJob'
@@ -218,6 +218,7 @@ export default function StationImages() {
               onApproveDescription={() => setDescriptionApproved(figure, true)}
               onWithdrawDescription={() => setDescriptionApproved(figure, false)}
               onRejectAndReplace={() => reject(figure, true)}
+              onUploaded={load}
               onRejectOnly={() => reject(figure, false)}
               onAddAnother={() => addFigure(figure.station_id)}
               onRemove={() => removeFigure(figure)}
@@ -229,6 +230,52 @@ export default function StationImages() {
   )
 }
 
+/** Attach an image by hand, for an investigation no search can find.
+ *
+ * A Hess chart, a forced duction test being performed, an A-scan printout:
+ * some things are simply not on the open web, and until this existed a
+ * question wanting one could not be fixed by anybody. */
+function UploadImage({ figureId, onDone }: { figureId: number; onDone: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const [failed, setFailed] = useState<string | null>(null)
+  const input = useRef<HTMLInputElement>(null)
+
+  const send = async (file: File) => {
+    setBusy(true)
+    setFailed(null)
+    const form = new FormData()
+    form.append('image', file)
+    try {
+      await api(`/osce/figures/${figureId}/image`, { method: 'POST', body: form })
+      onDone()
+    } catch (err) {
+      setFailed(err instanceof Error ? err.message : 'That did not upload')
+    } finally {
+      setBusy(false)
+      if (input.current) input.current.value = ''
+    }
+  }
+
+  return (
+    <>
+      <input
+        ref={input}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          if (file) void send(file)
+        }}
+      />
+      <Button size="sm" variant="ghost" loading={busy} onClick={() => input.current?.click()}>
+        Upload an image
+      </Button>
+      {failed && <span className="text-xs text-red-700">{failed}</span>}
+    </>
+  )
+}
+
 function FigureCard({
   figure,
   station,
@@ -237,6 +284,7 @@ function FigureCard({
   onApproveDescription,
   onWithdrawDescription,
   onRejectAndReplace,
+  onUploaded,
   onRejectOnly,
   onAddAnother,
   onRemove,
@@ -248,6 +296,7 @@ function FigureCard({
   onApproveDescription: () => void
   onWithdrawDescription: () => void
   onRejectAndReplace: () => void
+  onUploaded: () => void
   onRejectOnly: () => void
   onAddAnother: () => void
   onRemove: () => void
@@ -335,6 +384,7 @@ function FigureCard({
           </dl>
 
           <div className="mt-4 flex flex-wrap gap-2">
+            <UploadImage figureId={figure.id} onDone={onUploaded} />
             <Button size="sm" onClick={onRejectAndReplace}>
               Reject &amp; find another
             </Button>
@@ -382,6 +432,7 @@ function FigureCard({
             </div>
           </dl>
           <div className="mt-4 flex flex-wrap gap-2">
+            <UploadImage figureId={figure.id} onDone={onUploaded} />
             <Button size="sm" variant="ghost" onClick={onAddAnother}>
               Describe what it needs
             </Button>

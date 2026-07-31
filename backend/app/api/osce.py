@@ -452,6 +452,82 @@ def detach_figure_image(figure_id: int, admin: AdminUser, db: DbSession) -> None
     db.commit()
 
 
+MAX_FIGURE_BYTES = 12 * 1024 * 1024
+
+
+@router.post("/figures/{figure_id}/image", status_code=status.HTTP_201_CREATED)
+async def upload_figure_image(
+    figure_id: int,
+    admin: AdminUser,
+    db: DbSession,
+    image: UploadFile = File(...),
+    caption: str | None = Form(default=None),
+) -> dict[str, Any]:
+    """Attach an image by hand, for a question no search can answer.
+
+    Some investigations are simply not on the open web: an orthoptic Hess
+    chart, a photograph of a forced duction test being performed, an A-scan
+    biometry printout. Until now the pipeline could detach a figure's image but
+    never attach one, so those questions had no way to be fixed at all - by
+    anyone. A search that comes back empty needs somewhere to hand over to.
+
+    A supplied image is trusted and shown at once. Nobody uploads a picture to
+    a station by accident, and the vision grader exists to catch what a web
+    search dragged in, not to second-guess the administrator who chose this
+    one.
+    """
+    figure = db.get(OsceFigure, figure_id)
+    if figure is None:
+        raise HTTPException(status_code=404, detail="Figure not found")
+
+    content_type = (image.content_type or "").lower()
+    if not content_type.startswith("image/"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"That is a {content_type or 'file of unknown type'}, not an image.",
+        )
+    data = await image.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="The file was empty")
+    if len(data) > MAX_FIGURE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"That image is {len(data) / 1e6:.1f} MB; the limit is "
+                   f"{MAX_FIGURE_BYTES // (1024 * 1024)} MB.",
+        )
+
+    digest = hashlib.sha256(data).hexdigest()
+    # The same picture may already be in the bank, attached to another station.
+    record = db.execute(select(Image).where(Image.sha256 == digest)).scalar_one_or_none()
+    if record is None:
+        record = Image(
+            sha256=digest, content_type=content_type, data=data,
+            size_bytes=len(data), origin="upload",
+        )
+        db.add(record)
+        db.flush()
+
+    figure.image_id = record.id
+    figure.verification_status = "supplied"
+    figure.is_approved = True
+    figure.match_confidence = 1.0
+    figure.verification_notes = f"Supplied by {admin.email}."
+    if caption and caption.strip():
+        figure.caption = caption.strip()
+    # A description written because no image could be found is now beside the
+    # point, and would be read out over the top of the picture.
+    figure.described_findings = None
+    figure.described_findings_approved = False
+    db.commit()
+
+    return {
+        "figure_id": figure.id,
+        "image_id": record.id,
+        "caption": figure.caption,
+        "size_bytes": len(data),
+    }
+
+
 # --- Circuits -------------------------------------------------------------
 class CircuitOut(BaseModel):
     id: int

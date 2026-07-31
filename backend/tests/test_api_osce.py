@@ -904,3 +904,63 @@ def test_generated_stations_have_their_images_sourced(db, admin):
     sourcing = db.query(Job).filter_by(job_type=JOB_SOURCE_STATION_IMAGES).one()
     assert sourcing.payload["station_ids"] == [30, 31]
     assert sourcing.payload["only_missing"] is True
+
+
+def test_an_image_can_be_supplied_by_hand_when_no_search_can_find_one(
+    client, db, admin
+):
+    """A Hess chart, a forced duction test, an A-scan printout.
+
+    Some investigations are not on the open web. The pipeline could detach a
+    figure's image but never attach one, so those questions could not be fixed
+    by anybody - a search that comes back empty had nowhere to hand over to.
+    """
+    import io
+
+    from app.models import Image, OsceFigure
+
+    station = make_station(db)
+    figure = OsceFigure(station_id=station.id, position=0,
+                        verification_status="rejected", is_approved=False,
+                        described_findings="The examiner states the findings.",
+                        described_findings_approved=True)
+    db.add(figure)
+    db.commit()
+
+    response = client.post(
+        f"/api/osce/figures/{figure.id}/image",
+        headers=auth(admin),
+        files={"image": ("hess.png", io.BytesIO(b"\x89PNG\r\n\x1a\n" + b"x" * 900), "image/png")},
+        data={"caption": "Orthoptic Hess chart, right eye"},
+    )
+    assert response.status_code == 201
+
+    db.expire_all()
+    figure = db.query(OsceFigure).filter_by(id=figure.id).one()
+    assert figure.image_id is not None
+    assert figure.is_approved is True, "a supplied image is trusted and shown"
+    assert figure.verification_status == "supplied"
+    assert figure.caption == "Orthoptic Hess chart, right eye"
+    # The stated findings were a substitute for the missing image; with the
+    # image there they would be read out over the top of it.
+    assert figure.described_findings is None
+    assert db.get(Image, figure.image_id).origin == "upload"
+
+
+def test_a_file_that_is_not_an_image_is_refused(client, db, admin):
+    import io
+
+    from app.models import OsceFigure
+
+    station = make_station(db)
+    figure = OsceFigure(station_id=station.id, position=0)
+    db.add(figure)
+    db.commit()
+
+    response = client.post(
+        f"/api/osce/figures/{figure.id}/image",
+        headers=auth(admin),
+        files={"image": ("notes.pdf", io.BytesIO(b"%PDF-1.4"), "application/pdf")},
+    )
+    assert response.status_code == 400
+    assert "not an image" in response.json()["detail"]
