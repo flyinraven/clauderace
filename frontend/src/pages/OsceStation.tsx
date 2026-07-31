@@ -35,6 +35,15 @@ interface StationFigure {
   position: number
 }
 
+interface CircuitNext {
+  circuit_id: number
+  position: number
+  stations: number
+  next_station_id: number | null
+  rest_seconds: number
+  finished: boolean
+}
+
 interface Sitting {
   id: number
   station: {
@@ -347,8 +356,25 @@ export default function OsceStation() {
       // Corrections go first and a failure stops the submission: marking a
       // transcript the candidate has just fixed is worse than not marking yet.
       for (const label of Object.keys(edits)) await saveEdit(label)
-      await api(`/osce/sittings/${sittingId}/submit`, { method: 'POST' })
-      navigate(`/osce/sittings/${sittingId}/result`)
+      const outcome = await api<{ circuit: CircuitNext | null }>(
+        `/osce/sittings/${sittingId}/submit`,
+        { method: 'POST' },
+      )
+      // A circuit carries straight on: rest, then the next station. The result
+      // is held until every station has been sat, which is what the day does -
+      // marking runs behind the candidate, not in front of them.
+      const circuit = outcome?.circuit
+      if (circuit?.next_station_id) {
+        navigate(
+          `/osce/circuits/${circuit.circuit_id}/rest?next=${circuit.next_station_id}` +
+            `&rest=${circuit.rest_seconds}&position=${circuit.position}` +
+            `&stations=${circuit.stations}`,
+        )
+      } else if (circuit?.finished) {
+        navigate(`/osce/circuits/${circuit.circuit_id}/result`)
+      } else {
+        navigate(`/osce/sittings/${sittingId}/result`)
+      }
     } catch (err) {
       // saveEdit has already said which answer failed and why.
       setError((prev) => prev ?? (err instanceof Error ? err.message : 'Submission failed'))
@@ -498,8 +524,11 @@ export default function OsceStation() {
             </p>
           </Card>
 
+          {/* "Question C of 5" mixed two countings and read as nonsense: the
+              label is the examiner's letter, the position is a number. One
+              scheme only - which question this is, out of how many. */}
           <Card
-            title={`Question ${prompt.label} of ${prompts.length}`}
+            title={`Question ${index + 1} of ${prompts.length}`}
             actions={<Badge tone="slate">{prompt.marks} marks</Badge>}
           >
             <div className="flex items-start gap-3">

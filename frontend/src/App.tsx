@@ -12,6 +12,8 @@ import SessionResult from './pages/SessionResult'
 import Osce from './pages/Osce'
 import OsceStation from './pages/OsceStation'
 import OsceResult from './pages/OsceResult'
+import OsceCircuitRest from './pages/OsceCircuitRest'
+import OsceCircuitResult from './pages/OsceCircuitResult'
 import Documents from './pages/admin/Documents'
 import Papers from './pages/admin/Papers'
 import StationImages from './pages/admin/StationImages'
@@ -38,6 +40,8 @@ export default function App() {
         <Route path="osce" element={<Osce />} />
         <Route path="osce/sittings/:id" element={<OsceStation />} />
         <Route path="osce/sittings/:id/result" element={<OsceResult />} />
+        <Route path="osce/circuits/:circuitId/rest" element={<OsceCircuitRest />} />
+        <Route path="osce/circuits/:circuitId/result" element={<OsceCircuitResult />} />
         <Route path="admin/documents" element={<AdminOnly><Documents /></AdminOnly>} />
         <Route path="admin/papers" element={<AdminOnly><Papers /></AdminOnly>} />
         <Route path="admin/station-images" element={<AdminOnly><StationImages /></AdminOnly>} />

@@ -978,7 +978,116 @@ def submit_sitting(session_id: int, user: CurrentUser, db: DbSession) -> dict[st
             db, JOB_GRADE_OSCE, payload={"session_id": sitting.id},
             created_by_id=user.id, message="Marking station",
         ).id
-    return {"submitted_at": sitting.submitted_at.isoformat(), "grading_job_id": job_id}
+    return {
+        "submitted_at": sitting.submitted_at.isoformat(),
+        "grading_job_id": job_id,
+        # Where the candidate goes next. A circuit is nine stations in one
+        # sitting of the mind: marking runs behind them and the result waits
+        # until the end, exactly as it does on the day.
+        "circuit": _circuit_next(db, sitting, user),
+    }
+
+
+REST_SECONDS = 120
+
+
+def _circuit_next(db: Session, sitting: OsceSession, user: CurrentUser) -> dict[str, Any] | None:
+    """The next station of this candidate's circuit, or None if there is none.
+
+    Returns the rest interval with it. Two minutes between stations is what the
+    real circuit gives, and a candidate who is ready sooner may start early -
+    so this is a suggestion the client counts down, not a lock.
+    """
+    if sitting.circuit_id is None:
+        return None
+    circuit = db.get(OsceCircuit, sitting.circuit_id)
+    if circuit is None:
+        return None
+
+    order: list[int] = list(circuit.station_ids or [])
+    sat = {
+        s.station_id
+        for s in db.execute(
+            select(OsceSession).where(
+                OsceSession.circuit_id == circuit.id,
+                OsceSession.user_id == user.id,
+                OsceSession.submitted_at.is_not(None),
+            )
+        ).scalars().all()
+    }
+    remaining = [sid for sid in order if sid not in sat]
+    return {
+        "circuit_id": circuit.id,
+        "title": circuit.title,
+        "position": len(order) - len(remaining),
+        "stations": len(order),
+        "next_station_id": remaining[0] if remaining else None,
+        "rest_seconds": REST_SECONDS,
+        "finished": not remaining,
+    }
+
+
+@router.get("/circuits/{circuit_id}/results")
+def circuit_results(circuit_id: int, user: CurrentUser, db: DbSession) -> dict[str, Any]:
+    """Every station's mark, once the whole circuit has been sat.
+
+    Held back deliberately. Seeing station 3's result before sitting station 4
+    is not how the day works, and it changes how the rest is answered.
+    """
+    circuit = db.get(OsceCircuit, circuit_id)
+    if circuit is None:
+        raise HTTPException(status_code=404, detail="Circuit not found")
+    if circuit.user_id != user.id and user.role != ROLE_ADMIN:
+        raise HTTPException(status_code=403, detail="That circuit belongs to someone else")
+
+    order: list[int] = list(circuit.station_ids or [])
+    sittings = {
+        s.station_id: s
+        for s in db.execute(
+            select(OsceSession).where(
+                OsceSession.circuit_id == circuit.id, OsceSession.user_id == user.id
+            )
+        ).scalars().all()
+    }
+    results = {
+        r.session_id: r
+        for r in db.execute(
+            select(OsceResult).where(
+                OsceResult.session_id.in_([s.id for s in sittings.values()] or [0])
+            )
+        ).scalars().all()
+    }
+
+    stations = []
+    for station_id in order:
+        station = db.get(OsceStation, station_id)
+        sitting = sittings.get(station_id)
+        result = results.get(sitting.id) if sitting else None
+        stations.append({
+            "station_id": station_id,
+            "sitting_id": sitting.id if sitting else None,
+            "title": (station.title if station else None)
+            or (f"Station {station.station_number}" if station and station.station_number else None),
+            "subspecialty": station.subspecialty if station else None,
+            "submitted": bool(sitting and sitting.submitted_at),
+            # "queued" and "running" both mean the marking has not landed yet;
+            # the summary says so rather than showing a zero.
+            "grading_status": sitting.grading_status if sitting else "not_sat",
+            "awarded": result.total_awarded if result else None,
+            "available": result.total_available if result else None,
+        })
+
+    marked = [s for s in stations if s["awarded"] is not None]
+    return {
+        "circuit_id": circuit.id,
+        "title": circuit.title,
+        "stations": stations,
+        "complete": all(s["submitted"] for s in stations) if stations else False,
+        "total_awarded": sum(s["awarded"] for s in marked) if marked else 0,
+        "total_available": sum(s["available"] for s in marked) if marked else 0,
+        "awaiting_marking": [s["station_id"] for s in stations
+                             if s["submitted"] and s["awarded"] is None],
+    }
 
 
 @router.post("/sittings/{session_id}/grade", status_code=status.HTTP_202_ACCEPTED)
