@@ -139,6 +139,7 @@ def _finalise(ctx: JobContext, source: SourceDocument, kind: str) -> bool:
         _queue_findings_split(ctx, result["station_ids"])
         _queue_prompt_build(ctx, result["station_ids"])
         _queue_figure_check(ctx, result["station_ids"])
+        _queue_image_sourcing(ctx, result["station_ids"])
     return True
 
 
@@ -205,6 +206,42 @@ def _queue_figure_check(ctx: JobContext, station_ids: list[int]) -> None:
         message=f"Checking the figures of {len(pending)} station(s)",
     )
     logger.info("Queued figure check job %s for %d station(s)", job.id, len(pending))
+
+
+def _queue_image_sourcing(ctx: JobContext, station_ids: list[int]) -> None:
+    """Find what each task asks the candidate to look at, for the ones without it.
+
+    This is the last link in the chain and the one that was missing. A paper
+    would arrive, its stations would be structured, their questions built and
+    the report's own photographs checked - and then nothing. Whatever the
+    report did not supply stayed missing until somebody noticed and ran a batch
+    by hand, which is how a motility station came to sit in the bank asking the
+    candidate to examine eye movements over a brain MRI.
+
+    Queued last on purpose. Sourcing reads each task's examination statement to
+    decide what kind of image can answer it, so the prompts have to exist
+    first, and the report's own figures have to have been graded or it would
+    buy replacements for images the station already had.
+
+    `only_missing` keeps the spend on the gaps: a station the report furnished
+    properly costs nothing here. A view that no search can fill ends with the
+    examiner stating the findings instead, which is the same fallback the
+    manual runs have been using.
+    """
+    from app.services.jobs.runner import create_job
+    from app.services.osce.station_images import JOB_SOURCE_STATION_IMAGES
+
+    if not station_ids:
+        return
+    job = create_job(
+        ctx.db,
+        JOB_SOURCE_STATION_IMAGES,
+        payload={"station_ids": sorted(station_ids), "only_missing": True},
+        created_by_id=ctx.job.created_by_id,
+        total_steps=len(station_ids),
+        message=f"Sourcing images for {len(station_ids)} station(s)",
+    )
+    logger.info("Queued image sourcing job %s for %d station(s)", job.id, len(station_ids))
 
 
 def _queue_prompt_build(ctx: JobContext, station_ids: list[int]) -> None:

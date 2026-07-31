@@ -1158,3 +1158,48 @@ def test_a_topography_is_not_offered_for_a_question_asking_for_an_ultrasound(
     before = len(ai.requests)
     assert bind_ingested_figures_to_questions(db, AIClient(db), station)["bound"] == 0
     assert len(ai.requests) == before, "and it costs nothing to decline"
+
+
+def test_an_upload_sources_its_own_missing_images(db, admin):
+    """The last link in the chain, and the one that was missing.
+
+    A paper arrived, its stations were structured, their questions built, the
+    report's own photographs graded - and then nothing. Whatever the report did
+    not supply stayed missing until someone ran a batch by hand, which is how a
+    motility station sat in the bank asking the candidate to examine eye
+    movements over a brain MRI.
+    """
+    from app.models import Job
+    from app.models.ops import JOB_PENDING
+    from app.services.ingest.pipeline import _queue_image_sourcing
+    from app.services.jobs.runner import JobContext
+    from app.services.osce.station_images import JOB_SOURCE_STATION_IMAGES
+
+    ingest = Job(job_type="ingest_document", status=JOB_PENDING,
+                 payload={"document_id": 1}, cursor={}, created_by_id=admin.id)
+    db.add(ingest)
+    db.commit()
+
+    _queue_image_sourcing(JobContext(db=db, job=ingest), [12, 9, 30])
+    db.commit()
+
+    sourcing = db.query(Job).filter_by(job_type=JOB_SOURCE_STATION_IMAGES).one()
+    assert sourcing.payload["station_ids"] == [9, 12, 30]
+    assert sourcing.payload["only_missing"] is True, "pay only for the gaps"
+    assert sourcing.id > ingest.id, "and only once the ingest itself is done"
+
+
+def test_an_upload_with_no_stations_queues_no_sourcing(db, admin):
+    from app.models import Job
+    from app.models.ops import JOB_PENDING
+    from app.services.ingest.pipeline import _queue_image_sourcing
+    from app.services.jobs.runner import JobContext
+    from app.services.osce.station_images import JOB_SOURCE_STATION_IMAGES
+
+    ingest = Job(job_type="ingest_document", status=JOB_PENDING,
+                 payload={"document_id": 1}, cursor={}, created_by_id=admin.id)
+    db.add(ingest)
+    db.commit()
+    _queue_image_sourcing(JobContext(db=db, job=ingest), [])
+    db.commit()
+    assert db.query(Job).filter_by(job_type=JOB_SOURCE_STATION_IMAGES).count() == 0
