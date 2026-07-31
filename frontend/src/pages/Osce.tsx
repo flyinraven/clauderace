@@ -182,6 +182,31 @@ export default function Osce() {
     }
   }
 
+  /** One new station in every subspecialty - a fresh circuit's worth.
+      Each arrives with its questions already in the examiner arc, and the
+      images for them are sourced straight afterwards. */
+  const generateStations = async () => {
+    if (
+      !confirm(
+        `Generate 9 new stations, one per subspecialty?
+
+Each is written by the AI in the examiner question format, then its images are searched for and verified. This spends credit and takes several minutes.`,
+      )
+    ) {
+      return
+    }
+    try {
+      const result = await api<{ job_id: number; total: number }>('/osce/stations/generate', {
+        method: 'POST',
+        body: { one_each: true },
+      })
+      setPrepJob(result.job_id)
+      load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not start the generation')
+    }
+  }
+
   /** Remove a circuit from the list. The sittings it ran are kept: a circuit
       is a plan for a day, not the record of the work done in it. */
   const removeCircuit = async (circuit: Circuit) => {
@@ -407,6 +432,11 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
           {user?.role === 'admin' && stations.length > 0 && (
             <Button variant="ghost" onClick={() => prepareStations(true)}>
               Rebuild all questions
+            </Button>
+          )}
+          {user?.role === 'admin' && (
+            <Button variant="secondary" onClick={generateStations}>
+              Generate 9 new stations
             </Button>
           )}
           <Button onClick={startCircuit} loading={busy} disabled={ready.length === 0}>

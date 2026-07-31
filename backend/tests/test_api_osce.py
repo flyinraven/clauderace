@@ -853,3 +853,54 @@ def test_a_question_s_scan_does_not_count_as_the_station_s_opening_image(db):
     assert opening_figures(station) == [], "the MRI belongs to question C"
     assert not opening_image_is_settled(station), "so nothing opens the station"
     assert station.id in stations_needing_images(db), "and it still needs one"
+
+
+def test_generating_one_station_per_subspecialty_asks_for_all_nine(client, db, admin):
+    """The button is "a fresh circuit's worth", not "top up my thinnest area".
+
+    Topping up to a target answers a different question and generates nothing
+    at all once every subspecialty is full.
+    """
+    from app.constants import SUBSPECIALTIES
+    from app.models import Job
+
+    make_station(db, subspecialty="Cataract")
+
+    response = client.post(
+        "/api/osce/stations/generate", json={"one_each": True}, headers=auth(admin)
+    )
+    assert response.status_code == 202
+    body = response.json()
+    assert body["total"] == 9
+    assert body["plan"] == {name: 1 for name in SUBSPECIALTIES}
+
+    job = db.get(Job, body["job_id"])
+    assert job.payload["per_subspecialty"] == {name: 1 for name in SUBSPECIALTIES}
+
+
+def test_generated_stations_have_their_images_sourced(db, admin):
+    """A generated station arrives complete except for having nothing to show.
+
+    Its findings are already split and its questions already in the examiner
+    arc, so image sourcing is the only link missing - and without it the
+    station asks the candidate to examine something it cannot show them.
+    """
+    from app.models import Job
+    from app.models.ops import JOB_PENDING
+    from app.services.generate.stations import _queue_image_sourcing
+    from app.services.jobs.runner import JobContext
+    from app.services.osce.station_images import JOB_SOURCE_STATION_IMAGES
+
+    generation = Job(job_type="generate_osce_stations", status=JOB_PENDING,
+                     payload={"per_subspecialty": {"Cataract": 1}}, cursor={},
+                     result={"created": [31, 30], "failed": ["Glaucoma"]},
+                     created_by_id=admin.id)
+    db.add(generation)
+    db.commit()
+
+    _queue_image_sourcing(JobContext(db=db, job=generation))
+    db.commit()
+
+    sourcing = db.query(Job).filter_by(job_type=JOB_SOURCE_STATION_IMAGES).one()
+    assert sourcing.payload["station_ids"] == [30, 31]
+    assert sourcing.payload["only_missing"] is True

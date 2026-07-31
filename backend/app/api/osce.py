@@ -12,7 +12,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy import func, select
 
 from app.api.deps import AdminUser, CurrentUser, DbSession, load_owned
-from app.constants import ROLE_ADMIN
+from app.constants import ROLE_ADMIN, SUBSPECIALTIES
 from app.models import (
     AudioClip,
     Image,
@@ -148,6 +148,10 @@ class GenerateStationsRequest(BaseModel):
     target_per_subspecialty: int = Field(default=6, ge=1, le=30)
     per_subspecialty: dict[str, int] | None = None
     difficulty: str | None = None
+    # One new station in every subspecialty - nine, whatever the bank already
+    # holds. Topping up to a target is a different question and answers "how
+    # thin is my weakest area"; this answers "give me a fresh circuit's worth".
+    one_each: bool = False
 
 
 @router.post("/stations/generate", status_code=status.HTTP_202_ACCEPTED)
@@ -156,9 +160,12 @@ def generate_stations(
 ) -> dict[str, Any]:
     from app.services.generate import JOB_GENERATE_STATIONS, thin_subspecialties
 
-    wanted = payload.per_subspecialty or thin_subspecialties(
-        db, payload.target_per_subspecialty
-    )
+    if payload.one_each:
+        wanted = {name: 1 for name in SUBSPECIALTIES}
+    else:
+        wanted = payload.per_subspecialty or thin_subspecialties(
+            db, payload.target_per_subspecialty
+        )
     wanted = {k: v for k, v in wanted.items() if v > 0}
     if not wanted:
         raise HTTPException(

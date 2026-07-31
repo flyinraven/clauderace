@@ -31,7 +31,12 @@ from app.constants import (
 from app.models import OsceStation
 from app.services.ai import AIClient
 from app.services.errors import log_error
-from app.services.jobs.runner import JobContext, JobHandlerError, register_handler
+from app.services.jobs.runner import (
+    JobContext,
+    JobHandlerError,
+    create_job,
+    register_handler,
+)
 from app.services.osce.prompts import STATION_SECONDS, _normalise as normalise_prompts
 
 logger = logging.getLogger(__name__)
@@ -322,7 +327,36 @@ def handle_generate_stations(ctx: JobContext) -> bool:
         ctx.set_result(failed=failed)
 
     ctx.advance(1, f"Stations: {index + 1} of {len(plan)}")
-    return index + 1 >= len(plan)
+
+    finished = index + 1 >= len(plan)
+    if finished:
+        _queue_image_sourcing(ctx)
+    return finished
+
+
+def _queue_image_sourcing(ctx: JobContext) -> None:
+    """A generated station arrives with no image at all.
+
+    It comes out complete in every other way - findings already split, questions
+    already in the examiner arc - so this is the only link missing, and without
+    it a freshly generated station asks the candidate to examine something it
+    cannot show them. Queued once the whole batch is done rather than per
+    station, so nine stations cost one job.
+    """
+    from app.services.osce.station_images import JOB_SOURCE_STATION_IMAGES
+
+    created = [i for i in (ctx.job.result or {}).get("created", []) if isinstance(i, int)]
+    if not created:
+        return
+    job = create_job(
+        ctx.db,
+        JOB_SOURCE_STATION_IMAGES,
+        payload={"station_ids": sorted(created), "only_missing": True},
+        created_by_id=ctx.job.created_by_id,
+        total_steps=len(created),
+        message=f"Sourcing images for {len(created)} new station(s)",
+    )
+    logger.info("Queued image sourcing job %s for %d generated station(s)", job.id, len(created))
 
 
 def _clean(value: Any) -> str | None:
