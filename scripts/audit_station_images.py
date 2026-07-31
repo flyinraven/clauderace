@@ -31,16 +31,7 @@ from sqlalchemy import create_engine, select  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
 from app.models import OsceStation  # noqa: E402
-from app.services.imagesearch.relevance import (  # noqa: E402
-    split_investigations,
-    unsourceable_reason,
-)
-from app.services.osce.coverage import station_views  # noqa: E402
-from app.services.osce.station_images import (  # noqa: E402
-    SETTLED_MATCH_CONFIDENCE,
-    opening_figures,
-    wants_gaze_montage,
-)
+from app.services.osce.sittability import station_faults  # noqa: E402
 
 
 def url_from_env() -> str:
@@ -54,67 +45,14 @@ def url_from_env() -> str:
 
 
 def faults_for(station: OsceStation) -> list[str]:
-    """Every reason this station's marks cannot currently be earned."""
-    faults: list[str] = []
-    views = station_views(station)
-    # The opening views only. A figure bound to a question is checked further
-    # down, against the question that asked for it.
-    with_image = [f for f in opening_figures(station) if f.image_id is not None]
+    """Every reason this station's marks cannot currently be earned.
 
-    if views and not with_image:
-        faults.append(f"no image at all, and the rubric needs {len(views)}")
-    elif len(with_image) < len(views):
-        faults.append(
-            f"{len(with_image)} image(s) for {len(views)} view(s) the rubric needs"
-        )
-
-    for figure in with_image:
-        label = f"figure {figure.position}"
-        if figure.verification_status == "representative":
-            missing = ""
-            note = figure.verification_notes or ""
-            found = re.search(r"\[Does NOT show:\s*(.+?)\]", note, re.S)
-            if found:
-                missing = f": missing {found.group(1).strip()[:90]}"
-            faults.append(f"{label} is representative only{missing}")
-        elif (figure.match_confidence or 1.0) < SETTLED_MATCH_CONFIDENCE:
-            faults.append(
-                f"{label} scraped in at {figure.match_confidence:.0%} confidence"
-            )
-        if not figure.is_approved:
-            faults.append(f"{label} is not approved, so nothing is shown for it")
-
-    opening = min(with_image, key=lambda f: f.position, default=None)
-    if opening is not None and wants_gaze_montage(station, opening):
-        faults.append(
-            f"figure {opening.position} was sourced as a single photograph, but the task "
-            f"examines ocular motility and needs the positions of gaze"
-        )
-
-    # A sub-question that asks the candidate to read an investigation, with no
-    # figure bound to it, is a question about an image that is not there.
-    for prompt in station.prompts or []:
-        wanted = str(prompt.get("image_wanted") or "").strip()
-        if not wanted or prompt.get("figure_id"):
-            continue
-        impossible = unsourceable_reason(wanted)
-        if impossible:
-            # Not a search that failed - a request no search can satisfy. It
-            # wants rewording as data the examiner states, and until it is,
-            # counting it with the others makes the backlog look bigger than
-            # the work actually is.
-            faults.append(
-                f"question {prompt.get('label')} wants '{wanted[:40]}', which is "
-                f"{impossible} - reword it rather than re-sourcing"
-            )
-        else:
-            wants = len(split_investigations(wanted))
-            faults.append(
-                f"question {prompt.get('label')} has no image for its investigation"
-                + (f" ({wants} investigations asked for)" if wants > 1 else "")
-            )
-
-    return faults
+    A thin wrapper now. The judgement lives in `app.services.osce.sittability`
+    so that this script, the admin preview and the sourcing selection cannot
+    drift apart - which they had, and that drift is why the audit kept
+    reporting stations as fine while a candidate met them broken.
+    """
+    return [fault.detail for fault in station_faults(station)]
 
 
 def main() -> int:

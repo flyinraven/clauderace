@@ -69,8 +69,13 @@ _MODALITY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("radiology", re.compile(r"\bCT\b|\bMRI\b|\bX[- ]?ray\b|\bradiograph\w*\b|\bscan\s+of\s+the\s+orbits?\b")),
     # UBM is an ultrasound, and naming no modality at all let a station's
     # request for one be answered by a corneal topography of the same region.
+    # Biometry belongs here: it is an ultrasound or optical measurement, and
+    # naming no modality at all meant "corneal topography and biometry for both
+    # eyes" never split - the search went looking for one image that was both a
+    # Pentacam map and an IOL Master printout, which does not exist.
     ("ultrasound", re.compile(r"\bultrasound\b|\bB[- ]?scan\b|\bA[- ]?scan\b|\bechograph\w+\b|"
-                              r"\bUBM\b|\bultrasound\s+biomicroscop\w+\b", re.IGNORECASE)),
+                              r"\bUBM\b|\bultrasound\s+biomicroscop\w+\b|\bbiometry\b|"
+                              r"\bIOL\s?Master\b|\bLenstar\b|\baxial\s+length\b", re.IGNORECASE)),
     ("visual_field", re.compile(r"\bvisual\s+field\w*\b|\bperimetr\w+\b|\bHumphrey\b|\bGoldmann\b", re.IGNORECASE)),
     ("topography", re.compile(r"\btopograph\w+\b|\btomograph\w+\b|\bPentacam\b|\bOrbscan\b", re.IGNORECASE)),
     ("pathology", re.compile(r"\bhistolog\w+\b|\bhistopatholog\w+\b|\bbiops\w+\b|\bcytolog\w+\b", re.IGNORECASE)),

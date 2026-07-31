@@ -26,6 +26,7 @@ from app.models import (
 )
 from app.services.jobs.runner import create_job
 from app.services.osce.coverage import sittable_prompts
+from app.services.osce.sittability import station_faults
 from app.services.osce.circuit import (
     JOB_GRADE_OSCE,
     build_circuit,
@@ -688,6 +689,13 @@ def preview_station(station_id: int, admin: AdminUser, db: DbSession) -> dict[st
             }
             for f in sorted(station.figures, key=lambda f: f.position)
             if f.image_id and f.id not in _all_bound_ids(station.prompts or [])
+        ],
+        # Why a candidate could not answer this station in full, if anything.
+        # The same judgement the audit and the sourcing selection use, so the
+        # preview cannot say "fine" while the audit says otherwise.
+        "faults": [
+            {"kind": f.kind, "detail": f.detail, "fixable_by_sourcing": f.fixable_by_sourcing}
+            for f in station_faults(station)
         ],
         "prompts": [
             {
