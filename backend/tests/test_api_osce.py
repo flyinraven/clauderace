@@ -812,3 +812,44 @@ def test_another_candidates_circuit_cannot_be_deleted(client, db, student, admin
 
 def test_deleting_a_circuit_that_is_not_there_is_a_404(client, db, student):
     assert client.delete("/api/osce/circuits/9999", headers=auth(student)).status_code == 404
+
+
+def test_a_question_s_scan_does_not_count_as_the_station_s_opening_image(db):
+    """Station 158 asked the candidate to examine eye movements over a brain MRI.
+
+    Its question C owns that MRI, correctly. But every count of "does this
+    station have an image" included it, so the station looked covered, no gaze
+    montage was ever searched for, and the opening task had nothing to examine.
+    """
+    from app.models import Image, OsceFigure
+    from app.services.osce.station_images import (
+        opening_figures,
+        opening_image_is_settled,
+        stations_needing_images,
+    )
+
+    station = make_station(db, prompts=[
+        {"label": "A", "text": "Please examine the patient's eye movements.",
+         "seconds": 270, "rubric": [{"text": "Identifies the gaze palsy", "marks": 10}]},
+        {"label": "C", "text": "What does this scan show?", "seconds": 90,
+         "image_wanted": "MRI of the brain showing white matter lesions",
+         "rubric": [{"text": "Reads the scan", "marks": 5}]},
+    ])
+    image = Image(sha256="9" * 64, content_type="image/jpeg", data=b"jpeg",
+                  size_bytes=4, origin="pdf")
+    db.add(image)
+    db.flush()
+    mri = OsceFigure(station_id=station.id, position=0, image_id=image.id,
+                     is_approved=True, verification_status="faithful",
+                     match_confidence=0.95)
+    db.add(mri)
+    db.flush()
+    station.prompts = [
+        station.prompts[0], {**station.prompts[1], "figure_id": mri.id},
+    ]
+    db.commit()
+    db.refresh(station)
+
+    assert opening_figures(station) == [], "the MRI belongs to question C"
+    assert not opening_image_is_settled(station), "so nothing opens the station"
+    assert station.id in stations_needing_images(db), "and it still needs one"

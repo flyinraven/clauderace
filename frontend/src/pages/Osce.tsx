@@ -580,6 +580,11 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
                     {station.subspecialty ?? 'Unclassified'}
                     {station.exam_period && ` · ${station.exam_period}`}
                     {station.prompt_count > 0 && ` · ${station.prompt_count} questions`}
+                    {/* The id every log line, audit row and support answer uses.
+                        Without it on screen there is no way to tell which
+                        "Station 7" anyone means: the number restarts with each
+                        paper, and several stations share a title. */}
+                    <span className="ml-1 font-mono text-slate-400">#{station.id}</span>
                   </p>
                 </div>
                 <div className="flex items-center gap-2">

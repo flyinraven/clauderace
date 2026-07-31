@@ -1222,6 +1222,22 @@ def wants_gaze_montage(station: OsceStation, figure: OsceFigure) -> bool:
     return not (_MONTAGE_RE.search(described) and _GAZE_POSITION_RE.search(described))
 
 
+def opening_figures(station: OsceStation) -> list[OsceFigure]:
+    """The figures the candidate meets on entering, in order.
+
+    A figure bound to a question is not one of them: it appears when that
+    question does. Counting them together is how a motility station whose
+    question C owns an MRI came to look as though it had an opening image, so
+    no gaze montage was ever searched for and the candidate was asked to
+    examine eye movements with nothing but a brain scan on screen.
+    """
+    claimed = {i for p in (station.prompts or []) for i in _bound_ids(p)}
+    return sorted(
+        (f for f in station.figures if f.id not in claimed),
+        key=lambda f: f.position,
+    )
+
+
 def opening_image_is_settled(station: OsceStation) -> bool:
     """Whether the station's own image is good enough to leave alone.
 
@@ -1236,7 +1252,7 @@ def opening_image_is_settled(station: OsceStation) -> bool:
     a figure. The two disagreeing would mean a batch either paid for stations the
     audit calls fine, or skipped ones it will flag again afterwards.
     """
-    figure = min(station.figures, key=lambda f: f.position, default=None)
+    figure = next((f for f in opening_figures(station) if f.image_id), None)
     if figure is None or figure.image_id is None or not figure.is_approved:
         return False
     if wants_gaze_montage(station, figure):
@@ -1273,7 +1289,12 @@ def stations_needing_images(db: Session) -> list[int]:
         ):
             needed.append(station.id)
             continue
-        if len([f for f in station.figures if f.image_id]) < len(station_views(station)):
+        # Only the views the candidate opens on. A question's own investigation
+        # is counted by the check above, and counting it twice made a station
+        # whose question owns a scan look covered for its examination task.
+        if len([f for f in opening_figures(station) if f.image_id]) < len(
+            station_views(station)
+        ):
             needed.append(station.id)
     return sorted(needed)
 

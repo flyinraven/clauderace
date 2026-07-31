@@ -38,6 +38,7 @@ from app.services.imagesearch.relevance import (  # noqa: E402
 from app.services.osce.coverage import station_views  # noqa: E402
 from app.services.osce.station_images import (  # noqa: E402
     SETTLED_MATCH_CONFIDENCE,
+    opening_figures,
     wants_gaze_montage,
 )
 
@@ -56,7 +57,9 @@ def faults_for(station: OsceStation) -> list[str]:
     """Every reason this station's marks cannot currently be earned."""
     faults: list[str] = []
     views = station_views(station)
-    with_image = [f for f in station.figures if f.image_id is not None]
+    # The opening views only. A figure bound to a question is checked further
+    # down, against the question that asked for it.
+    with_image = [f for f in opening_figures(station) if f.image_id is not None]
 
     if views and not with_image:
         faults.append(f"no image at all, and the rubric needs {len(views)}")

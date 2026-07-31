@@ -209,6 +209,11 @@ class SourceImagesRequest(BaseModel):
     only_missing: bool | None = None
 
 
+def _all_bound_ids(prompts: list[dict[str, Any]]) -> set[int]:
+    """Every figure that travels with a question rather than with the patient."""
+    return {i for p in prompts for i in _bound_figure_ids(p)}
+
+
 def _bound_figure_ids(prompt: dict[str, Any]) -> list[int]:
     """The figures this question carries, in order, first one first.
 
@@ -657,6 +662,11 @@ def preview_station(station_id: int, admin: AdminUser, db: DbSession) -> dict[st
         "total_marks": station.total_marks,
         # Unapproved ones are included too, with their status: reviewing a
         # station is exactly when you want to see an image that is not showing.
+        # Only what the candidate meets on entering. A figure bound to a
+        # question travels with that question and appears when it does, so
+        # listing it here made a motility station look as though it opened on
+        # the MRI its question C asks about - which is exactly the complaint
+        # this preview exists to catch.
         "figures": [
             {
                 "id": f.id,
@@ -667,9 +677,10 @@ def preview_station(station_id: int, admin: AdminUser, db: DbSession) -> dict[st
                 "position": f.position,
                 "is_approved": f.is_approved,
                 "verification_status": f.verification_status,
+                "shown_at": "start",
             }
             for f in sorted(station.figures, key=lambda f: f.position)
-            if f.image_id
+            if f.image_id and f.id not in _all_bound_ids(station.prompts or [])
         ],
         "prompts": [
             {
