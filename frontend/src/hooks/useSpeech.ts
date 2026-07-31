@@ -108,8 +108,19 @@ export function useSpeech() {
 
         // Safety net: iOS sometimes never fires onend for a long utterance,
         // which would leave the station stuck before recording starts.
+        //
+        // It MUST silence the engine as well as resolve. Resolving alone let
+        // the caller start recording while the question was still being read
+        // aloud, and the microphone took it down as the candidate's answer -
+        // one station came back with the examiner's question transcribed
+        // verbatim ahead of the reply. The ceiling scales with the text, so it
+        // is the longest questions, read for longest, that were exposed.
         const ceiling = Math.max(4000, text.length * 90)
-        window.setTimeout(finish, ceiling)
+        window.setTimeout(() => {
+          if (settled) return
+          window.speechSynthesis.cancel()
+          finish()
+        }, ceiling)
 
         current.current = utterance
         window.speechSynthesis.speak(utterance)

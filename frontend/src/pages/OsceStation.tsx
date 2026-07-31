@@ -252,6 +252,10 @@ export default function OsceStation() {
       // is live would put the examiner's voice into the candidate's answer.
       // This runs inside the button's gesture handler, which iOS requires.
       if (next) await speech.speak(next.text)
+      // Belt and braces: whatever the engine is still doing, stop it before
+      // the microphone opens. A question read into the candidate's own answer
+      // is worse than a question they have to press Read aloud for.
+      speech.cancel()
       await rec.start()
     } else {
       rec.release()
@@ -303,6 +307,7 @@ export default function OsceStation() {
       setRemaining(data.clock.seconds_remaining)
       const first = data.prompts[0]
       if (first) await speech.speak(first.text)
+      speech.cancel()
       await rec.start()
     } catch (err) {
       rec.release()
