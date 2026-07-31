@@ -82,7 +82,15 @@ def station_faults(station: OsceStation) -> list[Fault]:
     """Every reason this station's marks cannot currently be earned."""
     faults: list[Fault] = []
     views = station_views(station)
-    opening = [f for f in opening_figures(station) if f.image_id is not None]
+    # A rejected figure is a decision already taken, not a decision outstanding.
+    # Counting it as "not approved" made a station carrying three refused images
+    # report three faults that no one could act on, and inflated the audit with
+    # work that does not exist.
+    opening = [
+        f
+        for f in opening_figures(station)
+        if f.image_id is not None and f.verification_status != "rejected"
+    ]
 
     # --- What the candidate opens on ------------------------------------
     if views and not opening:

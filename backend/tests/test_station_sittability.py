@@ -159,3 +159,27 @@ def test_a_station_that_can_be_answered_reports_nothing(db):
 
     assert station_faults(station) == []
     assert is_sittable(station)
+
+
+def test_a_rejected_figure_is_a_decision_taken_not_one_outstanding(db):
+    """Station 164 carried three refused images and reported three faults.
+
+    None of them was actionable: the images had been judged and set aside. The
+    audit counted them as work waiting to be done, which is how a backlog comes
+    to look larger than it is.
+    """
+    station = make_station(db, prompts=[
+        {"label": "A", "text": "Please examine the anterior segment of both eyes.",
+         "seconds": 400, "rubric": [{"text": "Describes the findings", "marks": 18}]},
+        {"label": "B", "text": "How would you manage her?", "seconds": 140,
+         "rubric": [{"text": "Gives a plan", "marks": 2}]},
+    ])
+    _figure(db, station, _image(db, "g"), position=0, verification_status="faithful",
+            match_confidence=0.9, is_approved=True)
+    for tag, position in (("h", 1), ("i", 2)):
+        _figure(db, station, _image(db, tag), position=position,
+                verification_status="rejected", is_approved=False)
+    db.commit()
+    db.refresh(station)
+
+    assert station_faults(station) == [], "only the approved opening image counts"
