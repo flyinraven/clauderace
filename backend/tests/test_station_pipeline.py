@@ -1330,3 +1330,67 @@ def test_a_failed_re_source_keeps_the_image_the_station_already_had(
     assert figure.caption == "Nine positions of gaze"
     assert outcome["attached"] is False
     assert "kept" in outcome["reason"]
+
+
+def test_a_station_with_no_image_always_has_words(client, db, admin, ai, monkeypatch):
+    """Four stations ended with no image and no description either.
+
+    The model that writes the bedside wording is told to return nothing rather
+    than invent, and on a terse station it does. The station's own recorded
+    findings are not an invention - they are what the examiners printed - so
+    they are the floor beneath it. A candidate can work with words; they can do
+    nothing at all with a blank screen.
+    """
+    from app.models import OsceFigure
+    from app.services.osce.station_images import source_image_for_station
+
+    station = make_station(
+        db,
+        findings_elicited="Bilateral temporal optic disc pallor. No relative afferent "
+                          "pupillary defect.",
+        diagnosis="Dominant optic atrophy",
+    )
+    _configure_image_search(db)
+    monkeypatch.setattr(
+        "app.services.osce.station_images.build_provider", lambda store: FakeSearch([])
+    )
+    # The wording model declines, which is its correct behaviour, not a failure.
+    monkeypatch.setattr(
+        "app.services.osce.station_images.describe_findings",
+        lambda *a, **kw: (None, None),
+    )
+    source_image_for_station(db, AIClient(db), station)
+
+    db.expire_all()
+    figure = db.query(OsceFigure).filter_by(station_id=station.id).one()
+    assert figure.image_id is None
+    assert figure.verification_status == "described"
+    assert "temporal optic disc pallor" in figure.described_findings
+    assert figure.described_findings_approved is False, "still read before release"
+
+
+def test_recorded_findings_that_name_the_diagnosis_are_not_read_out(
+    client, db, admin, ai, monkeypatch
+):
+    """The floor must not become a hole: the leak guard still applies."""
+    from app.models import OsceFigure
+    from app.services.osce.station_images import source_image_for_station
+
+    station = make_station(
+        db,
+        findings_elicited="Findings are those of dominant optic atrophy with disc pallor.",
+        diagnosis="Dominant optic atrophy",
+    )
+    _configure_image_search(db)
+    monkeypatch.setattr(
+        "app.services.osce.station_images.build_provider", lambda store: FakeSearch([])
+    )
+    monkeypatch.setattr(
+        "app.services.osce.station_images.describe_findings",
+        lambda *a, **kw: (None, None),
+    )
+    source_image_for_station(db, AIClient(db), station)
+
+    db.expire_all()
+    figure = db.query(OsceFigure).filter_by(station_id=station.id).one()
+    assert not figure.described_findings, "naming the answer is worse than saying nothing"

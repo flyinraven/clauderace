@@ -348,6 +348,8 @@ mild moderate marked dense partial complete good poor
 turned away feel feels felt pulled loose looser sits lies held lifted
 globe globes eyelid eyelids lids lid lash lashes cornea conjunctiva sclera
 pupil pupils iris lens disc discs fundus macula retina orbit face
+optic nerve nerves chiasm corneal scleral retinal macular choroid choroidal
+vitreous lenticular conjunctival ciliary limbal foveal peripapillary
 poorly well fully partially freely easily readily barely equally briskly
 sluggishly incompletely symmetrically evenly clearly visibly obviously
 appears appear appeared seems looks looking towards along across between
@@ -695,6 +697,24 @@ def source_image_for_station(
     described, concern = describe_findings(
         client, station, wanted or figure.wanted_description
     )
+    if not described:
+        # The model is told to return nothing rather than invent, and on a
+        # station whose findings are terse it does exactly that - leaving four
+        # stations with no image and no words either, which is the one outcome
+        # a candidate cannot work with.
+        #
+        # The station's own recorded findings are not an invention: they are
+        # what the examiners printed. Stated verbatim they are always available
+        # and always true, so they are the floor beneath the model rather than
+        # a rival to it. The leak guard still applies - findings that name the
+        # diagnosis cannot be read out - and it is held for review like any
+        # other wording.
+        recorded = (station.findings_elicited or "").strip()
+        if recorded and not leaked_term(recorded, station):
+            described = recorded
+            concern = "stated verbatim from the station's recorded findings"
+            logger.info("Station %s falls back to its recorded findings", station.id)
+
     if described:
         figure.described_findings = described
         figure.verification_status = "described"
