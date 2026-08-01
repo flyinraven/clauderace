@@ -663,12 +663,30 @@ def source_image_for_station(
                        "representative", confidence, found_by,
                        len(rejections), auto_approve)
 
-    figure.image_id = None
-    figure.verification_status = "rejected"
-    figure.verification_notes = (
+    # A search that found nothing must not cost the station the image it
+    # already had. This cleared it first and searched second, so every empty
+    # re-source stripped a picture: station 119 went into a run holding an
+    # approved nine-position montage and came out with an empty figure still
+    # marked approved, showing the candidate nothing.
+    #
+    # Only a figure that arrived here with nothing is left as rejected. One
+    # that already had an image keeps it, and the notes say the replacement
+    # search failed.
+    tried = (
         f"Tried {len(queries)} quer(ies): {'; '.join(queries)}. "
         + " | ".join(rejections[:5])
-    )[:4000]
+    )
+    if figure.image_id is not None:
+        figure.verification_notes = (
+            f"{figure.verification_notes or ''}  [Kept the previous image: a "
+            f"replacement search found nothing. {tried}]"
+        )[:4000]
+        db.commit()
+        return {"attached": False, "queries": queries, "reason": "kept the existing image",
+                "rejected": len(rejections)}
+
+    figure.verification_status = "rejected"
+    figure.verification_notes = tried[:4000]
 
     # Last resort, and only here: every query has been tried and not one
     # candidate survived, not even a representative. Rather than leave a

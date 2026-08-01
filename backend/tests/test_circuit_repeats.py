@@ -90,3 +90,51 @@ def test_short_circuit_rather_than_a_padded_one(db: Session) -> None:
 
     circuit = build_circuit(db, user_id=1, station_count=9)
     assert sorted(circuit.station_ids) == sorted(all_ids[8:])
+
+
+def test_a_circuit_can_sit_one_paper_in_its_own_right(db, student):
+    """"Practise 2026 Semester 1" is a different request from "give me a circuit".
+
+    A real paper is not one station per subspecialty, so that shaping is wrong
+    here: the stations come from that sitting alone, in the order they were
+    numbered, and an eighteen-station paper gives nine now and nine next time.
+    """
+    from app.services.osce.circuit import build_circuit
+    from tests.test_api_osce import make_station
+
+    for number in range(1, 13):
+        make_station(db, station_number=number, exam_period="2026 Semester 1",
+                     subspecialty="Cataract")
+    for number in range(1, 4):
+        make_station(db, station_number=number, exam_period="2025 Semester 2",
+                     subspecialty="Glaucoma")
+
+    circuit = build_circuit(db, student.id, 9, exam_period="2026 Semester 1")
+    assert len(circuit.station_ids) == 9
+    assert "2026 Semester 1" in circuit.title
+
+    from app.models import OsceStation
+    chosen = [db.get(OsceStation, i) for i in circuit.station_ids]
+    assert {s.exam_period for s in chosen} == {"2026 Semester 1"}, "one paper only"
+    assert [s.station_number for s in chosen] == list(range(1, 10)), "in paper order"
+
+
+def test_the_next_circuit_of_a_paper_continues_where_the_last_stopped(db, student):
+    """Twelve stations means nine, then the remaining three - never a repeat."""
+    from app.models import OsceSession, OsceStation
+    from app.services.osce.circuit import build_circuit
+    from tests.test_api_osce import make_station
+
+    for number in range(1, 13):
+        make_station(db, station_number=number, exam_period="2026 Semester 1",
+                     subspecialty="Cataract")
+
+    first = build_circuit(db, student.id, 9, exam_period="2026 Semester 1")
+    for station_id in first.station_ids:
+        db.add(OsceSession(user_id=student.id, station_id=station_id))
+    db.commit()
+
+    second = build_circuit(db, student.id, 9, exam_period="2026 Semester 1")
+    assert set(second.station_ids).isdisjoint(first.station_ids)
+    assert len(second.station_ids) == 3, "what is left of the paper"
+    assert [db.get(OsceStation, i).station_number for i in second.station_ids] == [10, 11, 12]

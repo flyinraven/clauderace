@@ -1290,3 +1290,43 @@ def test_a_question_may_not_present_an_investigation_it_never_asked_for():
         "text": "What does this pattern of findings tell you about her disease?",
     }]
     assert _unshowable_questions(about_findings) == []
+
+
+def test_a_failed_re_source_keeps_the_image_the_station_already_had(
+    client, db, admin, ai, monkeypatch
+):
+    """Station 119 went into a run holding an approved nine-position montage.
+
+    It came out with an empty figure still marked approved, showing the
+    candidate nothing: the search cleared the image first and looked for a
+    replacement second, so every empty re-source cost a picture.
+    """
+    from app.models import OsceFigure
+    from app.services.osce.station_images import source_image_for_station
+
+    station = make_station(db)
+    image = Image(sha256="8" * 64, content_type="image/jpeg", data=big_photo(),
+                  size_bytes=100, origin="web")
+    db.add(image)
+    db.flush()
+    figure = OsceFigure(station_id=station.id, position=0, image_id=image.id,
+                        is_approved=True, verification_status="representative",
+                        match_confidence=0.6, caption="Nine positions of gaze")
+    db.add(figure)
+    db.commit()
+
+    _configure_image_search(db)
+    # Every search comes back empty, which is the case that did the damage.
+    monkeypatch.setattr(
+        "app.services.osce.station_images.build_provider",
+        lambda store: FakeSearch([]),
+    )
+    outcome = source_image_for_station(db, AIClient(db), station)
+
+    db.expire_all()
+    figure = db.query(OsceFigure).filter_by(id=figure.id).one()
+    assert figure.image_id == image.id, "the station keeps what it had"
+    assert figure.is_approved is True
+    assert figure.caption == "Nine positions of gaze"
+    assert outcome["attached"] is False
+    assert "kept" in outcome["reason"]

@@ -542,6 +542,10 @@ class CircuitOut(BaseModel):
 class CreateCircuitRequest(BaseModel):
     station_count: int = Field(default=9, ge=1, le=18)
     scheduled_for: date | None = None
+    # Sit one paper in its own right - "2026 Semester 1" - rather than a mixed
+    # circuit. A paper with eighteen stations gives nine now and nine next time,
+    # because the ones already sat are never drawn again.
+    exam_period: str | None = None
 
 
 @router.get("/circuits", response_model=list[CircuitOut])
@@ -566,7 +570,9 @@ def create_circuit(
 ) -> CircuitOut:
     count = payload.station_count or SettingsStore(db).get_int("osce.stations_per_circuit", 9)
     try:
-        circuit = build_circuit(db, user.id, count, payload.scheduled_for)
+        circuit = build_circuit(
+            db, user.id, count, payload.scheduled_for, payload.exam_period
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return CircuitOut(

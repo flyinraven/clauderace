@@ -97,9 +97,19 @@ def compute_station_clock(
 
 # --- Circuit assembly -----------------------------------------------------
 def build_circuit(
-    db: Session, user_id: int, station_count: int = 9, scheduled_for: date | None = None
+    db: Session,
+    user_id: int,
+    station_count: int = 9,
+    scheduled_for: date | None = None,
+    exam_period: str | None = None,
 ) -> OsceCircuit:
     """Pick one station per subspecialty from those this candidate has not sat.
+
+    `exam_period` sits one paper in its own right - "2026 Semester 1" - rather
+    than a mixed circuit. A real paper is not one station per subspecialty, so
+    that shaping is dropped when a period is named: the stations are drawn from
+    that sitting alone, in station order, and a paper with eighteen of them
+    gives nine now and nine on the next circuit.
 
     Repeating a station the candidate already knows the answer to teaches
     recall of that case rather than clinical reasoning, so an attempted station
@@ -116,18 +126,28 @@ def build_circuit(
         ).scalars().all()
     )
 
-    ready = [
-        s
-        for s in db.execute(
-            select(OsceStation).where(OsceStation.prompts_status == "complete")
-        ).scalars().all()
-        if s.id not in attempted
-    ]
+    stmt = select(OsceStation).where(OsceStation.prompts_status == "complete")
+    if exam_period:
+        stmt = stmt.where(OsceStation.exam_period == exam_period)
+    ready = [s for s in db.execute(stmt).scalars().all() if s.id not in attempted]
     if not ready:
         raise ValueError(
+            f"No unsat stations are left in {exam_period}. Clear an attempt from the "
+            f"OSCE page to sit one again."
+            if exam_period else
             "No unsat stations are left. Clear an attempt from the OSCE page to "
             "sit a station again, or ingest another OSCE report."
         )
+
+    if exam_period:
+        # The paper's own order, so a candidate working through a sitting meets
+        # its stations as they were numbered rather than shuffled.
+        ready.sort(key=lambda s: (s.station_number or 0, s.id))
+        chosen = ready[:station_count]
+        return _save(db, user_id, chosen, scheduled_for,
+                     title=f"{exam_period} — stations "
+                           f"{chosen[0].station_number or 1}"
+                           f"–{chosen[-1].station_number or len(chosen)}")
 
     by_subspecialty: dict[str, list[OsceStation]] = defaultdict(list)
     for station in ready:
@@ -156,9 +176,19 @@ def build_circuit(
             if len(chosen) >= station_count:
                 break
 
+    return _save(db, user_id, chosen, scheduled_for)
+
+
+def _save(
+    db: Session,
+    user_id: int,
+    chosen: list[OsceStation],
+    scheduled_for: date | None,
+    title: str | None = None,
+) -> OsceCircuit:
     circuit = OsceCircuit(
         user_id=user_id,
-        title=f"OSCE circuit — {(scheduled_for or date.today()).isoformat()}",
+        title=title or f"OSCE circuit — {(scheduled_for or date.today()).isoformat()}",
         scheduled_for=scheduled_for or date.today(),
         station_ids=[s.id for s in chosen],
         status="pending",
