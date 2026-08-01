@@ -345,3 +345,54 @@ def test_unrecoverable_output_says_what_came_back(db):
     with pytest.raises(AIError) as exc:
         parse_json_response("I'm afraid I can't help with that request.")
     assert "can't help" in str(exc.value)
+
+
+def test_openrouter_requests_name_their_host_and_do_not_fall_back(db, ai):
+    """The same model costs ten times more from a reseller than its own host.
+
+    Luna Pro is $0.10/$0.60 per million from OpenAI and $1.00/$6.00 from Azure.
+    Left to route itself a batch can quietly cost ten times its budget, so the
+    host is named. Fallbacks are off: a request that fails and says so beats an
+    invoice that does not.
+    """
+    from app.models import Setting
+    from app.services.ai import AIClient
+
+    for key, value in {
+        "ai.provider": "openrouter",
+        "ai.base_url": "https://openrouter.ai/api/v1",
+        "ai.model.utility": "openai/gpt-5.6-luna-pro",
+        "ai.openrouter_provider_order": "openai",
+    }.items():
+        existing = db.query(Setting).filter_by(key=key).one_or_none()
+        if existing:
+            existing.value = value
+        else:
+            db.add(Setting(key=key, value=value, is_encrypted=False))
+    db.commit()
+
+    AIClient(db).complete(task="utility", system="s", user="u")
+
+    body = ai.last_body
+    assert body["model"] == "openai/gpt-5.6-luna-pro"
+    assert body["provider"] == {"order": ["openai"], "allow_fallbacks": False}
+
+
+def test_no_provider_is_named_when_none_is_configured(db, ai):
+    """Routing must not be pinned by accident; the field is absent unless asked."""
+    from app.models import Setting
+    from app.services.ai import AIClient
+
+    for key, value in {
+        "ai.provider": "openrouter",
+        "ai.base_url": "https://openrouter.ai/api/v1",
+    }.items():
+        existing = db.query(Setting).filter_by(key=key).one_or_none()
+        if existing:
+            existing.value = value
+        else:
+            db.add(Setting(key=key, value=value, is_encrypted=False))
+    db.commit()
+
+    AIClient(db).complete(task="utility", system="s", user="u")
+    assert "provider" not in ai.last_body

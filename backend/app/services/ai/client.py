@@ -413,6 +413,26 @@ class AIClient:
             if effort and effort != "default":
                 body["reasoning_effort"] = effort
 
+        # OpenRouter serves the same model from several hosts at very different
+        # prices - one model was $0.10/$0.60 per million from its first-party
+        # host and $1.00/$6.00 from a reseller, ten times over. Left to route
+        # itself, a batch can silently cost ten times what was budgeted, so the
+        # host is named and fallbacks are off by default: a failure that says so
+        # is better than an invoice that does not.
+        if config.kind == "openrouter":
+            order = [
+                p.strip()
+                for p in self.store.get_str("ai.openrouter_provider_order", "").split(",")
+                if p.strip()
+            ]
+            if order:
+                body["provider"] = {
+                    "order": order,
+                    "allow_fallbacks": self.store.get_bool(
+                        "ai.openrouter_allow_fallbacks", False
+                    ),
+                }
+
         headers = {
             "Authorization": f"Bearer {config.api_key}",
             "Content-Type": "application/json",
