@@ -1,6 +1,11 @@
 # Build the front end and upload it to SiteGround.
 #
-#   .\scripts\deploy_frontend.ps1 -ApiUrl https://race-exam-api.onrender.com `
+# -ApiUrl is baked into the bundle, and a wrong one deploys a site that loads
+# and can do nothing: every request 404s against a host that does not exist.
+# It is https://clauderace.onrender.com - the Render service is named
+# `clauderace`, not the `race-exam-api` that render.yaml proposes.
+#
+#   .\scripts\deploy_frontend.ps1 -ApiUrl https://clauderace.onrender.com `
 #                                 -SshHost example.siteground.biz `
 #                                 -SshUser u1234-abcdef -SshPort 18765
 #
