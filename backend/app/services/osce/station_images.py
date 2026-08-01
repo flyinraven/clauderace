@@ -1429,6 +1429,22 @@ def handle_describe_station_figures(ctx: JobContext) -> bool:
             described, concern = describe_findings(
                 AIClient(ctx.db), station, figure.wanted_description
             )
+            if not described:
+                # Almost every figure that reaches this job has no
+                # `wanted_description`: it was written by ingest, or the view it
+                # names was cleared. The rubric section of the prompt then reads
+                # "(not specified)", and a model told to return nothing rather
+                # than invent returns nothing - 185 times in a row, the first
+                # time this ran.
+                #
+                # The station's recorded findings are what the examiners
+                # printed, so stating them verbatim is not an invention and is
+                # always available. Same floor the sourcing path already falls
+                # back to, and the leak guard still applies.
+                recorded = (station.findings_elicited or station.findings or "").strip()
+                if recorded and not leaked_term(recorded, station):
+                    described = recorded
+                    concern = "stated verbatim from the station's recorded findings"
             if described:
                 figure.described_findings = described
                 figure.verification_status = "described"
