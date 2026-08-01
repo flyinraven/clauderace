@@ -3,8 +3,10 @@
  *
  * Two things it handles that matter operationally: attaching the bearer token,
  * and being explicit about Render free-tier cold starts. A sleeping instance
- * takes about a minute to answer the first request, so a slow response is
- * reported as "waking up" rather than looking like a hang.
+ * takes about a minute to answer the first request, so a slow response from a
+ * server we have no recent evidence is up is reported as "waking up" rather
+ * than looking like a hang. A slow response from one we know is up - a large
+ * upload, a long ingest - is left to the caller's own progress indicator.
  */
 
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
@@ -39,7 +41,13 @@ export function setToken(token: string | null): void {
 /** Fired when the server rejects our token, so the app can bounce to login. */
 export const onUnauthorized = new Set<() => void>()
 
-/** Fired when a request is taking long enough to be a cold start. */
+/**
+ * Fired when a request is slow *and* the server is plausibly asleep.
+ *
+ * Slowness alone is not evidence of a cold start: ingesting a 40 MB PDF takes
+ * minutes against a perfectly warm instance, and announcing "waking the server"
+ * over it is simply wrong. See `looksAsleep`.
+ */
 export const onSlowRequest = new Set<(slow: boolean) => void>()
 
 type Options = Omit<RequestInit, 'body'> & {
@@ -54,6 +62,36 @@ type Options = Omit<RequestInit, 'body'> & {
 }
 
 const SLOW_REQUEST_MS = 3000
+
+/**
+ * Render's free tier sleeps after about fifteen minutes idle. A response - any
+ * response, including a 404 or a 500, because the server had to be running to
+ * send it - therefore proves the instance is awake for a good while afterwards.
+ * Five minutes is well inside that window, so a slow request made this soon
+ * after a successful one is slow for its own reasons, not because of a sleep.
+ */
+const WARM_FOR_MS = 5 * 60 * 1000
+
+let lastResponseAt = 0
+
+/** True when nothing recent proves the instance is up. */
+const looksAsleep = () => Date.now() - lastResponseAt > WARM_FOR_MS
+
+/**
+ * How many in-flight requests currently believe the server is waking.
+ *
+ * A count rather than a boolean: the Documents page polls a job while an upload
+ * runs, and with a boolean the poll finishing would clear a banner the upload
+ * still owns, making it flicker.
+ */
+let wakingCount = 0
+
+function setWaking(waking: boolean): void {
+  const before = wakingCount
+  wakingCount = Math.max(0, wakingCount + (waking ? 1 : -1))
+  if (before === 0 && wakingCount === 1) onSlowRequest.forEach((fn) => fn(true))
+  else if (before === 1 && wakingCount === 0) onSlowRequest.forEach((fn) => fn(false))
+}
 
 /**
  * A sleeping instance drops the request that wakes it, and an ingest heavy
@@ -86,7 +124,19 @@ export async function api<T = unknown>(path: string, options: Options = {}): Pro
     payload = JSON.stringify(body)
   }
 
-  const slowTimer = setTimeout(() => onSlowRequest.forEach((fn) => fn(true)), SLOW_REQUEST_MS)
+  // Only claim a cold start if, when the request turns slow, nothing recent
+  // says otherwise. Evaluated when the timer fires rather than now, because a
+  // sibling request may land in between and prove the server awake.
+  let claimedWaking = false
+  const claimWaking = () => {
+    if (!claimedWaking) {
+      claimedWaking = true
+      setWaking(true)
+    }
+  }
+  const slowTimer = setTimeout(() => {
+    if (looksAsleep()) claimWaking()
+  }, SLOW_REQUEST_MS)
 
   const retryDelays = retry || isRetryable(rest.method) ? RETRY_DELAYS_MS : []
   let retried = false
@@ -96,8 +146,13 @@ export async function api<T = unknown>(path: string, options: Options = {}): Pro
     for (let attempt = 0; ; attempt += 1) {
       try {
         response = await fetch(`${BASE_URL}/api${path}`, { ...rest, headers: finalHeaders, body: payload })
+        lastResponseAt = Date.now()
         break
       } catch {
+        // A dropped connection is the signature of the request that wakes a
+        // sleeping instance, so this is the one case worth announcing without
+        // waiting on the clock.
+        claimWaking()
         if (attempt >= retryDelays.length) {
           throw new ApiError(
             'Could not reach the server. If it has been idle it may be starting up — wait a moment and try again.',
@@ -111,7 +166,7 @@ export async function api<T = unknown>(path: string, options: Options = {}): Pro
     }
   } finally {
     clearTimeout(slowTimer)
-    onSlowRequest.forEach((fn) => fn(false))
+    if (claimedWaking) setWaking(false)
   }
 
   if (response.status === 401) {
@@ -169,6 +224,7 @@ export async function fetchImageObjectUrl(imageId: number): Promise<string> {
   const response = await fetch(`${BASE_URL}/api/images/${imageId}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   })
+  lastResponseAt = Date.now()
   if (!response.ok) throw new ApiError(`Could not load image ${imageId}`, response.status)
   return URL.createObjectURL(await response.blob())
 }

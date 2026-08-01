@@ -31,13 +31,20 @@ interface Station {
   prompts_status: string
 }
 
-/** Most likely to be wrong: representative rather than faithful, or scraped
- *  in near the acceptance threshold. Drives both the tab and its count. */
+/**
+ * Only what the pipeline could not resolve on its own. Drives the tab and count.
+ *
+ * A flag has to mean something. Flagging every representative image, and
+ * everything under a confidence the verifier itself accepted, put hundreds of
+ * perfectly usable stations in the queue and made the queue worth ignoring. An
+ * image that is live has already been through vision verification and, where it
+ * misses a sign, has that sign written out beside it.
+ *
+ * What is left is the genuine unknown: the pipeline declined to publish it, so
+ * it is asking. Everything else stays out of the way until it is rejected.
+ */
 function needsLook(figure: StationFigure): boolean {
-  return Boolean(
-    figure.image_id &&
-      (figure.verification_status === 'representative' || (figure.match_confidence ?? 1) < 0.78),
-  )
+  return Boolean(figure.image_id && !figure.is_approved)
 }
 
 export default function StationImages() {
@@ -75,6 +82,19 @@ export default function StationImages() {
       setJobId(result.job_id)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Nothing to source')
+    }
+  }
+
+  /** The protocol's last resort, for the views sourcing could not fill. */
+  const describeMissing = async () => {
+    setError(null)
+    try {
+      const result = await api<{ job_id: number }>('/osce/figures/describe-missing', {
+        method: 'POST',
+      })
+      setJobId(result.job_id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nothing to describe')
     }
   }
 
@@ -168,7 +188,12 @@ export default function StationImages() {
             {figures.length - withImage} without an image
           </p>
         </div>
-        <Button onClick={sourceImages}>Source missing images</Button>
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={sourceImages}>Source missing images</Button>
+          <Button variant="secondary" onClick={describeMissing}>
+            Describe the rest
+          </Button>
+        </div>
       </div>
 
       {error && <Alert tone="error">{error}</Alert>}
@@ -177,7 +202,9 @@ export default function StationImages() {
         Each was checked by a vision model against its station's own signs, which reliably
         removes diagrams, veterinary photos and marketing images — but is far less reliable
         about whether it shows <em>this</em> patient's particular sign. So they appear at
-        their stations straight away and you reject the wrong ones.{' '}
+        their stations straight away and you reject the wrong ones. Where an image misses one
+        of the station's signs, that sign is written out beside it, and the station goes live
+        anyway. <strong>Worth a look</strong> holds only what could not be settled that way.{' '}
         <strong>Reject &amp; find another</strong> remembers what you turned down and goes
         looking again, so you never see the same picture twice.
       </Alert>

@@ -587,76 +587,112 @@ def source_image_for_station(
     already_rejected = set(figure.rejected_urls or [])
     auto_approve = store.get_bool("imagesearch.auto_approve", True)
 
-    # Work specific -> broad, stopping at the first faithful match. A
-    # representative hit found early is held in reserve rather than accepted
-    # immediately, in case a later query turns up something faithful.
-    for query in queries:
-        figure.search_query = query
-        try:
-            check_and_consume_quota(db, store)
-            candidates = provider.search(query, per_query)
-        except ImageQueryError as exc:
-            # This phrase, not this account. Brave answered HTTP 500 to "nine
-            # positions of gaze photograph Congenital fibrosis of extraocular
-            # muscles." and both batches then running were failed outright,
-            # leaving 35 stations unsourced over one bad query.
-            logger.info("Search failed for %r: %s", query, exc)
-            rejections.append(f"search failed for '{query}': {exc}")
-            continue
-        except ImageSearchError:
-            raise
-        if not candidates:
-            rejections.append(f"no results for '{query}'")
-            continue
-
-        for candidate in candidates:
-            if candidate.image_url in already_rejected:
-                continue
-            downloaded = download_candidate(candidate)
-            if downloaded is None:
-                # Silently skipping these left "tried 3 queries" and no reason
-                # at all in the notes, when in fact every result was a
-                # thumbnail too small to describe.
-                rejections.append(
-                    f"{candidate.source or 'source'}: not usable (too small, wrong "
-                    "format, or would not download)"
-                )
-                continue
-            blob, content_type, _width, _height = downloaded
-
+    # Two sweeps at most. The first works specific -> broad and stops at the
+    # first faithful match, holding any representative hit in reserve rather
+    # than accepting it, in case a later query turns up something faithful.
+    #
+    # A sweep that ends holding only a representative has learned something it
+    # did not know when it wrote its queries: the model has just listed the
+    # signs that image fails to show. Searching again on those terms is the one
+    # cheap chance of an exact image, so it is taken - once. If the second sweep
+    # also finds nothing faithful, the representative is accepted rather than
+    # thrown away: a real photograph of the pathology beats no picture at all,
+    # and the signs it misses are stated beside it.
+    held: tuple[float, Any, Any, dict[str, Any], str] | None = None
+    for sweep in (1, 2):
+        best_representative = None
+        for query in queries:
+            figure.search_query = query
             try:
-                verdict = verify_image(db, client, station, blob, content_type, wanted)
-            except Exception as exc:  # noqa: BLE001 - try the next candidate
-                logger.debug("Verification error on a candidate: %s", exc)
+                check_and_consume_quota(db, store)
+                candidates = provider.search(query, per_query)
+            except ImageQueryError as exc:
+                # This phrase, not this account. Brave answered HTTP 500 to
+                # "nine positions of gaze photograph Congenital fibrosis of
+                # extraocular muscles." and both batches then running were
+                # failed outright, leaving 35 stations unsourced over one bad
+                # query.
+                logger.info("Search failed for %r: %s", query, exc)
+                rejections.append(f"search failed for '{query}': {exc}")
+                continue
+            except ImageSearchError:
+                raise
+            if not candidates:
+                rejections.append(f"no results for '{query}'")
                 continue
 
-            tier = str(verdict.get("tier") or "reject").lower()
-            confidence = as_float(verdict.get("confidence"), 0.0)
+            for candidate in candidates:
+                if candidate.image_url in already_rejected:
+                    continue
+                downloaded = download_candidate(candidate)
+                if downloaded is None:
+                    # Silently skipping these left "tried 3 queries" and no
+                    # reason at all in the notes, when in fact every result was
+                    # a thumbnail too small to describe.
+                    rejections.append(
+                        f"{candidate.source or 'source'}: not usable (too small, wrong "
+                        "format, or would not download)"
+                    )
+                    continue
+                blob, content_type, _width, _height = downloaded
 
-            # The grader judges pathology; this judges whether the image is the
-            # examination that was asked for. An angiogram passed on the
-            # station's disc findings is still the wrong thing to hand someone
-            # told to examine the anterior segment.
-            mismatch = modality_mismatch(expected, verdict.get("modality"))
-            if mismatch:
-                rejections.append(f"{candidate.source or 'source'}: {mismatch}")
-                continue
+                try:
+                    verdict = verify_image(db, client, station, blob, content_type, wanted)
+                except Exception as exc:  # noqa: BLE001 - try the next candidate
+                    logger.debug("Verification error on a candidate: %s", exc)
+                    continue
 
-            if tier == "faithful" and confidence >= MIN_MATCH_CONFIDENCE:
-                return _attach(db, client, station, figure, candidate, downloaded, verdict,
-                               "faithful", confidence, query, len(rejections), auto_approve)
+                tier = str(verdict.get("tier") or "reject").lower()
+                confidence = as_float(verdict.get("confidence"), 0.0)
 
-            if tier == "representative" and confidence >= MIN_REPRESENTATIVE_CONFIDENCE:
-                if best_representative is None or confidence > best_representative[0]:
-                    best_representative = (confidence, candidate, downloaded, verdict, query)
-                continue
+                # The grader judges pathology; this judges whether the image is
+                # the examination that was asked for. An angiogram passed on the
+                # station's disc findings is still the wrong thing to hand
+                # someone told to examine the anterior segment.
+                mismatch = modality_mismatch(expected, verdict.get("modality"))
+                if mismatch:
+                    rejections.append(f"{candidate.source or 'source'}: {mismatch}")
+                    continue
 
-            rejections.append(
-                f"{candidate.source or 'source'}: {verdict.get('reason') or 'rejected'}"
-            )
+                if tier == "faithful" and confidence >= MIN_MATCH_CONFIDENCE:
+                    return _attach(db, client, station, figure, candidate, downloaded, verdict,
+                                   "faithful", confidence, query, len(rejections), auto_approve)
 
-    if best_representative is not None:
-        confidence, candidate, downloaded, verdict, found_by = best_representative
+                if tier == "representative" and confidence >= MIN_REPRESENTATIVE_CONFIDENCE:
+                    if best_representative is None or confidence > best_representative[0]:
+                        best_representative = (confidence, candidate, downloaded, verdict, query)
+                    continue
+
+                rejections.append(
+                    f"{candidate.source or 'source'}: {verdict.get('reason') or 'rejected'}"
+                )
+
+        # Keep whichever sweep found the better representative.
+        if best_representative is not None and (held is None or best_representative[0] > held[0]):
+            held = best_representative
+
+        if sweep == 2 or held is None:
+            break
+
+        missing = str(held[3].get("missing") or "").strip()
+        if not missing or missing.lower() in {"null", "none"}:
+            # It misses nothing anyone can name, so there is nothing to search
+            # on that the first sweep did not already try.
+            break
+        # The reserve is not offered back to the second sweep - it is already
+        # held, and re-verifying it would spend a vision call to learn what is
+        # already known.
+        already_rejected.add(held[1].image_url)
+        queries = build_search_queries(
+            db, client, station, f"{wanted or ''} showing {missing}".strip()
+        )
+        logger.info(
+            "Station %s figure %s: re-sourcing once on the signs the best image misses (%r)",
+            station.id, figure.id, missing[:120],
+        )
+
+    if held is not None:
+        confidence, candidate, downloaded, verdict, found_by = held
         # The query that found it, not whichever was tried last. Station 7's
         # montage was recorded against "multiple cranial nerve palsies", the
         # broad phrase that had already failed, which reads as though the gaze
@@ -770,13 +806,13 @@ def _attach(
     # user rejects the ones that are wrong. Holding everything back for
     # approval means stations start with no image at all, which is worse.
     #
-    # A representative one is different, and used to be auto-approved too. The
-    # model has just written down which of the station's signs it does NOT
-    # show, and those are the marks the candidate is about to be asked for. It
-    # is held for review rather than published as though it could answer the
-    # question - the whole complaint about stations whose images cannot be
-    # described to earn the marks.
-    figure.is_approved = auto_approve and tier == "faithful"
+    # A representative one reaches here only after a second sweep searched
+    # specifically for the signs it misses and still found nothing better, so
+    # the choice it represents is not "this or an exact image" but "this or
+    # nothing". It is accepted on the same terms, with the missing signs stated
+    # beside it. Holding it for a human instead was what filled the review queue
+    # with hundreds of stations that had no decision left in them.
+    figure.is_approved = auto_approve
     db.commit()
     return {
         "attached": True, "tier": tier, "query": query,
@@ -1342,3 +1378,93 @@ def stations_needing_images(db: Session) -> list[int]:
             needed.append(station.id)
     return sorted(needed)
 
+
+
+JOB_DESCRIBE_STATION_FIGURES = "describe_station_figures"
+
+
+def figures_needing_description(db: Session) -> list[int]:
+    """Figures with no image, whose station therefore has nothing to show.
+
+    A figure reaches this state two ways: every candidate was rejected as the
+    wrong investigation, or an administrator turned the image down. Either way
+    the marks behind it cannot be earned until the findings are stated in
+    words, which is the protocol's last resort.
+
+    Already-described figures are skipped, so the pass can be re-run after a
+    sourcing round without paying twice for the same station.
+    """
+    return sorted(
+        f.id
+        for f in db.execute(
+            select(OsceFigure).where(OsceFigure.image_id.is_(None))
+        ).scalars()
+        if not (f.described_findings or "").strip()
+    )
+
+
+@register_handler(JOB_DESCRIBE_STATION_FIGURES)
+def handle_describe_station_figures(ctx: JobContext) -> bool:
+    """One figure per chunk: state the findings for a view with no image.
+
+    Deliberately no searching. This is for figures whose sourcing is already
+    finished and came back empty, so it spends no image-search quota and costs
+    one `model_answer` call each.
+    """
+    figure_ids: list[int] = ctx.payload.get("figure_ids") or []
+    if not figure_ids:
+        raise JobHandlerError("No figure_ids supplied")
+
+    if not ctx.job.total_steps:
+        ctx.set_total(len(figure_ids))
+
+    index = ctx.cursor_get("index", 0)
+    if index >= len(figure_ids):
+        return True
+
+    figure = ctx.db.get(OsceFigure, figure_ids[index])
+    station = ctx.db.get(OsceStation, figure.station_id) if figure else None
+    if figure is not None and station is not None and figure.image_id is None:
+        try:
+            described, concern = describe_findings(
+                AIClient(ctx.db), station, figure.wanted_description
+            )
+            if described:
+                figure.described_findings = described
+                figure.verification_status = "described"
+                # The leak guard inside describe_findings is the check that
+                # matters and it is a hard reject: nothing reaching here names
+                # the diagnosis. `grounding_problem` is advisory by design - it
+                # threw away correct descriptions three runs running - so it is
+                # written down to be read, not used to withhold the station.
+                # Holding these for approval is what left stations with marks
+                # no candidate could earn while the words sat unread.
+                figure.described_findings_approved = True
+                if concern:
+                    figure.verification_notes = (
+                        f"{figure.verification_notes or ''}  "
+                        f"[Check the stated findings: {concern}]"
+                    )[:4000]
+                done = list((ctx.job.result or {}).get("described", []))
+                done.append(figure.id)
+                ctx.set_result(described=done)
+            else:
+                # The model returns nothing rather than invent, and a
+                # description that named the diagnosis was discarded. Both are
+                # correct outcomes and neither is retried here.
+                empty = list((ctx.job.result or {}).get("no_words", []))
+                empty.append(figure.id)
+                ctx.set_result(no_words=empty)
+            ctx.db.commit()
+        except Exception as exc:  # noqa: BLE001 - one figure must not stop the pass
+            ctx.db.rollback()
+            logger.exception("Could not describe figure %s", figure.id)
+            log_error(ctx.db, source="osce_images", message=str(exc),
+                      context={"figure_id": figure.id, "station_id": station.id})
+            failed = list((ctx.job.result or {}).get("failed", []))
+            failed.append(figure.id)
+            ctx.set_result(failed=failed)
+
+    ctx.cursor_set(index=index + 1)
+    ctx.advance(1, f"Describing: {index + 1} of {len(figure_ids)}")
+    return index + 1 >= len(figure_ids)

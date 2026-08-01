@@ -36,7 +36,9 @@ from app.services.osce.circuit import (
 from app.services.osce.findings import JOB_SPLIT_OSCE_FINDINGS, stations_needing_split
 from app.services.osce.prompts import JOB_BUILD_OSCE_PROMPTS, stations_needing_prompts
 from app.services.osce.station_images import (
+    JOB_DESCRIBE_STATION_FIGURES,
     JOB_SOURCE_STATION_IMAGES,
+    figures_needing_description,
     stations_needing_images,
 )
 from app.services.osce.transcribe_job import JOB_TRANSCRIBE_RESPONSE
@@ -259,6 +261,29 @@ def source_images(
         message=f"Sourcing images for {len(ids)} station(s)",
     )
     return {"job_id": job.id, "station_count": len(ids), "only_missing": only_missing}
+
+
+@router.post("/figures/describe-missing", status_code=status.HTTP_202_ACCEPTED)
+def describe_missing_figures(admin: AdminUser, db: DbSession) -> dict[str, Any]:
+    """State the findings in words for every view that has no image.
+
+    The last resort of the protocol, run over the stations that have already
+    reached it: sourcing found nothing usable, or what it found answered a
+    different question and was turned down. Searching again is not this job -
+    it spends no image-search quota and costs one model call per figure.
+    """
+    ids = figures_needing_description(db)
+    if not ids:
+        raise HTTPException(
+            status_code=400, detail="Every station without an image already has its findings stated"
+        )
+    job = create_job(
+        db, JOB_DESCRIBE_STATION_FIGURES,
+        payload={"figure_ids": ids},
+        created_by_id=admin.id, total_steps=len(ids),
+        message=f"Describing {len(ids)} view(s) with no image",
+    )
+    return {"job_id": job.id, "figure_count": len(ids)}
 
 
 class StationFigureOut(BaseModel):
