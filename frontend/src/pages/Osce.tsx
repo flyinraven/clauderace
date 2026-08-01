@@ -113,6 +113,10 @@ export default function Osce() {
   const [search, setSearch] = useState('')
   const [fSubspecialty, setFSubspecialty] = useState('')
   const [fPeriod, setFPeriod] = useState('')
+  // Which paper the next circuit comes from. Empty means a mixed circuit, one
+  // station per subspecialty; a sitting means that paper in its own order,
+  // nine at a time, so an eighteen-station paper takes two circuits.
+  const [circuitPeriod, setCircuitPeriod] = useState('')
   const [fSource, setFSource] = useState('')
   const [fState, setFState] = useState('')
   // Deleting a bad sitting one station at a time is eighteen confirmations.
@@ -143,7 +147,10 @@ export default function Osce() {
     try {
       const circuit = await api<Circuit>('/osce/circuits', {
         method: 'POST',
-        body: { station_count: 9 },
+        body: {
+          station_count: 9,
+          ...(circuitPeriod ? { exam_period: circuitPeriod } : {}),
+        },
       })
       load()
       const first = circuit.station_ids[0]
@@ -439,8 +446,18 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
               Generate 9 new stations
             </Button>
           )}
+          <Select
+            value={circuitPeriod}
+            onChange={(e) => setCircuitPeriod(e.target.value)}
+            aria-label="Which paper to sit"
+          >
+            <option value="">Mixed circuit</option>
+            {examPeriods.map((p) => (
+              <option key={p} value={p}>Sit {p}</option>
+            ))}
+          </Select>
           <Button onClick={startCircuit} loading={busy} disabled={ready.length === 0}>
-            Start today's circuit
+            {circuitPeriod ? `Start ${circuitPeriod}` : "Start today's circuit"}
           </Button>
         </div>
       </div>
