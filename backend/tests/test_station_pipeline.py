@@ -979,9 +979,11 @@ def test_an_ingested_figure_is_checked_before_a_candidate_sees_it(
 
     A 2023 Semester 2 station collected fifteen figures that way - mark charts,
     tables set as pictures, the neighbouring station's photographs - all marked
-    verified and approved, none of them looked at. A genuine photograph of the
-    wrong thing is no better: a fundus shot cannot answer "examine the anterior
-    segment", and every mark for it is unearnable.
+    verified and approved, none of them looked at. What is not a clinical image
+    of this station is still dropped.
+
+    A genuine photograph of another investigation is NOT dropped: see
+    `test_the_reports_own_investigation_is_shown_not_replaced`.
     """
     from app.models import OsceFigure
     from app.services.osce.station_images import (
@@ -1006,6 +1008,44 @@ def test_an_ingested_figure_is_checked_before_a_candidate_sees_it(
     assert station.id in stations_with_unchecked_figures(db)
 
     ai.responder = lambda body, n: json.dumps({
+        "tier": "reject", "modality": "other", "confidence": 0.2,
+        "shows": "A bar chart of the mark distribution",
+        "reason": "It is a chart, not a clinical image", "missing": None,
+        "caption": None,
+    })
+    outcome = verify_ingested_figures(db, AIClient(db), station)
+
+    db.expire_all()
+    figure = db.query(OsceFigure).filter_by(id=figure.id).one()
+    assert outcome["rejected"] == 1
+    assert figure.is_approved is False, "a mark chart is not a clinical image"
+    assert figure.verification_status == "rejected"
+
+
+def test_the_reports_own_investigation_is_shown_not_replaced(client, db, admin, ai):
+    """A real photograph of another investigation stays, and stays visible.
+
+    Unapproving it sent the station off to buy a web lookalike, which is the
+    examiners' own photograph thrown away for a stranger's. The station keeps
+    what the real candidates were shown; the mismatch is recorded, not acted on.
+    """
+    from app.models import OsceFigure
+    from app.services.osce.station_images import verify_ingested_figures
+
+    station = make_station(db, prompts=[{
+        "label": "A", "text": "Please examine the anterior segment of both eyes.",
+        "seconds": 270, "rubric": [{"text": "Describes the corneal opacity", "marks": 10}],
+    }])
+    image = Image(sha256="e" * 64, content_type="image/jpeg", data=big_photo(),
+                  size_bytes=100, origin="pdf")
+    db.add(image)
+    db.flush()
+    figure = OsceFigure(station_id=station.id, position=0, image_id=image.id,
+                        verification_status="unverified", is_approved=False)
+    db.add(figure)
+    db.commit()
+
+    ai.responder = lambda body, n: json.dumps({
         "tier": "faithful", "modality": "fundus", "confidence": 0.9,
         "shows": "A fundus photograph of the right eye",
         "reason": "It is a retinal photograph", "missing": None,
@@ -1015,10 +1055,10 @@ def test_an_ingested_figure_is_checked_before_a_candidate_sees_it(
 
     db.expire_all()
     figure = db.query(OsceFigure).filter_by(id=figure.id).one()
-    assert outcome["rejected"] == 1
-    assert figure.is_approved is False, "a fundus photo cannot answer an anterior task"
-    assert figure.verification_status == "rejected"
-    assert "fundus" in (figure.verification_notes or "").lower()
+    assert outcome["kept"] == 1
+    assert figure.is_approved is True, "the paper's own photograph is shown"
+    assert figure.verification_status != "rejected"
+    assert "opening task" in (figure.verification_notes or "").lower()
 
 
 def test_the_reports_own_photograph_is_kept_even_when_imperfect(

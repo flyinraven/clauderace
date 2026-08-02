@@ -24,6 +24,7 @@ interface StationFigure {
 interface Station {
   id: number
   station_number: number | null
+  station_label: string | null
   subspecialty: string | null
   title: string | null
   case_summary: string | null
@@ -339,7 +340,7 @@ function FigureCard({
       // Station numbers repeat across sittings, so the period is what makes
       // this heading identify one station rather than four.
       title={[
-        station?.title || `Station ${station?.station_number ?? figure.station_id}`,
+        station?.title || `Station ${station?.station_label ?? station?.station_number ?? figure.station_id}`,
         station?.subspecialty,
         station?.exam_period,
       ]

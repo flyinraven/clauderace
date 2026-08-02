@@ -460,6 +460,9 @@ def _persist_station(
 ) -> int:
     station = OsceStation(
         station_number=data.get("station_number") or block.number,
+        # The paper's own name for it. Only set where the deck numbers its
+        # stations with a letter - otherwise the number says everything.
+        station_label=block.printed_number if block.suffix else None,
         subspecialty=data.get("subspecialty") or normalise_subspecialty(data.get("title")),
         title=data.get("title"),
         # Without this a station opens with the generic "A patient is seated in

@@ -883,15 +883,35 @@ def verify_ingested_figures(
             figure.caption or str(verdict.get("caption") or "").strip() or None
         )
 
-        if mismatch or tier == "reject" or confidence < MIN_REPRESENTATIVE_CONFIDENCE:
+        if tier == "reject" or confidence < MIN_REPRESENTATIVE_CONFIDENCE:
+            # A chart, a diagram, a table set as a picture, or a photograph of
+            # something else entirely. Not a clinical image of this station at
+            # all, so there is nothing to show.
             figure.verification_status = "rejected"
             figure.is_approved = False
             figure.verification_notes = (
                 f"{figure.verification_notes or ''} "
-                f"[Not shown: {mismatch or verdict.get('reason') or 'rejected'}]"
+                f"[Not shown: {verdict.get('reason') or 'rejected'}]"
             ).strip()[:4000]
             rejected += 1
             continue
+
+        if mismatch:
+            # A real clinical image from the real paper, of a different
+            # investigation than the opening task asks for - a visual field
+            # where the task says angiogram. This used to unapprove it, and the
+            # station then went and bought a web lookalike instead: the
+            # examiners' own photograph discarded in favour of a stranger's.
+            #
+            # It is kept and shown. `bind_ingested_figures_to_questions` runs
+            # straight after this and gives it to whichever question does ask
+            # for that investigation; where no question does, it still belongs
+            # to the station and is still what the candidates were shown. The
+            # mismatch is recorded so it can be read, not acted on.
+            figure.verification_notes = (
+                f"{figure.verification_notes or ''} "
+                f"[Not the opening task's investigation: {mismatch}]"
+            ).strip()[:4000]
 
         figure.verification_status = tier
         # A lower bar than a web image, deliberately. This one came out of the

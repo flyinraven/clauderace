@@ -56,6 +56,9 @@ ACCEPTED_AUDIO_PREFIXES = ("audio/", "video/mp4", "video/webm")
 class StationSummary(BaseModel):
     id: int
     station_number: int | None
+    # "1A" where the paper names its stations that way, otherwise null and the
+    # number stands on its own.
+    station_label: str | None
     subspecialty: str | None
     title: str | None
     # Administrators only. The summary names or strongly implies the diagnosis,
@@ -103,6 +106,7 @@ def list_stations(user: CurrentUser, db: DbSession) -> list[StationSummary]:
             StationSummary(
                 id=station.id,
                 station_number=station.station_number,
+                station_label=station.station_label,
                 subspecialty=station.subspecialty,
                 title=station.title,
                 case_summary=station.case_summary if is_admin else None,
@@ -1195,7 +1199,11 @@ def circuit_results(circuit_id: int, user: CurrentUser, db: DbSession) -> dict[s
             "station_id": station_id,
             "sitting_id": sitting.id if sitting else None,
             "title": (station.title if station else None)
-            or (f"Station {station.station_number}" if station and station.station_number else None),
+            or (
+                f"Station {station.station_label or station.station_number}"
+                if station and (station.station_label or station.station_number)
+                else None
+            ),
             "subspecialty": station.subspecialty if station else None,
             "submitted": bool(sitting and sitting.submitted_at),
             # "queued" and "running" both mean the marking has not landed yet;

@@ -246,6 +246,10 @@ class OsceStation(TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     station_number: Mapped[int | None] = mapped_column(Integer)
+    # How the paper itself names the station, where that is not just a number:
+    # 2022 Semester 2 runs 1A, 1B, 2A ... 9B, eighteen stations sharing nine
+    # numbers. The number alone orders them; this is what a candidate is told.
+    station_label: Mapped[str | None] = mapped_column(String(8))
     subspecialty: Mapped[str | None] = mapped_column(String(60), index=True)
     title: Mapped[str | None] = mapped_column(String(255))
     case_summary: Mapped[str | None] = mapped_column(Text)

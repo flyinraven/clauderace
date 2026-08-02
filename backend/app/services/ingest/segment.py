@@ -18,7 +18,16 @@ from app.services.ingest.extract import ExtractedDocument, ExtractedImage
 SEQ_HEADER_RE = re.compile(r"^\s*(?:SEQ|Short\s+Essay\s+Question)\s*[#:]?\s*(\d{1,2})\s*$", re.IGNORECASE)
 VSAQ_HEADER_RE = re.compile(r"^\s*(?:VSAQ|Very\s+Short\s+Answer\s+Question)\s*[#:]?\s*(\d{1,2})\s*$", re.IGNORECASE)
 QUESTION_HEADER_RE = re.compile(r"^\s*Question\s*[#:]?\s*(\d{1,2})\s*$", re.IGNORECASE)
-STATION_RE = re.compile(r"\bstation\s*0*(\d{1,2})\b", re.IGNORECASE)
+# "Station 7", and "Station 1A" / "Station 1B" - a paper that splits its
+# stations into two halves, each a station in its own right. The suffix must be
+# captured, not merely tolerated: `\b` after the digits does not match between
+# "1" and "A", so the older pattern found no stations at all in such a deck and
+# the whole document scored zero station hits. 2022 Semester 2 is numbered this
+# way and would not ingest.
+#
+# The letter is deliberately not allowed to follow a space: "Station 1 A patient
+# is seated..." must read as station 1, not station 1A.
+STATION_RE = re.compile(r"\bstation\s*0*(\d{1,2})([A-Za-z])?\b", re.IGNORECASE)
 
 # Every station opens by stating its case and what it is testing, whatever the
 # year's slide furniture looks like. Some decks number their stations in the
@@ -50,10 +59,18 @@ class Block:
     text: str
     page_numbers: list[int] = field(default_factory=list)
     images: list[ExtractedImage] = field(default_factory=list)
+    # "A" or "B" where a paper splits station 1 into 1A and 1B. Two stations,
+    # sat separately, sharing a printed number.
+    suffix: str | None = None
+
+    @property
+    def printed_number(self) -> str:
+        """How the paper itself names this station, e.g. "1A"."""
+        return f"{self.number}{self.suffix or ''}" if self.number else ""
 
     @property
     def label(self) -> str:
-        return f"{self.kind} {self.number}" if self.number else self.kind
+        return f"{self.kind} {self.printed_number}" if self.number else self.kind
 
 
 def _clean_lines(text: str) -> list[str]:
@@ -188,20 +205,29 @@ def _segment_osce_by_case(doc: ExtractedDocument) -> list[Block]:
             Block(
                 kind="OSCE",
                 number=int(numbered.group(1)) if numbered else position + 1,
+                suffix=(numbered.group(2) or "").upper() or None if numbered else None,
                 text=text,
                 page_numbers=page_numbers,
                 images=_images_for_pages(doc, page_numbers),
             )
         )
-        found.append(int(numbered.group(1)) if numbered else None)
+        found.append(
+            (int(numbered.group(1)), (numbered.group(2) or "").upper())
+            if numbered else None
+        )
 
     # Prefer the deck's own numbering, but only when the whole deck carries it
     # and it runs in order. A single "Station 16" bleeding across a slide
     # boundary would otherwise give two stations the same number, and position
     # in the deck is the order sat regardless.
+    #
+    # The suffix is part of the identity here: 1A and 1B are in order and are
+    # not duplicates of each other, so a paper numbered that way keeps its own
+    # names instead of being renumbered 1..18.
     if not (all(n is not None for n in found) and found == sorted(set(found))):
         for position, block in enumerate(blocks):
             block.number = position + 1
+            block.suffix = None
     return blocks
 
 
@@ -210,21 +236,38 @@ def _segment_osce_by_station_number(doc: ExtractedDocument) -> list[Block]:
 
     A slide naming four or more stations is the contents page and is skipped.
     """
-    grouped: dict[int, list[int]] = {}
-    order: list[int] = []
+    # Keyed by number AND suffix: 1A and 1B are two stations, and grouping them
+    # under "1" would merge two papers' worth of pages into one station and lose
+    # half the deck.
+    grouped: dict[tuple[int, str], list[int]] = {}
+    order: list[tuple[int, str]] = []
 
+    # A page belongs to the last station named, not only to a page that names
+    # one. The photographs are on slides of their own - no heading, no text -
+    # and keeping only titled pages dropped them before ingest ever saw them:
+    # 2022 Semester 2 lost 43 of its 54 clinical images that way, station 6A
+    # keeping pages 66, 67, 71, 72 while the four photographs on 68 to 70 went
+    # in the bin and the station was then sent to buy replacements off the web.
+    current: tuple[int, str] | None = None
     for page in doc.pages:
-        numbers = {int(n) for n in STATION_RE.findall(page.text)}
-        if not numbers or len(numbers) >= 4:
+        stations = {(int(n), (s or "").upper()) for n, s in STATION_RE.findall(page.text)}
+        # A slide naming four or more stations is the contents page. It belongs
+        # to no station and must not end the one in progress.
+        if len(stations) >= 4:
             continue
-        station = min(numbers)
-        if station not in grouped:
-            grouped[station] = []
-            order.append(station)
-        grouped[station].append(page.number)
+        if stations:
+            current = min(stations)
+        if current is None:
+            # Front matter, before the first station is named.
+            continue
+        if current not in grouped:
+            grouped[current] = []
+            order.append(current)
+        grouped[current].append(page.number)
 
     blocks: list[Block] = []
     for station in sorted(order):
+        number, suffix = station
         page_numbers = grouped[station]
         text_parts: list[str] = []
         for page in doc.pages:
@@ -233,7 +276,8 @@ def _segment_osce_by_station_number(doc: ExtractedDocument) -> list[Block]:
         blocks.append(
             Block(
                 kind="OSCE",
-                number=station,
+                number=number,
+                suffix=suffix or None,
                 text="\n".join(text_parts).strip(),
                 page_numbers=page_numbers,
                 images=_images_for_pages(doc, page_numbers),

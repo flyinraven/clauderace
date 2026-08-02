@@ -145,3 +145,55 @@ def test_a_header_crest_is_not_a_clinical_figure() -> None:
     no_bbox.bbox = None
     assert not _is_page_furniture(no_bbox, page_height)
     assert not _is_page_furniture(img(10, 80), 0)
+
+
+def _lettered_station(number: int, letter: str) -> list[str]:
+    """A deck whose stations are 1A, 1B, 2A ... two stations per number.
+
+    Deliberately without the case markers, so segmentation falls through to the
+    station-number route - which is what 2022 Semester 2 does.
+    """
+    return [
+        f"Station {number}{letter}\nRetina\n55M with reduced vision",
+        f"Station {number}{letter}\nFindings\nMacular hole",
+    ]
+
+
+def test_a_deck_numbered_1a_1b_is_recognised_as_an_osce() -> None:
+    """The letter used to break the pattern outright, scoring zero stations."""
+    pages: list[str] = []
+    for number in range(1, 10):
+        for letter in ("A", "B"):
+            pages.extend(_lettered_station(number, letter))
+    assert detect_document_kind(_deck(pages)) == "osce"
+
+
+def test_1a_and_1b_are_two_stations_not_one() -> None:
+    pages: list[str] = []
+    for number in range(1, 4):
+        for letter in ("A", "B"):
+            pages.extend(_lettered_station(number, letter))
+    _, blocks = segment(_deck(pages))
+    assert len(blocks) == 6
+    assert [b.printed_number for b in blocks] == ["1A", "1B", "2A", "2B", "3A", "3B"]
+
+
+def test_an_untitled_slide_belongs_to_the_station_it_follows() -> None:
+    """The photographs sit on slides of their own, with no heading at all.
+
+    Keeping only pages that name a station dropped those slides, and with them
+    the station's clinical images - which were then re-sourced off the web.
+    """
+    pages = [
+        "Station 1A\nCornea\n40F with a painful eye",
+        "",  # a photograph, nothing else on the slide
+        "Station 1A\nFindings\nDendritic ulcer",
+        "Station 1B\nGlaucoma\n70M for review",
+        "",
+    ]
+    # Named explicitly: five pages is too short a deck to classify on its own,
+    # and the question here is how it segments, not how it is recognised.
+    _, blocks = segment(_deck(pages), "osce")
+    assert len(blocks) == 2
+    assert blocks[0].page_numbers == [1, 2, 3]
+    assert blocks[1].page_numbers == [4, 5]

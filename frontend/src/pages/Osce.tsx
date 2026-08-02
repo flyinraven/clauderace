@@ -9,6 +9,9 @@ import { Alert, Badge, Button, Card, EmptyState, Input, Loading, Pagination, Pro
 interface Station {
   id: number
   station_number: number | null
+  // "1A" where the paper names its stations that way. The number alone is not
+  // unique in such a paper - 1A and 1B are both station 1.
+  station_label: string | null
   subspecialty: string | null
   title: string | null
   case_summary: string | null
@@ -176,7 +179,7 @@ export default function Osce() {
 
   /** Forget my attempts at a station, putting it back in the circuit pool. */
   const clearAttempts = async (station: Station) => {
-    const label = station.title ?? `Station ${station.station_number ?? station.id}`
+    const label = station.title ?? `Station ${station.station_label ?? station.station_number ?? station.id}`
     const n = station.attempt_count
     if (!confirm(`Clear ${n} attempt${n === 1 ? '' : 's'} at "${label}"?\n\nThe sitting and its marking are deleted, and circuits can pick this station again.`)) {
       return
@@ -236,7 +239,7 @@ The circuit goes; the stations you sat in it keep their answers and marks.`,
 
   /** Delete a station outright — for one that ingested badly. */
   const removeStation = async (station: Station) => {
-    const label = station.title ?? `Station ${station.station_number ?? station.id}`
+    const label = station.title ?? `Station ${station.station_label ?? station.station_number ?? station.id}`
     if (!confirm(`Delete "${label}"?\n\nIts questions, marking scheme and images go with it. This cannot be undone.`)) {
       return
     }
@@ -385,7 +388,7 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
         station.subspecialty,
         station.case_summary,
         station.exam_period,
-        `station ${station.station_number ?? ''}`,
+        `station ${station.station_label ?? station.station_number ?? ''}`,
       ]
         .filter(Boolean)
         .join(' ')
@@ -614,14 +617,14 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
                     checked={selected.has(station.id)}
                     onChange={() => toggleSelected(station.id)}
                     className="rounded border-slate-300"
-                    aria-label={`Select ${station.title ?? `station ${station.station_number ?? station.id}`}`}
+                    aria-label={`Select ${station.title ?? `station ${station.station_label ?? station.station_number ?? station.id}`}`}
                   />
                 )}
                 <div className="min-w-0 flex-1">
                   <p className="font-medium text-slate-800">
                     {/* Never fall back to the case summary: it reads the case
                         out before the candidate has chosen to sit it. */}
-                    {station.title ?? `Station ${station.station_number ?? station.id}`}
+                    {station.title ?? `Station ${station.station_label ?? station.station_number ?? station.id}`}
                   </p>
                   <p className="mt-0.5 text-xs text-slate-500">
                     {station.subspecialty ?? 'Unclassified'}
