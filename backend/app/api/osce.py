@@ -37,6 +37,7 @@ from app.services.osce.findings import JOB_SPLIT_OSCE_FINDINGS, stations_needing
 from app.services.osce.prompts import JOB_BUILD_OSCE_PROMPTS, stations_needing_prompts
 from app.services.osce.station_images import (
     JOB_DESCRIBE_STATION_FIGURES,
+    JOB_SETTLE_STATIONS,
     JOB_SOURCE_STATION_IMAGES,
     JOB_VERIFY_STATION_FIGURES,
     figures_needing_description,
@@ -267,6 +268,29 @@ def source_images(
         message=f"Sourcing images for {len(ids)} station(s)",
     )
     return {"job_id": job.id, "station_count": len(ids), "only_missing": only_missing}
+
+
+@router.post("/stations/settle", status_code=status.HTTP_202_ACCEPTED)
+def settle_stations(admin: AdminUser, db: DbSession) -> dict[str, Any]:
+    """Bring every station's figures into line with the protocol as it stands.
+
+    Runs itself at the end of every ingest. It is here as well because a rule
+    that changes only applies where a figure is written, so stations built
+    under an older one keep whatever it produced - which is why the same
+    complaint kept returning after each fix.
+
+    Spends nothing: no searching, no model calls, and running it twice changes
+    nothing the first run did not.
+    """
+    ids = list(db.execute(select(OsceStation.id).order_by(OsceStation.id)).scalars().all())
+    if not ids:
+        raise HTTPException(status_code=400, detail="There are no stations")
+    job = create_job(
+        db, JOB_SETTLE_STATIONS, payload={"station_ids": ids},
+        created_by_id=admin.id, total_steps=len(ids),
+        message=f"Settling {len(ids)} station(s)",
+    )
+    return {"job_id": job.id, "station_count": len(ids)}
 
 
 @router.post("/stations/recheck-figures", status_code=status.HTTP_202_ACCEPTED)

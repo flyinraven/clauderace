@@ -1555,3 +1555,83 @@ def test_a_description_that_names_the_diagnosis_is_never_the_floor(db):
     station.findings_elicited = "Bone spicule pigmentation of retinitis pigmentosa."
 
     assert verbatim_findings_floor(station, None)[0] is None
+
+
+def _figure(db, station, **kw):
+    from app.models import OsceFigure
+
+    figure = OsceFigure(station_id=station.id, position=kw.pop("position", 0), **kw)
+    db.add(figure)
+    db.commit()
+    return figure
+
+
+def test_settling_removes_a_figure_nothing_could_ever_fill(db):
+    """A rubric action is not a view, whoever wrote it and whenever."""
+    from app.services.osce.station_images import settle_station
+
+    station = make_station(db)
+    figure = _figure(db, station, image_id=None,
+                     wanted_description="Examines the other cranial nerves for involvement")
+
+    outcome = settle_station(db, station)
+    assert outcome["removed"] == 1
+    assert db.query(type(figure)).filter_by(id=figure.id).one_or_none() is None
+
+
+def test_settling_clears_findings_borrowed_for_an_investigation(db):
+    """"Fundus examination is normal" is not a description of an angiogram."""
+    from app.services.osce.station_images import settle_station
+
+    station = make_station(db)
+    station.findings_elicited = "Fundus examination is normal."
+    figure = _figure(
+        db, station, image_id=None,
+        wanted_description="Urgent CT angiography of the brain and circle of Willis",
+        described_findings="Fundus examination is normal.",
+        described_findings_approved=True,
+    )
+
+    outcome = settle_station(db, station)
+    db.expire_all()
+    figure = db.query(type(figure)).filter_by(id=figure.id).one()
+    assert outcome["cleared"] == 1
+    assert figure.described_findings is None
+    assert figure.described_findings_approved is False
+
+
+def test_settling_publishes_words_left_unreleased(db):
+    """A station holding a description nobody released has unearnable marks."""
+    from app.services.osce.station_images import settle_station
+
+    station = make_station(db)
+    figure = _figure(
+        db, station, image_id=None,
+        wanted_description="external photograph montage of the nine positions of gaze",
+        described_findings="The right eye does not elevate or adduct; the lid is ptotic.",
+        described_findings_approved=False,
+    )
+
+    outcome = settle_station(db, station)
+    db.expire_all()
+    figure = db.query(type(figure)).filter_by(id=figure.id).one()
+    assert outcome["published"] == 1
+    assert figure.described_findings_approved is True
+
+
+def test_settling_is_safe_to_run_twice(db):
+    """It states an end state, so a second run must change nothing."""
+    from app.services.osce.station_images import settle_station
+
+    station = make_station(db)
+    station.findings_elicited = "Fundus examination is normal."
+    _figure(db, station, image_id=None, wanted_description="Examines the pupils", position=0)
+    _figure(db, station, image_id=None, position=1,
+            wanted_description="external photograph of the right eye",
+            described_findings="The right pupil is dilated and unreactive.")
+
+    first = settle_station(db, station)
+    db.expire_all()
+    second = settle_station(db, db.query(type(station)).filter_by(id=station.id).one())
+    assert first["removed"] == 1 and first["published"] == 1
+    assert second == {"removed": 0, "cleared": 0, "published": 0, "bound": 0}
