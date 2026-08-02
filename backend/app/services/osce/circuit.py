@@ -485,8 +485,15 @@ def _station_feedback(
 
 
 def circuit_progress(db: Session, circuit: OsceCircuit) -> dict[str, Any]:
+    # The circuit's owner, not everyone who has filed a sitting against it. Any
+    # other sitting carrying this circuit id is not this candidate's work, and
+    # counting it would report a circuit as further along than they had sat and
+    # fold marks that are not theirs into the percentage.
     sittings = db.execute(
-        select(OsceSession).where(OsceSession.circuit_id == circuit.id)
+        select(OsceSession).where(
+            OsceSession.circuit_id == circuit.id,
+            OsceSession.user_id == circuit.user_id,
+        )
     ).scalars().all()
     done = [s for s in sittings if s.submitted_at is not None]
     total_awarded = 0.0

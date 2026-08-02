@@ -671,6 +671,19 @@ def start_sitting(
             detail="This station has no examiner questions yet. An administrator "
                    "needs to prepare it first.",
         )
+    if payload.circuit_id is not None:
+        # The circuit id arrives from the client, and a sitting filed against
+        # someone else's circuit counts towards their progress: their card would
+        # read further along than they had sat. Nothing of theirs leaks either
+        # way - the results query filters by user - but a candidate's own
+        # progress must be their own work.
+        circuit = db.get(OsceCircuit, payload.circuit_id)
+        if circuit is None:
+            raise HTTPException(status_code=404, detail="Circuit not found")
+        if circuit.user_id != user.id:
+            raise HTTPException(
+                status_code=403, detail="That circuit belongs to someone else"
+            )
     sitting = OsceSession(
         user_id=user.id,
         station_id=station.id,

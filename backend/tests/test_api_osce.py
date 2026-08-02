@@ -964,3 +964,61 @@ def test_a_file_that_is_not_an_image_is_refused(client, db, admin):
     )
     assert response.status_code == 400
     assert "not an image" in response.json()["detail"]
+
+
+def test_a_sitting_cannot_be_filed_against_someone_elses_circuit(client, db, student):
+    """The circuit id comes from the client, so it has to be checked.
+
+    Filing against another candidate's circuit does not expose anything - the
+    results query filters by user - but it would count towards their progress,
+    reporting a circuit as further along than they had sat.
+    """
+    from app.constants import ROLE_STUDENT
+    from tests.conftest import _make_user
+
+    station = make_station(db)
+    circuit_id = client.post(
+        "/api/osce/circuits", json={"station_count": 1}, headers=auth(student)
+    ).json()["id"]
+
+    intruder = _make_user(db, "intruder@example.com", ROLE_STUDENT)
+    refused = client.post(
+        "/api/osce/sittings",
+        json={"station_id": station.id, "circuit_id": circuit_id, "is_timed": True},
+        headers=auth(intruder),
+    )
+    assert refused.status_code == 403
+
+    mine = client.post(
+        "/api/osce/sittings",
+        json={"station_id": station.id, "circuit_id": circuit_id, "is_timed": True},
+        headers=auth(student),
+    )
+    assert mine.status_code == 201
+
+
+def test_circuit_progress_counts_only_the_owners_sittings(client, db, student):
+    """Progress is per candidate even if a stray sitting carries the id."""
+    from app.constants import ROLE_STUDENT
+    from datetime import datetime, timezone
+
+    from app.models import OsceSession
+    from tests.conftest import _make_user
+
+    station = make_station(db)
+    circuit_id = client.post(
+        "/api/osce/circuits", json={"station_count": 1}, headers=auth(student)
+    ).json()["id"]
+
+    # Written straight to the table: the endpoint now refuses this, and the
+    # rows it refused still exist in any database where it did not.
+    intruder = _make_user(db, "stray@example.com", ROLE_STUDENT)
+    # Submitted, so it would be counted as a completed station of this circuit.
+    db.add(OsceSession(user_id=intruder.id, station_id=station.id,
+                       circuit_id=circuit_id, is_timed=True,
+                       submitted_at=datetime.now(timezone.utc)))
+    db.commit()
+
+    circuits = client.get("/api/osce/circuits", headers=auth(student)).json()
+    mine = next(c for c in circuits if c["id"] == circuit_id)
+    assert mine["progress"]["completed"] == 0
