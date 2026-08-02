@@ -754,6 +754,11 @@ def source_image_for_station(
     if described:
         figure.described_findings = described
         figure.verification_status = "described"
+        # Shown, not held. The station has no image and every search for one
+        # has failed, so words are all there is: holding them for approval
+        # leaves the marks unearnable and waits on somebody noticing. The leak
+        # guard above is the check that matters and it has already run.
+        figure.described_findings_approved = True
         if concern:
             figure.verification_notes = (
                 f"{figure.verification_notes or ''}  "
@@ -1251,7 +1256,32 @@ def handle_source_station_images(ctx: JobContext) -> bool:
 
     ctx.cursor_set(index=index + 1)
     ctx.advance(1, f"Images: {index + 1} of {len(station_ids)}")
-    return index + 1 >= len(station_ids)
+
+    finished = index + 1 >= len(station_ids)
+    if finished:
+        # Whatever searching could not fill now falls to the protocol's last
+        # resort, without waiting to be asked. Queued here rather than beside
+        # this job at ingest, because which figures still need words is only
+        # known once every search has been tried.
+        _queue_description_of_gaps(ctx)
+    return finished
+
+
+def _queue_description_of_gaps(ctx: JobContext) -> None:
+    from app.services.jobs.runner import create_job
+
+    ids = figures_needing_description(ctx.db)
+    if not ids:
+        return
+    job = create_job(
+        ctx.db,
+        JOB_DESCRIBE_STATION_FIGURES,
+        payload={"figure_ids": ids},
+        created_by_id=ctx.job.created_by_id,
+        total_steps=len(ids),
+        message=f"Stating the findings for {len(ids)} view(s) with no image",
+    )
+    logger.info("Queued description job %s for %d figure(s)", job.id, len(ids))
 
 
 # More than one picture of the eyes, as the vision model reports it. Both of

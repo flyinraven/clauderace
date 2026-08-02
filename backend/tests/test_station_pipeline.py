@@ -1409,7 +1409,10 @@ def test_a_station_with_no_image_always_has_words(client, db, admin, ai, monkeyp
     assert figure.image_id is None
     assert figure.verification_status == "described"
     assert "temporal optic disc pallor" in figure.described_findings
-    assert figure.described_findings_approved is False, "still read before release"
+    # Shown, not held. The station has no image and every search has failed, so
+    # these words are all the candidate gets - holding them for approval leaves
+    # the marks unearnable until somebody notices. The leak guard has run.
+    assert figure.described_findings_approved is True, "the words reach the candidate"
 
 
 def test_recorded_findings_that_name_the_diagnosis_are_not_read_out(
@@ -1474,3 +1477,39 @@ def test_a_figure_rejected_under_the_old_modality_rule_is_looked_at_again(db):
     figure.verification_status = FROM_PAPER
     db.commit()
     assert station.id not in stations_with_unchecked_figures(db)
+
+
+def test_sourcing_hands_over_to_describing_when_it_finishes(db, admin, run_jobs, ai):
+    """A gap has to close itself, without anybody pressing anything.
+
+    Sourcing that finds nothing used to leave the figure empty and the queue
+    waiting on "Describe the rest" being noticed and pressed. The last resort
+    is part of the protocol, not an errand.
+    """
+    from app.models import OsceFigure
+    from app.services.jobs.runner import create_job
+    from app.services.osce.station_images import (
+        JOB_DESCRIBE_STATION_FIGURES,
+        _queue_description_of_gaps,
+    )
+
+    station = make_station(db)
+    db.add(OsceFigure(station_id=station.id, position=0, image_id=None,
+                      wanted_description="external photograph of the right eye"))
+    db.commit()
+
+    job = create_job(db, "source_station_images", payload={"station_ids": [station.id]},
+                     created_by_id=admin.id, total_steps=1)
+
+    class _Ctx:
+        pass
+
+    ctx = _Ctx()
+    ctx.db = db
+    ctx.job = job
+    _queue_description_of_gaps(ctx)
+
+    from app.models import Job
+    queued = db.query(Job).filter_by(job_type=JOB_DESCRIBE_STATION_FIGURES).all()
+    assert len(queued) == 1, "the figure with no image is handed on to be described"
+    assert queued[0].payload["figure_ids"]
