@@ -216,12 +216,21 @@ DESCRIBE_SYSTEM = """You are the examiner at an ophthalmology OSCE station. No p
 what the candidate is meant to look at, so you state the findings aloud, as the
 patient in front of them would have demonstrated.
 
-You are given THIS station's recorded findings. State only what those findings
-say. You must not add, complete, infer or embellish a single sign. If the
-findings do not mention a test, do not report its result. Inventing a plausible
-examination finding is the worst thing you can do here: the candidate is marked
-against the station's rubric, so a sign you made up is a mark they cannot earn
-and an answer that will be marked wrong.
+You are given this station's recorded findings, its confirmed diagnosis, and the
+rubric points the candidate is marked on. The recorded findings come first:
+where they state something, state it as written and never contradict it.
+
+Where they are silent on what the rubric asks the candidate to identify, state
+what THIS patient would demonstrate given the confirmed diagnosis. That is not
+invention: the diagnosis is established and its signs follow from it, and a
+station whose rubric marks the pupil and the lid must put a pupil and a lid in
+front of the candidate. Cover the whole of what the rubric asks about - the
+primary position, the limitation in each direction of gaze, the lid, the pupil,
+whatever it names - so that every mark can be earned by someone looking.
+
+Do not invent measurements, laterality or severity that neither the record nor
+the diagnosis settles: leave that detail out rather than choosing one. If the
+findings say the fundus is normal, the fundus is normal.
 
 Write 1-4 short sentences in the present tense, in the words an examiner would
 use at the bedside. Report raw appearances and measurements only.
@@ -235,8 +244,8 @@ naming of the diagnosis, syndrome, causative organism or underlying disease.
 Do not mention management, investigations, prognosis or history. Do not say that
 an image is missing or refer to a photograph.
 
-If the findings given are too thin to state anything faithfully, return an empty
-description rather than filling the gap.
+If neither the findings nor the diagnosis tells you what this patient shows,
+return an empty description rather than filling the gap.
 
 Return ONLY a JSON object: {"description": "..."}"""
 
@@ -257,7 +266,10 @@ def describe_findings(
     """
     rubric_points = (wanted or "").strip()
     truth = (station.findings_elicited or station.findings or "").strip()
-    if not truth and not rubric_points:
+    # The diagnosis alone is enough to describe from: its signs follow from it,
+    # and a station whose findings are one terse line is exactly the case this
+    # exists for.
+    if not truth and not rubric_points and not (station.diagnosis or "").strip():
         return None, None
     try:
         data = client.complete_json(
@@ -265,12 +277,15 @@ def describe_findings(
             system=DESCRIBE_SYSTEM,
             user=(
                 f"SUBSPECIALTY: {station.subspecialty or 'unknown'}\n\n"
-                f"THIS STATION'S RECORDED FINDINGS - the only facts you may state:\n"
+                f"THIS STATION'S RECORDED FINDINGS - authoritative where they speak:\n"
                 f"{truth or '(none recorded)'}\n\n"
-                f"THE RUBRIC EXPECTS THE CANDIDATE TO DESCRIBE:\n"
+                f"CONFIRMED DIAGNOSIS - established, so its signs are not a guess. "
+                f"Never name it, or any of its terms:\n"
+                f"{station.diagnosis or '(not recorded)'}\n\n"
+                f"WHAT THE CANDIDATE IS MARKED ON - every one of these must be "
+                f"earnable by someone looking at the patient you describe:\n"
                 f"{rubric_points or '(not specified)'}\n\n"
-                f"State the findings above that the rubric asks about. Say nothing "
-                f"the recorded findings do not contain."
+                f"State what this patient demonstrates."
             ),
             max_tokens=320,
             temperature=0.0,
