@@ -287,11 +287,21 @@ def describe_findings(
                 f"{rubric_points or '(not specified)'}\n\n"
                 f"State what this patient demonstrates."
             ),
-            max_tokens=320,
+            # Enough for the description AND whatever the model thinks first.
+            # At 320 the reply was cut off mid-JSON and every station came back
+            # "Could not describe findings" - a parse failure reported as the
+            # model declining, which is why 47 stations looked like refusals.
+            max_tokens=900,
             temperature=0.0,
         )
-    except (AIError, ValueError, AttributeError):
-        logger.warning("Could not describe findings for station %s", station.id)
+    except (AIError, ValueError, AttributeError) as exc:
+        # Say WHY. This logged one line for every cause, so a reply cut off
+        # mid-JSON by a token cap read exactly like a model declining to
+        # invent - and 47 stations were reported as refusals when the request
+        # had simply been too small for the answer.
+        logger.warning(
+            "Could not describe findings for station %s: %s", station.id, exc
+        )
         return None, None
 
     text = str((data or {}).get("description") or "").strip()
