@@ -38,8 +38,10 @@ from app.services.osce.prompts import JOB_BUILD_OSCE_PROMPTS, stations_needing_p
 from app.services.osce.station_images import (
     JOB_DESCRIBE_STATION_FIGURES,
     JOB_SOURCE_STATION_IMAGES,
+    JOB_VERIFY_STATION_FIGURES,
     figures_needing_description,
     stations_needing_images,
+    stations_with_unchecked_figures,
 )
 from app.services.osce.transcribe_job import JOB_TRANSCRIBE_RESPONSE
 from app.services.settings_store import SettingsStore
@@ -265,6 +267,34 @@ def source_images(
         message=f"Sourcing images for {len(ids)} station(s)",
     )
     return {"job_id": job.id, "station_count": len(ids), "only_missing": only_missing}
+
+
+@router.post("/stations/recheck-figures", status_code=status.HTTP_202_ACCEPTED)
+def recheck_station_figures(admin: AdminUser, db: DbSession) -> dict[str, Any]:
+    """Grade the papers' own photographs against their stations again.
+
+    Ingest queues this itself, so it is normally not a decision anyone makes.
+    It is here for the figures that were graded under a rule that has since
+    changed: a real photograph of an investigation the opening task did not ask
+    for used to be turned down, and the station then bought a web lookalike
+    instead of showing the picture the paper already contained.
+
+    Costs one vision call per figure and spends no image-search quota: nothing
+    here searches for anything.
+    """
+    ids = stations_with_unchecked_figures(db)
+    if not ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Every image taken from a paper has already been checked",
+        )
+    job = create_job(
+        db, JOB_VERIFY_STATION_FIGURES,
+        payload={"station_ids": ids},
+        created_by_id=admin.id, total_steps=len(ids),
+        message=f"Rechecking the figures of {len(ids)} station(s)",
+    )
+    return {"job_id": job.id, "station_count": len(ids)}
 
 
 @router.post("/figures/describe-missing", status_code=status.HTTP_202_ACCEPTED)

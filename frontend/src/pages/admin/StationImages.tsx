@@ -86,6 +86,19 @@ export default function StationImages() {
     }
   }
 
+  /** Re-grade the papers' own photographs under the current rule. */
+  const recheckFigures = async () => {
+    setError(null)
+    try {
+      const result = await api<{ job_id: number }>('/osce/stations/recheck-figures', {
+        method: 'POST',
+      })
+      setJobId(result.job_id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nothing to recheck')
+    }
+  }
+
   /** The protocol's last resort, for the views sourcing could not fill. */
   const describeMissing = async () => {
     setError(null)
@@ -191,6 +204,9 @@ export default function StationImages() {
         </div>
         <div className="flex flex-wrap gap-2">
           <Button onClick={sourceImages}>Source missing images</Button>
+          <Button variant="secondary" onClick={recheckFigures}>
+            Recheck paper images
+          </Button>
           <Button variant="secondary" onClick={describeMissing}>
             Describe the rest
           </Button>
