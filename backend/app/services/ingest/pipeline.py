@@ -499,16 +499,15 @@ def _attach_station_figures(
     OSCE deck carries the real photograph the candidates were shown, so these
     are worth far more than a web lookalike.
 
-    They are not, however, self-evidently right. "Every image on this block's
-    pages" also collects mark-distribution charts, tables set as pictures, and
-    the neighbouring station's photographs - one 2023 Semester 2 station took
-    fifteen figures this way. And a genuine photograph of the wrong thing is
-    still no use to the question being asked: a fundus shot cannot answer
-    "examine the anterior segment", and every mark for it is unearnable.
+    "Every image on this block's pages" does also collect mark-distribution
+    charts and tables set as pictures. They are shown anyway: several images at
+    a station is a small and visible problem, while a station whose own
+    photograph is hidden - and a web lookalike bought to replace it - is
+    neither. Holding these for a check is what caused that, twice.
 
-    So they are stored unapproved, and the verification job grades them against
-    the station the same way a sourced image is graded. Nothing reaches a
-    candidate until it has been looked at.
+    The classification pass that follows records what each one is, so a question
+    asking the candidate to read an OCT can be handed this paper's OCT. It
+    never unapproves anything.
     """
     for position, extracted in enumerate(block.images):
         record = _get_or_create_image(db, extracted, source.id)
@@ -518,8 +517,10 @@ def _attach_station_figures(
                 image_id=record.id,
                 position=position,
                 caption=extracted.caption or extracted.label,
+                # "unverified" so the classification pass still picks it up and
+                # records the modality - it is approval that no longer waits.
                 verification_status="unverified",
-                is_approved=False,
+                is_approved=True,
             )
         )
 

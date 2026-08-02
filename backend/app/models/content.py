@@ -344,6 +344,12 @@ class OsceFigure(TimestampMixin, Base):
         Boolean, default=False, nullable=False
     )
 
+    # What the image IS - "fundus", "oct", "visual_field", "radiology" and so
+    # on - as the vision model reports it. Recorded so a question asking the
+    # candidate to read an OCT can be handed the OCT the paper already printed,
+    # without guessing from the caption.
+    modality: Mapped[str | None] = mapped_column(String(20))
+
     # Vision check: "pending" | "verified" | "rejected" | "unverified"
     verification_status: Mapped[str] = mapped_column(
         String(20), default="pending", nullable=False

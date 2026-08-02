@@ -972,18 +972,20 @@ def test_an_exhausted_account_still_stops_the_run(
     assert db.get(Job, response.json()["job_id"]).status == "failed"
 
 
-def test_an_ingested_figure_is_checked_before_a_candidate_sees_it(
+def test_an_ingested_figure_is_shown_and_classified(
     client, db, admin, ai, run_jobs, monkeypatch
 ):
-    """Ingest took every image on a block's pages on trust.
+    """Whatever the report printed, the candidates were shown it.
 
-    A 2023 Semester 2 station collected fifteen figures that way - mark charts,
-    tables set as pictures, the neighbouring station's photographs - all marked
-    verified and approved, none of them looked at. What is not a clinical image
-    of this station is still dropped.
+    This was a gate, and the grader behind it is written to screen web search
+    results: annotation means somebody labelled the abnormality, a mismatched
+    modality means the wrong picture was bought. Against an examiners' report
+    it rejected the report for looking like a report - 118 real CTs, visual
+    fields, OCTs and fundus photographs in one pass. Multiple images is the
+    accepted risk; a hidden photograph and a bought stranger's is not.
 
-    A genuine photograph of another investigation is NOT dropped: see
-    `test_the_reports_own_investigation_is_shown_not_replaced`.
+    The model is still asked what the image is, because a question wanting an
+    OCT should be handed the OCT the paper already contains.
     """
     from app.models import OsceFigure
     from app.services.osce.station_images import (
@@ -999,7 +1001,6 @@ def test_an_ingested_figure_is_checked_before_a_candidate_sees_it(
                   size_bytes=100, origin="pdf")
     db.add(image)
     db.flush()
-    # Exactly what ingest used to write.
     figure = OsceFigure(station_id=station.id, position=0, image_id=image.id,
                         verification_status="unverified", is_approved=False)
     db.add(figure)
@@ -1007,21 +1008,20 @@ def test_an_ingested_figure_is_checked_before_a_candidate_sees_it(
 
     assert station.id in stations_with_unchecked_figures(db)
 
+    # The verdict the old gate would have rejected outright.
     ai.responder = lambda body, n: json.dumps({
-        "tier": "reject", "modality": "other", "confidence": 0.2,
-        "shows": "A bar chart of the mark distribution",
-        "reason": "It is a chart, not a clinical image", "missing": None,
-        "caption": None,
+        "tier": "reject", "modality": "visual_field", "confidence": 0.9,
+        "shows": "A Humphrey visual field printout for the left eye",
+        "reason": "It carries printed text and numbers", "missing": None,
+        "caption": "Visual field printout, left eye",
     })
     outcome = verify_ingested_figures(db, AIClient(db), station)
 
     db.expire_all()
     figure = db.query(OsceFigure).filter_by(id=figure.id).one()
-    assert outcome["rejected"] == 1
-    assert figure.is_approved is False, "a mark chart is not a clinical image"
-    # Terminal, and deliberately not "rejected": a re-verification pass looks at
-    # "rejected" again, and re-checking a chart buys back what is already known.
-    assert figure.verification_status == "not_clinical"
+    assert outcome["kept"] == 1
+    assert figure.is_approved is True, "the paper's own figure is shown"
+    assert figure.modality == "visual_field", "recorded, so a question can claim it"
     assert station.id not in stations_with_unchecked_figures(db)
 
 
@@ -1061,7 +1061,7 @@ def test_the_reports_own_investigation_is_shown_not_replaced(client, db, admin, 
     assert outcome["kept"] == 1
     assert figure.is_approved is True, "the paper's own photograph is shown"
     assert figure.verification_status != "rejected"
-    assert "opening task" in (figure.verification_notes or "").lower()
+    assert figure.modality == "fundus"
 
 
 def test_the_reports_own_photograph_is_kept_even_when_imperfect(
@@ -1449,6 +1449,7 @@ def test_a_figure_rejected_under_the_old_modality_rule_is_looked_at_again(db):
     """
     from app.models import OsceFigure
     from app.services.osce.station_images import (
+        FROM_PAPER,
         NOT_CLINICAL,
         stations_with_unchecked_figures,
     )
@@ -1465,6 +1466,11 @@ def test_a_figure_rejected_under_the_old_modality_rule_is_looked_at_again(db):
 
     assert station.id in stations_with_unchecked_figures(db)
 
+    # Written by the rule that dropped these. Those rows must come back round.
     figure.verification_status = NOT_CLINICAL
+    db.commit()
+    assert station.id in stations_with_unchecked_figures(db)
+
+    figure.verification_status = FROM_PAPER
     db.commit()
     assert station.id not in stations_with_unchecked_figures(db)

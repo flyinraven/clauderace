@@ -827,48 +827,46 @@ JOB_VERIFY_STATION_FIGURES = "verify_station_figures"
 # through a vision model and must not be re-graded for free.
 UNCHECKED_STATUSES = frozenset({"verified", "unverified", "", None})
 
-# Not a clinical image of this station at all - a chart, a table set as a
-# picture, a diagram. Terminal: re-checking one costs a vision call to learn
-# what is already known, so it is deliberately distinct from "rejected", which
-# a figure could carry for reasons a later rule reconsiders.
+# Written by the rule that used to drop a paper's own figures. Kept only so the
+# rows carrying it can be found and reconsidered - nothing sets it now.
 NOT_CLINICAL = "not_clinical"
+
+# Taken from the examiners' report, and shown on that basis.
+FROM_PAPER = "from_paper"
 
 # What a re-verification pass will look at again. "rejected" is in here because
 # it used to mean two different things: a chart, and a real photograph of an
 # investigation the opening task did not ask for. The second is now kept and
 # shown, so those have to be reconsidered rather than left dark for ever.
-REVIEWABLE_STATUSES = UNCHECKED_STATUSES | {"rejected"}
+REVIEWABLE_STATUSES = UNCHECKED_STATUSES | {"rejected", NOT_CLINICAL}
 
 
 def verify_ingested_figures(
     db: Session, client: AIClient, station: OsceStation
 ) -> dict[str, Any]:
-    """Check the photographs lifted out of the examiners' report.
+    """Record what each of the report's own figures is. Do not judge whether to show it.
 
-    Ingest attached every image on a block's pages, in page order, marked
-    verified and approved, on the reasoning that a photograph printed in the
-    report is by definition the real one. Two things are wrong with that.
+    This used to be a gate, and everything about that was wrong for a paper's
+    own images. The grader it called is written to screen web search results,
+    where an annotation means somebody has labelled the abnormality for the
+    candidate and a mismatched modality means the wrong picture was bought. Run
+    against the examiners' report it rejects the report for looking like a
+    report: a Humphrey printout is text and numbers by nature, an OCT report
+    carries measurement overlays, and 118 real CTs, fields, OCTs and fundus
+    photographs were dropped in one pass on that basis.
 
-    The first is that a block spans pages, so "every image on them" is not the
-    station's photographs - it is those plus mark-distribution charts, tables
-    set as pictures, and whatever the neighbouring station used. One station
-    from the 2023 Semester 2 paper collected fifteen figures this way.
+    An image printed in the examiners' report is an image the real candidates
+    were shown. It goes live. The risk of showing a mark-distribution chart
+    beside a station is small and visible; the risk of hiding the station's own
+    photograph and buying a stranger's is neither.
 
-    The second is that being genuine is not the same as answering the question.
-    A fundus photograph is no use to "please examine the anterior segment": the
-    candidate is asked for signs the image cannot show, and every mark for them
-    is unearnable - the exact failure the sourcing path was built to prevent,
-    reappearing through a door it does not watch.
-
-    So they go through the same gate: the same vision grader, the same modality
-    check against what the first task asks the candidate to do. What survives
-    keeps its place. What does not is unapproved rather than deleted, because
-    the image did come out of the real paper and an administrator may want to
-    put it back against a different question.
+    What the vision model is still good for is saying WHAT the image is, and
+    that is now all it is asked: the modality is recorded so a question wanting
+    an OCT can be handed the OCT this paper already contains, and a neutral
+    caption replaces one that names the diagnosis. A figure whose check fails
+    is shown anyway - the check is an improvement to it, not a condition of it.
     """
-    expected = expected_modalities_for(station, None)
-    signs = station.findings_elicited or station.findings or ""
-    kept, rejected, skipped = 0, 0, 0
+    kept, described, skipped = 0, 0, 0
 
     for figure in sorted(station.figures, key=lambda f: f.position):
         if figure.image_id is None or figure.verification_status not in REVIEWABLE_STATUSES:
@@ -879,64 +877,38 @@ def verify_ingested_figures(
             skipped += 1
             continue
 
-        try:
-            verdict = verify_image(db, client, station, image.data, image.content_type)
-        except Exception as exc:  # noqa: BLE001 - one figure must not stop the rest
-            logger.warning("Could not verify figure %s: %s", figure.id, exc)
-            skipped += 1
-            continue
-
-        tier = str(verdict.get("tier") or "reject").lower()
-        confidence = as_float(verdict.get("confidence"), 0.0)
-        mismatch = modality_mismatch(expected, verdict.get("modality"))
-        figure.match_confidence = confidence
-        figure.verification_notes = str(verdict.get("shows") or "").strip() or None
-        figure.caption = (
-            figure.caption or str(verdict.get("caption") or "").strip() or None
-        )
-
-        if tier == "reject" or confidence < MIN_REPRESENTATIVE_CONFIDENCE:
-            # A chart, a diagram, a table set as a picture, or a photograph of
-            # something else entirely. Not a clinical image of this station at
-            # all, so there is nothing to show.
-            figure.verification_status = NOT_CLINICAL
-            figure.is_approved = False
-            figure.verification_notes = (
-                f"{figure.verification_notes or ''} "
-                f"[Not shown: {verdict.get('reason') or 'rejected'}]"
-            ).strip()[:4000]
-            rejected += 1
-            continue
-
-        if mismatch:
-            # A real clinical image from the real paper, of a different
-            # investigation than the opening task asks for - a visual field
-            # where the task says angiogram. This used to unapprove it, and the
-            # station then went and bought a web lookalike instead: the
-            # examiners' own photograph discarded in favour of a stranger's.
-            #
-            # It is kept and shown. `bind_ingested_figures_to_questions` runs
-            # straight after this and gives it to whichever question does ask
-            # for that investigation; where no question does, it still belongs
-            # to the station and is still what the candidates were shown. The
-            # mismatch is recorded so it can be read, not acted on.
-            figure.verification_notes = (
-                f"{figure.verification_notes or ''} "
-                f"[Not the opening task's investigation: {mismatch}]"
-            ).strip()[:4000]
-
-        figure.verification_status = tier
-        # A lower bar than a web image, deliberately. This one came out of the
-        # examiners' report: it IS the photograph the real candidates were
-        # shown, so "representative" here means the grader could not tie every
-        # recorded sign to it, not that some stranger's eye was substituted for
-        # the patient's. Holding those back would throw away the best images in
-        # the bank. Only a chart, a diagram or the wrong examination is dropped.
+        # Live first, so that a failure below cannot leave it hidden.
+        figure.verification_status = FROM_PAPER
         figure.is_approved = True
         kept += 1
 
+        # The paper's own caption often names the diagnosis - "Figure 3: disc
+        # in advanced glaucoma" - which answers the question before it is
+        # asked. The station's leak guard applies to it exactly as it does to
+        # findings stated in words.
+        if figure.caption and leaked_term(figure.caption, station):
+            figure.caption = None
+
+        try:
+            verdict = verify_image(db, client, station, image.data, image.content_type)
+        except Exception as exc:  # noqa: BLE001 - one figure must not stop the rest
+            logger.warning("Could not classify figure %s: %s", figure.id, exc)
+            db.commit()
+            continue
+
+        figure.modality = str(verdict.get("modality") or "").strip().lower() or None
+        figure.match_confidence = as_float(verdict.get("confidence"), 0.0)
+        figure.verification_notes = str(verdict.get("shows") or "").strip() or None
+        if not figure.caption:
+            figure.caption = str(verdict.get("caption") or "").strip() or None
+        described += 1
+        db.commit()
+
     db.commit()
-    return {"kept": kept, "rejected": rejected, "skipped": skipped}
+    # "rejected" stays in the tally at zero: the job handler sums these keys
+    # across stations and a missing one would read as a station that was never
+    # looked at.
+    return {"kept": kept, "rejected": 0, "described": described, "skipped": skipped}
 
 
 def bind_ingested_figures_to_questions(
@@ -980,26 +952,18 @@ def bind_ingested_figures_to_questions(
             image = db.get(Image, figure.image_id)
             if image is None or image.origin != "pdf":
                 continue
-            if named_modality(f"{figure.caption or ''} {figure.verification_notes or ''}") != asked:
-                continue
-            try:
-                verdict = verify_image(
-                    db, client, station, image.data, image.content_type, wanted
-                )
-            except Exception as exc:  # noqa: BLE001 - try the next figure
-                logger.debug("Could not verify figure %s for a question: %s", figure.id, exc)
-                continue
-            tier = str(verdict.get("tier") or "reject").lower()
-            if tier == "reject" or modality_mismatch(
-                expected_modalities(wanted), verdict.get("modality")
-            ):
+            # What the classification pass recorded, falling back to the words
+            # on the figure for rows written before it ran. Matching on the
+            # caption alone was guesswork: a caption that happened not to name
+            # its modality left the question unanswered and sent the station
+            # off to buy the investigation the paper had already printed.
+            mine = figure.modality or named_modality(
+                f"{figure.caption or ''} {figure.verification_notes or ''}"
+            )
+            if mine != asked:
                 continue
 
             figure.wanted_description = wanted
-            figure.verification_status = tier
-            figure.match_confidence = as_float(verdict.get("confidence"), 0.0)
-            figure.caption = str(verdict.get("caption") or "").strip() or figure.caption
-            figure.verification_notes = str(verdict.get("shows") or "").strip() or None
             figure.is_approved = True
             prompt["figure_id"] = figure.id
             spare.remove(figure)
