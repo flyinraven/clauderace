@@ -72,7 +72,16 @@ _NON_VISUAL_RE = re.compile(
     # each became a view demanding an image, so one photograph was attached to
     # the station three times over and shown three times to the candidate.
     r"demonstrat\w+\b|performs?\b|uses?\b|utilis\w+\b|applies\b|conducts?\b|"
-    r"undertakes?\b|instructs?\b|maintains?\b|ensures?\b|adopts?\b|employs?\b)",
+    r"undertakes?\b|instructs?\b|maintains?\b|ensures?\b|adopts?\b|employs?\b|"
+    # The act of examining, as against what the examination shows. Station 9A's
+    # "Examines the other cranial nerves for involvement" became a view of its
+    # own: six searches went looking for a photograph of examining cranial
+    # nerves, found nothing any search could find, and left the station holding
+    # a figure nothing will ever fill. A rubric line that opens by naming what
+    # the candidate DOES is a mark for doing it - the signs to be shown are in
+    # the lines that name signs.
+    r"examines?\b|assesses?\b|checks?\b|tests?\b|inspects?\b|palpates?\b|"
+    r"measures?\b|compares?\b|screens?\b)",
     re.IGNORECASE,
 )
 

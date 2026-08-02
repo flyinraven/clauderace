@@ -365,3 +365,36 @@ def test_a_station_with_no_figures_at_all_is_untouched() -> None:
     assert [p["label"] for p in sittable_prompts(_StationWithFigures(PROMPTS, []))] == [
         "A", "B", "C", "D"
     ]
+
+
+def test_a_rubric_mark_for_doing_the_examination_is_not_a_view() -> None:
+    """Station 9A asked for a photograph of examining cranial nerves.
+
+    "Examines the other cranial nerves for involvement" is a mark for the act,
+    not a sign to be shown. It became a view of its own: six searches went
+    looking for a picture of an examination, found nothing any search could
+    find, and left the station holding a figure nothing will ever fill - which
+    was then offered the station's fundus findings as a description.
+    """
+    task = {
+        "text": "Please examine this patient's eye movements.",
+        "rubric": [
+            {"text": "Examines the other cranial nerves for involvement", "marks": 2},
+            {"text": "Assesses pupil reactions", "marks": 2},
+            {"text": "Checks for ptosis", "marks": 1},
+        ],
+    }
+    assert required_views(task) == []
+
+
+def test_a_sign_among_the_actions_still_earns_its_view() -> None:
+    """Dropping the actions must not drop the station's actual findings."""
+    task = {
+        "text": "Please examine this patient's eye movements.",
+        "rubric": [
+            {"text": "Examines the other cranial nerves for involvement", "marks": 2},
+            {"text": "Right eye fails to abduct beyond the midline", "marks": 3},
+        ],
+    }
+    views = required_views(task)
+    assert views, "the abduction deficit is a sign, and needs showing"

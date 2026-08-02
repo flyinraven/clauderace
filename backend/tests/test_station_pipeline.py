@@ -1513,3 +1513,45 @@ def test_sourcing_hands_over_to_describing_when_it_finishes(db, admin, run_jobs,
     queued = db.query(Job).filter_by(job_type=JOB_DESCRIBE_STATION_FIGURES).all()
     assert len(queued) == 1, "the figure with no image is handed on to be described"
     assert queued[0].payload["figure_ids"]
+
+
+def test_the_stations_findings_do_not_stand_in_for_an_investigation(db):
+    """Fundus findings are not a description of a CT angiogram.
+
+    When no image can be found the station states its recorded findings
+    instead. Those are the bedside examination, so they stand in for a missing
+    photograph of it - and not for a scan, which shows something the findings
+    never described. Station 9A asked for a CT angiogram of the circle of
+    Willis and was offered "Fundus examination is normal", three times over.
+    """
+    from app.services.osce.station_images import verbatim_findings_floor
+
+    station = make_station(db)
+    station.findings_elicited = "Fundus examination is normal."
+
+    words, _ = verbatim_findings_floor(
+        station, "Urgent CT angiography of the brain and circle of Willis"
+    )
+    assert words is None, "the fundus findings say nothing about an angiogram"
+
+    for investigation in ("OCT of the right macula", "Humphrey visual field of the left eye"):
+        assert verbatim_findings_floor(station, investigation)[0] is None
+
+    # The station's own examination is exactly what they do describe.
+    words, concern = verbatim_findings_floor(station, "external photograph of the right eye")
+    assert words == "Fundus examination is normal."
+    assert "verbatim" in (concern or "")
+
+    # And a view nobody named still gets them - that is the floor's whole job.
+    assert verbatim_findings_floor(station, None)[0] == "Fundus examination is normal."
+
+
+def test_a_description_that_names_the_diagnosis_is_never_the_floor(db):
+    """The leak guard governs the verbatim quote as much as the model's words."""
+    from app.services.osce.station_images import verbatim_findings_floor
+
+    station = make_station(db)
+    station.diagnosis = "Retinitis pigmentosa"
+    station.findings_elicited = "Bone spicule pigmentation of retinitis pigmentosa."
+
+    assert verbatim_findings_floor(station, None)[0] is None

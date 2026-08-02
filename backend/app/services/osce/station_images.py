@@ -515,6 +515,34 @@ def expected_modalities_for(station: OsceStation, wanted: str | None) -> frozens
     return frozenset()
 
 
+def verbatim_findings_floor(
+    station: OsceStation, wanted: str | None
+) -> tuple[str | None, str | None]:
+    """The station's own recorded findings, where they can honestly stand in.
+
+    When no image can be found and the model declines to describe one, the
+    examiners' printed findings are the floor beneath it: always available,
+    never an invention, and refused by the leak guard if they name the
+    diagnosis.
+
+    They describe the bedside examination, so they stand in only for a missing
+    photograph of that. For a view that asked for a different investigation
+    they are simply about something else - station 9A wanted a CT angiogram of
+    the circle of Willis and was offered "Fundus examination is normal", which
+    is not a description of an angiogram and would be marked against.
+
+    One function because there are two callers - the sourcing path and the
+    description pass - and when they each carried their own copy the rule was
+    fixed in one and left wrong in the other.
+    """
+    if named_modality(wanted or "") in ANCILLARY_MODALITIES:
+        return None, None
+    recorded = (station.findings_elicited or station.findings or "").strip()
+    if not recorded or leaked_term(recorded, station):
+        return None, None
+    return recorded, "stated verbatim from the station's recorded findings"
+
+
 def source_image_for_station(
     db: Session,
     client: AIClient,
@@ -745,10 +773,10 @@ def source_image_for_station(
         # a rival to it. The leak guard still applies - findings that name the
         # diagnosis cannot be read out - and it is held for review like any
         # other wording.
-        recorded = (station.findings_elicited or "").strip()
-        if recorded and not leaked_term(recorded, station):
-            described = recorded
-            concern = "stated verbatim from the station's recorded findings"
+        described, concern = verbatim_findings_floor(
+            station, wanted or figure.wanted_description
+        )
+        if described:
             logger.info("Station %s falls back to its recorded findings", station.id)
 
     if described:
@@ -831,6 +859,14 @@ JOB_VERIFY_STATION_FIGURES = "verify_station_figures"
 # What ingest wrote before its figures were checked. Anything else has been
 # through a vision model and must not be re-graded for free.
 UNCHECKED_STATUSES = frozenset({"verified", "unverified", "", None})
+
+# Investigations the examiner hands over, as against what they see looking at
+# the patient. A station's recorded findings are the bedside examination, so
+# they can stand in for a missing photograph of it - and cannot stand in for
+# one of these, which show something the findings never described.
+ANCILLARY_MODALITIES = frozenset(
+    {"oct", "angiogram", "radiology", "visual_field", "ultrasound", "topography", "pathology"}
+)
 
 # Written by the rule that used to drop a paper's own figures. Kept only so the
 # rows carrying it can be found and reconsidered - nothing sets it now.
@@ -1469,10 +1505,9 @@ def handle_describe_station_figures(ctx: JobContext) -> bool:
                 # printed, so stating them verbatim is not an invention and is
                 # always available. Same floor the sourcing path already falls
                 # back to, and the leak guard still applies.
-                recorded = (station.findings_elicited or station.findings or "").strip()
-                if recorded and not leaked_term(recorded, station):
-                    described = recorded
-                    concern = "stated verbatim from the station's recorded findings"
+                described, concern = verbatim_findings_floor(
+                    station, figure.wanted_description
+                )
             if described:
                 figure.described_findings = described
                 figure.verification_status = "described"

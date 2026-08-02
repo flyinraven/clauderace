@@ -9,6 +9,9 @@ interface StationFigure {
   station_id: number
   image_id: number | null
   caption: string | null
+  // What this figure is for. Several figures on one station are otherwise
+  // indistinguishable: same heading, same case summary, different request.
+  wanted_description: string | null
   search_query: string | null
   verification_status: string
   verification_notes: string | null
@@ -413,6 +416,12 @@ function FigureCard({
           )}
 
           <dl className="mt-3 space-y-1.5 text-xs">
+            {figure.wanted_description && (
+              <div>
+                <dt className="font-semibold text-slate-500">This view is for</dt>
+                <dd className="text-slate-700">{figure.wanted_description}</dd>
+              </div>
+            )}
             <div>
               <dt className="font-semibold text-slate-500">Caption shown to you in the station</dt>
               <dd className="text-slate-700">{figure.caption ?? '—'}</dd>

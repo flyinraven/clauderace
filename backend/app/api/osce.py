@@ -325,6 +325,11 @@ class StationFigureOut(BaseModel):
     station_id: int
     image_id: int | None
     caption: str | None
+    # What this figure is FOR. A station can hold several, and without this
+    # they render as identical cards headed by the same station and case -
+    # a gaze montage, a CT angiogram and a third view looking like one figure
+    # listed three times.
+    wanted_description: str | None
     described_findings: str | None
     described_findings_approved: bool
     search_query: str | None
