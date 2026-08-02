@@ -1019,7 +1019,10 @@ def test_an_ingested_figure_is_checked_before_a_candidate_sees_it(
     figure = db.query(OsceFigure).filter_by(id=figure.id).one()
     assert outcome["rejected"] == 1
     assert figure.is_approved is False, "a mark chart is not a clinical image"
-    assert figure.verification_status == "rejected"
+    # Terminal, and deliberately not "rejected": a re-verification pass looks at
+    # "rejected" again, and re-checking a chart buys back what is already known.
+    assert figure.verification_status == "not_clinical"
+    assert station.id not in stations_with_unchecked_figures(db)
 
 
 def test_the_reports_own_investigation_is_shown_not_replaced(client, db, admin, ai):
@@ -1434,3 +1437,34 @@ def test_recorded_findings_that_name_the_diagnosis_are_not_read_out(
     db.expire_all()
     figure = db.query(OsceFigure).filter_by(station_id=station.id).one()
     assert not figure.described_findings, "naming the answer is worse than saying nothing"
+
+
+def test_a_figure_rejected_under_the_old_modality_rule_is_looked_at_again(db):
+    """The backlog is the reason the selector was widened.
+
+    "rejected" used to mean both "a chart" and "a real photograph of a different
+    investigation". The second is now kept and shown, so those rows have to come
+    back round - otherwise they stay dark for ever and the station goes on
+    showing a web lookalike instead of the examiners' own picture.
+    """
+    from app.models import OsceFigure
+    from app.services.osce.station_images import (
+        NOT_CLINICAL,
+        stations_with_unchecked_figures,
+    )
+
+    station = make_station(db)
+    image = Image(sha256="a" * 63 + "1", content_type="image/jpeg", data=big_photo(),
+                  size_bytes=100, origin="pdf")
+    db.add(image)
+    db.flush()
+    figure = OsceFigure(station_id=station.id, position=0, image_id=image.id,
+                        verification_status="rejected", is_approved=False)
+    db.add(figure)
+    db.commit()
+
+    assert station.id in stations_with_unchecked_figures(db)
+
+    figure.verification_status = NOT_CLINICAL
+    db.commit()
+    assert station.id not in stations_with_unchecked_figures(db)

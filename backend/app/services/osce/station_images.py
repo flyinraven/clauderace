@@ -827,6 +827,18 @@ JOB_VERIFY_STATION_FIGURES = "verify_station_figures"
 # through a vision model and must not be re-graded for free.
 UNCHECKED_STATUSES = frozenset({"verified", "unverified", "", None})
 
+# Not a clinical image of this station at all - a chart, a table set as a
+# picture, a diagram. Terminal: re-checking one costs a vision call to learn
+# what is already known, so it is deliberately distinct from "rejected", which
+# a figure could carry for reasons a later rule reconsiders.
+NOT_CLINICAL = "not_clinical"
+
+# What a re-verification pass will look at again. "rejected" is in here because
+# it used to mean two different things: a chart, and a real photograph of an
+# investigation the opening task did not ask for. The second is now kept and
+# shown, so those have to be reconsidered rather than left dark for ever.
+REVIEWABLE_STATUSES = UNCHECKED_STATUSES | {"rejected"}
+
 
 def verify_ingested_figures(
     db: Session, client: AIClient, station: OsceStation
@@ -859,7 +871,7 @@ def verify_ingested_figures(
     kept, rejected, skipped = 0, 0, 0
 
     for figure in sorted(station.figures, key=lambda f: f.position):
-        if figure.image_id is None or figure.verification_status not in UNCHECKED_STATUSES:
+        if figure.image_id is None or figure.verification_status not in REVIEWABLE_STATUSES:
             skipped += 1
             continue
         image = db.get(Image, figure.image_id)
@@ -887,7 +899,7 @@ def verify_ingested_figures(
             # A chart, a diagram, a table set as a picture, or a photograph of
             # something else entirely. Not a clinical image of this station at
             # all, so there is nothing to show.
-            figure.verification_status = "rejected"
+            figure.verification_status = NOT_CLINICAL
             figure.is_approved = False
             figure.verification_notes = (
                 f"{figure.verification_notes or ''} "
@@ -1053,7 +1065,9 @@ def stations_with_unchecked_figures(db: Session) -> list[int]:
         .where(Image.origin == "pdf")
         .where(
             OsceFigure.verification_status.is_(None)
-            | OsceFigure.verification_status.in_(["verified", "unverified", ""])
+            | OsceFigure.verification_status.in_(
+                [s for s in REVIEWABLE_STATUSES if s is not None]
+            )
         )
         .distinct()
     ).scalars().all()
