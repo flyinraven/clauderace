@@ -1375,24 +1375,26 @@ def test_a_failed_re_source_keeps_the_image_the_station_already_had(
     assert "kept" in outcome["reason"]
 
 
-def test_a_station_with_no_image_always_has_words(client, db, admin, ai, monkeypatch):
-    """Four stations ended with no image and no description either.
+def test_a_named_view_the_model_declines_gets_no_invented_words(client, db, admin, ai, monkeypatch):
+    """No image, and a model that declines: the station says nothing.
 
-    The model that writes the bedside wording is told to return nothing rather
-    than invent, and on a terse station it does. The station's own recorded
-    findings are not an invention - they are what the examiners printed - so
-    they are the floor beneath it. A candidate can work with words; they can do
-    nothing at all with a blank screen.
+    The floor of printed findings is for a figure that named no view - that one
+    IS the station's own examination. A named view gets words from the model,
+    which is given the findings and told to state only what they contain, or it
+    gets none. Quoting the findings anyway put "Fundus examination is normal"
+    under a nine-positions-of-gaze montage and under a CT angiogram.
+
+    A station with nothing to show is visible, in the admin page and on the
+    station itself. Wrong words read as fact and are marked against.
     """
     from app.models import OsceFigure
     from app.services.osce.station_images import source_image_for_station
 
-    station = make_station(
-        db,
-        findings_elicited="Bilateral temporal optic disc pallor. No relative afferent "
-                          "pupillary defect.",
-        diagnosis="Dominant optic atrophy",
-    )
+    # Deliberately the fixture's own station, findings and prompts together:
+    # the floor quotes the findings for the view the station itself asks for,
+    # and a fixture pairing optic-atrophy findings with an anterior segment
+    # task tests neither that nor anything else.
+    station = make_station(db)
     _configure_image_search(db)
     monkeypatch.setattr(
         "app.services.osce.station_images.build_provider", lambda store: FakeSearch([])
@@ -1407,12 +1409,9 @@ def test_a_station_with_no_image_always_has_words(client, db, admin, ai, monkeyp
     db.expire_all()
     figure = db.query(OsceFigure).filter_by(station_id=station.id).one()
     assert figure.image_id is None
-    assert figure.verification_status == "described"
-    assert "temporal optic disc pallor" in figure.described_findings
-    # Shown, not held. The station has no image and every search has failed, so
-    # these words are all the candidate gets - holding them for approval leaves
-    # the marks unearnable until somebody notices. The leak guard has run.
-    assert figure.described_findings_approved is True, "the words reach the candidate"
+    assert figure.verification_status == "rejected"
+    assert not (figure.described_findings or ""), "nothing invented for a named view"
+    assert figure.described_findings_approved is False, "there are no words to release"
 
 
 def test_recorded_findings_that_name_the_diagnosis_are_not_read_out(
@@ -1529,21 +1528,20 @@ def test_the_stations_findings_do_not_stand_in_for_an_investigation(db):
     station = make_station(db)
     station.findings_elicited = "Fundus examination is normal."
 
-    words, _ = verbatim_findings_floor(
-        station, "Urgent CT angiography of the brain and circle of Willis"
-    )
-    assert words is None, "the fundus findings say nothing about an angiogram"
+    for named in (
+        "Urgent CT angiography of the brain and circle of Willis",
+        "OCT of the right macula",
+        "external photograph montage of the nine positions of gaze",
+    ):
+        assert verbatim_findings_floor(station, named)[0] is None, (
+            "a named view gets words from the model, which weighs them, or none"
+        )
 
-    for investigation in ("OCT of the right macula", "Humphrey visual field of the left eye"):
-        assert verbatim_findings_floor(station, investigation)[0] is None
-
-    # The station's own examination is exactly what they do describe.
-    words, concern = verbatim_findings_floor(station, "external photograph of the right eye")
+    # A figure that named no view IS the station's own examination, and the
+    # printed findings are what the examiner would state for it.
+    words, concern = verbatim_findings_floor(station, None)
     assert words == "Fundus examination is normal."
     assert "verbatim" in (concern or "")
-
-    # And a view nobody named still gets them - that is the floor's whole job.
-    assert verbatim_findings_floor(station, None)[0] == "Fundus examination is normal."
 
 
 def test_a_description_that_names_the_diagnosis_is_never_the_floor(db):

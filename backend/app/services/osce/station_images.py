@@ -518,24 +518,30 @@ def expected_modalities_for(station: OsceStation, wanted: str | None) -> frozens
 def verbatim_findings_floor(
     station: OsceStation, wanted: str | None
 ) -> tuple[str | None, str | None]:
-    """The station's own recorded findings, where they can honestly stand in.
+    """The station's printed findings, where they can honestly stand in.
 
-    When no image can be found and the model declines to describe one, the
-    examiners' printed findings are the floor beneath it: always available,
-    never an invention, and refused by the leak guard if they name the
-    diagnosis.
+    When no image can be found, `describe_findings` is asked to state the signs
+    in words. It is given the station's recorded findings and the view in
+    question, and told to say nothing the findings do not contain - so it is
+    already the thing that judges whether they describe that view. When it
+    declines, this is the floor beneath it.
 
-    They describe the bedside examination, so they stand in only for a missing
-    photograph of that. For a view that asked for a different investigation
-    they are simply about something else - station 9A wanted a CT angiogram of
-    the circle of Willis and was offered "Fundus examination is normal", which
-    is not a description of an angiogram and would be marked against.
+    The floor is only for a figure that named no particular view: that figure is
+    the station's own examination, and the printed findings are exactly what the
+    examiner would state for it. A named view - a gaze montage, a CT angiogram,
+    an OCT - gets words from the model or none at all.
 
-    One function because there are two callers - the sourcing path and the
-    description pass - and when they each carried their own copy the rule was
-    fixed in one and left wrong in the other.
+    Quoting them anyway is how station 9A came to offer "Fundus examination is
+    normal" for a nine-positions-of-gaze montage and for a CT angiogram of the
+    circle of Willis. Two attempts to separate those cases by rule failed:
+    modality class let the montage through, and word overlap refused correct
+    pairings, because "slit lamp photograph of the anterior segment" and
+    "stromal opacity" share no word while describing the same thing. Relevance
+    is a judgement, the model is already making it, and a station with no words
+    is visible in the admin page and on the station itself - while wrong words
+    read as fact and are marked against.
     """
-    if named_modality(wanted or "") in ANCILLARY_MODALITIES:
+    if (wanted or "").strip():
         return None, None
     recorded = (station.findings_elicited or station.findings or "").strip()
     if not recorded or leaked_term(recorded, station):
@@ -1624,7 +1630,7 @@ def settle_station(db: Session, station: OsceStation) -> dict[str, int]:
         if words:
             borrowed = (
                 words == recorded
-                and named_modality(wanted) in ANCILLARY_MODALITIES
+                and verbatim_findings_floor(station, wanted)[0] is None
             )
             if borrowed or leaked_term(words, station):
                 figure.described_findings = None
