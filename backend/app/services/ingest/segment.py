@@ -287,7 +287,12 @@ def _segment_osce_by_station_number(doc: ExtractedDocument) -> list[Block]:
 
 
 def segment(doc: ExtractedDocument, kind: str | None = None) -> tuple[str, list[Block]]:
-    kind = kind or detect_document_kind(doc)
+    # "unknown" is what a failed classification stored, not an instruction to
+    # classify it that way again. Left as a hint it made the failure permanent:
+    # re-ingesting after fixing whatever confused the detector took the stored
+    # verdict, skipped detection, and failed identically.
+    if kind in (None, "", "unknown"):
+        kind = detect_document_kind(doc)
     if kind == "osce":
         return kind, segment_osce(doc)
     return kind, segment_written(doc)

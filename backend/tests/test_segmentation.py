@@ -197,3 +197,19 @@ def test_an_untitled_slide_belongs_to_the_station_it_follows() -> None:
     assert len(blocks) == 2
     assert blocks[0].page_numbers == [1, 2, 3]
     assert blocks[1].page_numbers == [4, 5]
+
+
+def test_a_stored_unknown_does_not_outlive_the_reason_for_it() -> None:
+    """Re-ingesting has to classify again, or a fixed detector never gets used.
+
+    2022 Semester 2 failed detection, which stored "unknown" on the document.
+    Re-ingest passed that back in as a hint, so the deck failed the same way
+    after the pattern that could read it had been fixed.
+    """
+    pages: list[str] = []
+    for number in range(1, 10):
+        for letter in ("A", "B"):
+            pages.extend(_lettered_station(number, letter))
+    kind, blocks = segment(_deck(pages), "unknown")
+    assert kind == "osce"
+    assert len(blocks) == 18
