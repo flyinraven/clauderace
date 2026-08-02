@@ -46,6 +46,16 @@ from app.services.settings_store import SettingsStore
 
 logger = logging.getLogger(__name__)
 
+
+class DescriptionUnavailable(RuntimeError):
+    """The description could not be attempted - not a decision, a failure.
+
+    The model declining to invent is a correct outcome and leaves the figure
+    with no words. So does an API error, and for an evening the two were
+    reported identically: a provider misroute produced 47 "no words" results,
+    a job that finished cleanly, and a bank of stations quietly left empty.
+    """
+
 JOB_SOURCE_STATION_IMAGES = "source_station_images"
 
 # Below this a faithful match is not trustworthy enough to show as the patient.
@@ -295,14 +305,15 @@ def describe_findings(
             temperature=0.0,
         )
     except (AIError, ValueError, AttributeError) as exc:
-        # Say WHY. This logged one line for every cause, so a reply cut off
-        # mid-JSON by a token cap read exactly like a model declining to
-        # invent - and 47 stations were reported as refusals when the request
-        # had simply been too small for the answer.
+        # NOT the same as declining, and it must never again be reported as if
+        # it were. Returning "no description" here made 47 HTTP 404s indis-
+        # tinguishable from 47 stations the model had rightly refused to invent
+        # for: the job finished, said "described 0, failed 0", and looked like
+        # a healthy no-op while nothing worked at all.
         logger.warning(
             "Could not describe findings for station %s: %s", station.id, exc
         )
-        return None, None
+        raise DescriptionUnavailable(str(exc)) from exc
 
     text = str((data or {}).get("description") or "").strip()
     if not text:
@@ -789,9 +800,18 @@ def source_image_for_station(
     # candidate survived, not even a representative. Rather than leave a
     # station whose marks cannot be earned, the examiner states the findings
     # the way a real patient would demonstrate them.
-    described, concern = describe_findings(
-        client, station, wanted or figure.wanted_description
-    )
+    try:
+        described, concern = describe_findings(
+            client, station, wanted or figure.wanted_description
+        )
+    except DescriptionUnavailable as exc:
+        # The search already failed; the words could not even be attempted. Say
+        # so on the figure rather than leaving a station that reads as though
+        # nothing could be said about it.
+        described, concern = None, None
+        figure.verification_notes = (
+            f"{figure.verification_notes or ''}  [Could not write the findings: {exc}]"
+        ).strip()[:4000]
     if not described:
         # The model is told to return nothing rather than invent, and on a
         # station whose findings are terse it does exactly that - leaving four
@@ -1527,6 +1547,19 @@ def handle_describe_station_figures(ctx: JobContext) -> bool:
             described, concern = describe_findings(
                 AIClient(ctx.db), station, figure.wanted_description
             )
+        except DescriptionUnavailable as exc:
+            # Every figure will hit the same wall - a bad model id, a provider
+            # that serves none of them, an exhausted key - so failing the job
+            # is the honest report. Finishing 47 times and calling it "no
+            # words" is what hid this for an evening.
+            ctx.db.rollback()
+            log_error(ctx.db, source="osce_images", message=str(exc),
+                      context={"figure_id": figure.id, "station_id": station.id})
+            raise JobHandlerError(
+                f"Could not write any findings: {exc}. Nothing was described - "
+                f"check Admin > Settings that the model id is one your provider "
+                f"serves."
+            ) from exc
             if not described:
                 # Almost every figure that reaches this job has no
                 # `wanted_description`: it was written by ingest, or the view it

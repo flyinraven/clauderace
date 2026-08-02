@@ -10,6 +10,8 @@ from __future__ import annotations
 import io
 import json
 
+import pytest
+
 from PIL import Image as PILImage
 
 from app.models import Image, Job, OsceFigure, OsceStation, Setting
@@ -1633,3 +1635,32 @@ def test_settling_is_safe_to_run_twice(db):
     second = settle_station(db, db.query(type(station)).filter_by(id=station.id).one())
     assert first["removed"] == 1 and first["published"] == 1
     assert second == {"removed": 0, "cleared": 0, "published": 0, "bound": 0}
+
+
+def test_an_unreachable_model_is_a_failure_not_a_shrug(db, monkeypatch):
+    """A provider error must never read as the model declining to invent.
+
+    Both leave a figure with no words. For one evening they were reported
+    identically: a provider misroute returned HTTP 404 for all 47 figures, the
+    job finished with "described 0, failed 0", and a bank of stations was left
+    silently empty while the run looked healthy.
+    """
+    from app.services.ai import AIError
+    from app.services.osce import station_images
+    from app.services.osce.station_images import DescriptionUnavailable, describe_findings
+
+    station = make_station(db)
+
+    class _Broken:
+        def complete_json(self, **kw):
+            raise AIError("HTTP 404: No endpoints found for some/model")
+
+    with pytest.raises(DescriptionUnavailable):
+        describe_findings(_Broken(), station, "external photograph of the right eye")
+
+    # Declining, by contrast, is a real answer and stays one.
+    class _Declines:
+        def complete_json(self, **kw):
+            return {"description": ""}
+
+    assert describe_findings(_Declines(), station, "external photograph") == (None, None)
