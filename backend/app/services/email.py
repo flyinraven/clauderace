@@ -1,10 +1,18 @@
-"""Outbound email, driven entirely by the admin-editable SMTP settings.
+"""Outbound email, driven entirely by the admin-editable settings.
+
+Two routes, chosen by `email.provider`:
+
+* `resend` posts to an HTTPS API. This is the one that works in production -
+  Render's free tier blocks outbound traffic to SMTP ports 25, 465 and 587, so
+  a mailbox connection there can only ever time out.
+* `smtp` talks to a mailbox directly. Fine locally, or on a paid Render
+  instance, and kept so the choice is a dropdown rather than a rewrite.
 
 Nothing here is cached: the settings are read from the database on every send,
-so changing the mailbox in the admin portal takes effect on the next message
-without a redeploy. Sending is never allowed to be the reason an admin action
-fails - callers get an `EmailError` to report, and the invite itself still
-exists whether or not the mail went out.
+so changing provider or mailbox in the admin portal takes effect on the next
+message without a redeploy. Sending is never allowed to be the reason an admin
+action fails - callers get an `EmailError` to report, and the invite itself
+still exists whether or not the mail went out.
 """
 
 from __future__ import annotations
@@ -15,6 +23,7 @@ from dataclasses import dataclass
 from email.message import EmailMessage
 from email.utils import formataddr
 
+import httpx
 from sqlalchemy.orm import Session
 
 from app.models import Invite
@@ -25,9 +34,14 @@ class EmailError(Exception):
     """Raised when a message could not be handed to the SMTP server."""
 
 
+RESEND_ENDPOINT = "https://api.resend.com/emails"
+
+
 @dataclass(frozen=True)
 class EmailConfig:
     enabled: bool
+    provider: str
+    api_key: str
     host: str
     port: int
     use_ssl: bool
@@ -45,10 +59,14 @@ class EmailConfig:
 
     def missing(self) -> list[str]:
         gaps = []
-        if not self.host:
-            gaps.append("SMTP host")
-        if not self.port:
-            gaps.append("SMTP port")
+        if self.provider == "resend":
+            if not self.api_key:
+                gaps.append("Resend API key")
+        else:
+            if not self.host:
+                gaps.append("SMTP host")
+            if not self.port:
+                gaps.append("SMTP port")
         if not self.sender:
             gaps.append("From address")
         return gaps
@@ -58,6 +76,8 @@ def load_email_config(db: Session) -> EmailConfig:
     store = SettingsStore(db)
     return EmailConfig(
         enabled=store.get_bool("smtp.enabled"),
+        provider=store.get_str("email.provider", "smtp").strip().lower(),
+        api_key=store.get_str("resend.api_key").strip(),
         host=store.get_str("smtp.host").strip(),
         port=store.get_int("smtp.port", 465),
         use_ssl=store.get_bool("smtp.use_ssl", True),
@@ -107,6 +127,65 @@ def send_email(
     if gaps:
         raise EmailError(f"Email is not configured: {', '.join(gaps)} not set.")
 
+    if config.provider == "resend":
+        _send_via_resend(config, to, subject, text_body, html_body)
+    else:
+        _send_via_smtp(config, to, subject, text_body, html_body)
+
+
+def _send_via_resend(
+    config: EmailConfig,
+    to: str,
+    subject: str,
+    text_body: str,
+    html_body: str | None,
+) -> None:
+    """Post the message to Resend's HTTPS API.
+
+    Port 443, so it is unaffected by the SMTP block on Render's free tier.
+    """
+    payload: dict[str, object] = {
+        "from": formataddr((config.from_name, config.sender))
+        if config.from_name
+        else config.sender,
+        "to": [to],
+        "subject": subject,
+        "text": text_body,
+    }
+    if html_body:
+        payload["html"] = html_body
+
+    try:
+        with httpx.Client(timeout=config.timeout_seconds) as client:
+            response = client.post(
+                RESEND_ENDPOINT,
+                headers={"Authorization": f"Bearer {config.api_key}"},
+                json=payload,
+            )
+    except httpx.TimeoutException as exc:
+        raise EmailError(f"Resend did not respond within {config.timeout_seconds}s.") from exc
+    except httpx.HTTPError as exc:
+        raise EmailError(f"Could not reach Resend: {exc}") from exc
+
+    if response.status_code >= 400:
+        # Resend explains refusals properly - an unverified sending domain or a
+        # revoked key each say so - and that message is far more use to an
+        # admin than the status code.
+        detail = response.text[:400]
+        try:
+            detail = response.json().get("message") or detail
+        except ValueError:
+            pass
+        raise EmailError(f"Resend refused the message (HTTP {response.status_code}): {detail}")
+
+
+def _send_via_smtp(
+    config: EmailConfig,
+    to: str,
+    subject: str,
+    text_body: str,
+    html_body: str | None,
+) -> None:
     message = EmailMessage()
     message["Subject"] = subject
     message["From"] = (
@@ -129,7 +208,11 @@ def send_email(
     except smtplib.SMTPException as exc:
         raise EmailError(f"{config.host} refused the message: {exc}") from exc
     except (OSError, ssl.SSLError) as exc:
-        raise EmailError(f"Could not reach {config.host}:{config.port} - {exc}") from exc
+        raise EmailError(
+            f"Could not reach {config.host}:{config.port} - {exc}. On Render's free "
+            f"tier this is expected: outbound SMTP ports are blocked, so use the "
+            f"Resend provider instead."
+        ) from exc
 
 
 # --- Invitations ----------------------------------------------------------

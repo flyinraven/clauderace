@@ -180,6 +180,18 @@ SETTING_SPECS: list[SettingSpec] = [
 
     # --- Email ------------------------------------------------------------
     SettingSpec(
+        "email.provider", "smtp", "Send by", "email",
+        choices=["smtp", "resend"],
+        help_text="Render's free tier blocks outbound SMTP ports (25, 465, 587), "
+                  "so a mailbox connection from production can only time out. "
+                  "'resend' posts over HTTPS instead and is the one that works "
+                  "there; 'smtp' is for local use or a paid instance.",
+    ),
+    SettingSpec(
+        "resend.api_key", "", "Resend API key", "email", is_secret=True,
+        help_text="From resend.com → API Keys. Sending permission is enough.",
+    ),
+    SettingSpec(
         "smtp.host", "", "SMTP host", "email",
         help_text="e.g. mail.txglobal.com.au for a SiteGround mailbox.",
     ),
@@ -197,7 +209,8 @@ SETTING_SPECS: list[SettingSpec] = [
     SettingSpec(
         "smtp.from_address", "", "From address", "email",
         help_text="Blank uses the username. Must be a mailbox the server is "
-                  "willing to send as, or the message is refused.",
+                  "willing to send as, or the message is refused - for Resend "
+                  "that means an address at a domain verified in your account.",
     ),
     SettingSpec("smtp.from_name", "RACE Exam Simulator", "From name", "email"),
     SettingSpec("smtp.timeout_seconds", 20, "Connection timeout (s)", "email"),

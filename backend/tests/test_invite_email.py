@@ -15,6 +15,7 @@ import pytest
 
 from app.constants import ROLE_STUDENT
 from app.models import ErrorLog, Invite, Setting
+from app.services import email as email_service
 from tests.conftest import auth
 
 
@@ -67,6 +68,48 @@ class FakeSMTP:
 class RefusingSMTP(FakeSMTP):
     def send_message(self, message):
         raise smtplib.SMTPAuthenticationError(535, b"Authentication credentials invalid")
+
+
+class FakeResend:
+    """Stands in for the Resend HTTPS API."""
+
+    def __init__(self, status_code=200, body=None):
+        self.status_code = status_code
+        self.body = body if body is not None else {"id": "re_123"}
+        self.calls: list[dict] = []
+
+    def client(self, timeout=None):
+        outer = self
+
+        class Client:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def post(self, url, headers=None, json=None):
+                outer.calls.append({"url": url, "headers": headers or {}, "json": json or {}})
+                return Response(outer.status_code, outer.body)
+
+        return Client()
+
+
+class Response:
+    def __init__(self, status_code, body):
+        self.status_code = status_code
+        self._body = body
+        self.text = str(body)
+
+    def json(self):
+        return self._body
+
+
+@pytest.fixture()
+def resend(monkeypatch):
+    fake = FakeResend()
+    monkeypatch.setattr(email_service.httpx, "Client", lambda timeout=None: fake.client(timeout))
+    return fake
 
 
 @pytest.fixture()
@@ -216,6 +259,81 @@ def test_an_invite_with_no_address_is_left_to_be_copied_by_hand(client, db, admi
 
     refused = client.post(f"/api/admin/invites/{body['id']}/send", headers=auth(admin))
     assert refused.status_code == 400
+
+
+# --- Resend (HTTPS) ------------------------------------------------------
+def test_the_resend_provider_posts_over_https_instead_of_touching_smtp(
+    client, db, admin, resend, smtp
+):
+    """The whole point of this route: Render's free tier blocks the SMTP ports,
+    so nothing may reach out on 465 when Resend is the chosen provider."""
+    configure_email(
+        db,
+        **{
+            "email.provider": "resend",
+            "resend.api_key": "re_test_key",
+            "smtp.from_address": "exams@txglobal.com.au",
+            "smtp.from_name": "RACE Exams",
+        },
+    )
+
+    body = create_invite(client, admin).json()
+
+    assert body["email_sent"] is True
+    assert smtp.sent == [], "no SMTP connection may be attempted"
+
+    (call,) = resend.calls
+    assert call["url"] == "https://api.resend.com/emails"
+    assert call["headers"]["Authorization"] == "Bearer re_test_key"
+    assert call["json"]["to"] == ["trainee@example.com"]
+    assert call["json"]["from"] == "RACE Exams <exams@txglobal.com.au>"
+    assert body["code"] in call["json"]["text"]
+    assert "html" in call["json"]
+
+
+def test_switching_provider_switches_route_with_no_other_change(client, db, admin, resend, smtp):
+    configure_email(db, **{"email.provider": "smtp"})
+    create_invite(client, admin)
+    assert len(smtp.sent) == 1 and resend.calls == []
+
+    client.put(
+        "/api/admin/settings",
+        json={
+            "settings": [
+                {"key": "email.provider", "value": "resend"},
+                {"key": "resend.api_key", "value": "re_test_key"},
+            ]
+        },
+        headers=auth(admin),
+    )
+    create_invite(client, admin, email="second@example.com")
+
+    assert len(smtp.sent) == 1, "the SMTP route is not used again"
+    assert len(resend.calls) == 1
+
+
+def test_a_refusal_from_resend_is_reported_in_its_own_words(client, db, admin, resend):
+    """An unverified sending domain is the likely first failure, and Resend
+    says so plainly - that is more use than the status code."""
+    configure_email(db, **{"email.provider": "resend", "resend.api_key": "re_test_key"})
+    resend.status_code = 403
+    resend.body = {"message": "The txglobal.com.au domain is not verified."}
+
+    body = create_invite(client, admin).json()
+
+    assert body["email_sent"] is False
+    assert "not verified" in body["email_error"]
+    assert db.get(Invite, body["id"]) is not None
+
+
+def test_resend_without_a_key_says_which_field_is_missing(client, db, admin, resend):
+    configure_email(db, **{"email.provider": "resend", "resend.api_key": ""})
+
+    body = create_invite(client, admin).json()
+
+    assert body["email_sent"] is False
+    assert "Resend API key" in body["email_error"]
+    assert resend.calls == [], "nothing is posted without a key"
 
 
 def test_the_test_email_goes_to_the_administrator_by_default(client, db, admin, smtp):

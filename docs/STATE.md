@@ -238,9 +238,12 @@ Nothing is blocking. Open items, roughly in order of value:
    dropdown in the Question bank, which the API already returns options for
    but the UI never rendered. The reports contain no VSAQs, so real ones for
    a given sitting will never exist.
-6. Invites email themselves once SMTP is filled in and "Send emails" is on
-   (Settings → Email notifications, "Send test email" to check the mailbox).
-   Until then they are still copied by hand, which the invite list says
-   plainly rather than looking as though a message went out. Set
+6. Invites email themselves once "Send emails" is on and a provider is
+   configured (Settings → Email notifications, "Send test email" to check).
+   **Production must use `resend`, not `smtp`:** Render's free tier blocks
+   outbound traffic to ports 25/465/587, so the SiteGround mailbox times out
+   from there however correct the credentials are. SMTP still works locally.
+   Until a provider is working, codes are copied by hand - which the invite
+   list says plainly rather than looking as though a message went out. Set
    `app.public_url` too, or the email carries the bare code with no link.
 7. No backup routine. SiteGround has PostgreSQL backups - worth switching on.
