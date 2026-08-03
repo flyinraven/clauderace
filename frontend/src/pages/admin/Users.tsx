@@ -12,6 +12,8 @@ export default function Users() {
   const [inviteRole, setInviteRole] = useState<Role>('student')
   const [creating, setCreating] = useState(false)
   const [copied, setCopied] = useState<string | null>(null)
+  const [delivery, setDelivery] = useState<{ ok: boolean; text: string } | null>(null)
+  const [sending, setSending] = useState<number | null>(null)
 
   const load = () => {
     Promise.all([api<User[]>('/admin/users'), api<Invite[]>('/admin/invites')])
@@ -29,11 +31,20 @@ export default function Users() {
     event.preventDefault()
     setCreating(true)
     setError(null)
+    setDelivery(null)
     try {
-      await api<Invite>('/admin/invites', {
+      const created = await api<Invite>('/admin/invites', {
         method: 'POST',
         body: { email: inviteEmail.trim() || null, role: inviteRole },
       })
+      if (created.email_sent) {
+        setDelivery({ ok: true, text: `Invite emailed to ${created.email}.` })
+      } else if (created.email_error) {
+        setDelivery({
+          ok: false,
+          text: `${created.email_error} The code below is valid — send it by hand, or fix the email settings and use Resend.`,
+        })
+      }
       setInviteEmail('')
       load()
     } catch (err) {
@@ -59,6 +70,19 @@ export default function Users() {
       load()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not revoke invite')
+    }
+  }
+
+  const resendInvite = async (invite: Invite) => {
+    setSending(invite.id)
+    setDelivery(null)
+    try {
+      await api<Invite>(`/admin/invites/${invite.id}/send`, { method: 'POST' })
+      setDelivery({ ok: true, text: `Invite emailed to ${invite.email}.` })
+    } catch (err) {
+      setDelivery({ ok: false, text: err instanceof Error ? err.message : 'Could not send' })
+    } finally {
+      setSending(null)
     }
   }
 
@@ -104,6 +128,12 @@ export default function Users() {
           </Button>
         </form>
 
+        {delivery && (
+          <div className="mt-4">
+            <Alert tone={delivery.ok ? 'success' : 'warning'}>{delivery.text}</Alert>
+          </div>
+        )}
+
         {pending.length > 0 && (
           <div className="mt-5 space-y-2">
             <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
@@ -120,6 +150,16 @@ export default function Users() {
                   {invite.email && <span className="text-xs text-slate-500">for {invite.email}</span>}
                 </div>
                 <div className="flex items-center gap-1">
+                  {invite.email && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      loading={sending === invite.id}
+                      onClick={() => resendInvite(invite)}
+                    >
+                      Resend
+                    </Button>
+                  )}
                   <Button variant="ghost" size="sm" onClick={() => copy(invite.code)}>
                     {copied === invite.code ? 'Copied' : 'Copy'}
                   </Button>

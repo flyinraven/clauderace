@@ -4,13 +4,26 @@ import { Alert, Button, Field, Input } from '../components/ui'
 
 type Mode = 'login' | 'invite'
 
+// The link in an invite email carries the code, so someone arriving from their
+// invitation lands on the sign-up form with it already filled in. The query
+// sits inside the hash (#/login?invite=...) because the app uses HashRouter.
+function inviteCodeFromLink(): string {
+  const hash = window.location.hash
+  const query = hash.includes('?')
+    ? hash.slice(hash.indexOf('?') + 1)
+    : window.location.search
+  return new URLSearchParams(query).get('invite')?.toUpperCase() ?? ''
+}
+
+const codeFromLink = inviteCodeFromLink()
+
 export default function Login() {
   const { login, redeemInvite, serverWaking, authError } = useAuth()
-  const [mode, setMode] = useState<Mode>('login')
+  const [mode, setMode] = useState<Mode>(codeFromLink ? 'invite' : 'login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [fullName, setFullName] = useState('')
-  const [code, setCode] = useState('')
+  const [code, setCode] = useState(codeFromLink)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 

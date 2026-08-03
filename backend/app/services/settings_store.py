@@ -179,13 +179,40 @@ SETTING_SPECS: list[SettingSpec] = [
     SettingSpec("imagesearch.results_per_query", 6, "Candidates per query", "images"),
 
     # --- Email ------------------------------------------------------------
-    SettingSpec("smtp.host", "", "SMTP host", "email"),
-    SettingSpec("smtp.port", 465, "SMTP port", "email"),
+    SettingSpec(
+        "smtp.host", "", "SMTP host", "email",
+        help_text="e.g. mail.txglobal.com.au for a SiteGround mailbox.",
+    ),
+    SettingSpec(
+        "smtp.port", 465, "SMTP port", "email",
+        help_text="465 with SSL on, or 587 with SSL off (the connection still "
+                  "upgrades to STARTTLS).",
+    ),
     SettingSpec("smtp.use_ssl", True, "Use SSL", "email"),
-    SettingSpec("smtp.username", "", "SMTP username", "email"),
+    SettingSpec(
+        "smtp.username", "", "SMTP username", "email",
+        help_text="Usually the full mailbox address.",
+    ),
     SettingSpec("smtp.password", "", "SMTP password", "email", is_secret=True),
-    SettingSpec("smtp.from_address", "", "From address", "email"),
-    SettingSpec("smtp.enabled", False, "Send emails", "email"),
+    SettingSpec(
+        "smtp.from_address", "", "From address", "email",
+        help_text="Blank uses the username. Must be a mailbox the server is "
+                  "willing to send as, or the message is refused.",
+    ),
+    SettingSpec("smtp.from_name", "RACE Exam Simulator", "From name", "email"),
+    SettingSpec("smtp.timeout_seconds", 20, "Connection timeout (s)", "email"),
+    SettingSpec(
+        "smtp.enabled", False, "Send emails", "email",
+        help_text="Off: invite codes are created but never emailed, and you copy "
+                  "them by hand. On: an invite with an email address is sent as "
+                  "soon as it is created.",
+    ),
+    SettingSpec(
+        "app.public_url", "", "Public site URL", "email",
+        help_text="Where candidates reach the site, e.g. "
+                  "https://exam.txglobal.com.au. Used to build the sign-up link "
+                  "in invite emails; blank sends the bare code instead.",
+    ),
 
     # --- OSCE -------------------------------------------------------------
     SettingSpec(

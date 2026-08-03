@@ -132,6 +132,8 @@ export interface Invite {
   expires_at: string | null
   used_at: string | null
   created_at: string
+  email_sent?: boolean
+  email_error?: string | null
 }
 
 export interface ErrorEntry {

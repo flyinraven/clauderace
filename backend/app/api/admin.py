@@ -15,7 +15,8 @@ from app.models import AiCall, ErrorLog, Invite, Job, Question, SourceDocument, 
 from app.models.ops import JOB_PENDING, JOB_RUNNING
 from app.security import generate_invite_code, hash_password
 from app.services.ai import AIClient, AIError
-from app.services.errors import prune_error_log
+from app.services.email import EmailError, load_email_config, send_email, send_invite_email
+from app.services.errors import log_error, prune_error_log
 from app.services.jobs.runner import cancel_job
 from app.services.settings_store import SettingsStore
 
@@ -90,6 +91,32 @@ def test_ai(payload: AiTestRequest, admin: AdminUser, db: DbSession) -> dict[str
         "prompt_tokens": response.prompt_tokens,
         "completion_tokens": response.completion_tokens,
     }
+
+
+class EmailTestRequest(BaseModel):
+    to: EmailStr | None = None
+
+
+@router.post("/settings/test-email")
+def test_email(payload: EmailTestRequest, admin: AdminUser, db: DbSession) -> dict[str, Any]:
+    """Send a real message through the configured mailbox, so a wrong password
+    or a blocked port is found here rather than by a candidate who never got
+    their invite."""
+    recipient = (payload.to or admin.email).lower()
+    config = load_email_config(db)
+    try:
+        send_email(
+            db,
+            to=recipient,
+            subject="RACE Exam Simulator - email test",
+            text_body=(
+                "This is a test message from the RACE Exam Simulator admin portal.\n"
+                "If you are reading it, invites will reach their recipients."
+            ),
+        )
+    except EmailError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    return {"ok": True, "to": recipient, "host": config.host, "from_address": config.sender}
 
 
 @router.get("/settings/ai-routing")
@@ -186,6 +213,10 @@ class InviteOut(BaseModel):
     expires_at: datetime | None
     used_at: datetime | None
     created_at: datetime
+    # Not stored: what happened to the email on this request, so the admin sees
+    # straight away whether the code still has to be passed on by hand.
+    email_sent: bool = False
+    email_error: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -195,6 +226,34 @@ class CreateInviteRequest(BaseModel):
     role: str = ROLE_STUDENT
     note: str | None = None
     expires_in_days: int = 30
+
+
+def _deliver_invite(db: DbSession, invite: Invite) -> InviteOut:
+    """Email the invite if it can be, and report the outcome either way.
+
+    A refused message must not undo the invite - the code is valid and can be
+    resent or copied - so the failure is logged and returned rather than raised.
+    """
+    out = InviteOut.model_validate(invite)
+    if not invite.email:
+        return out
+    if not load_email_config(db).enabled:
+        out.email_error = "Email sending is off, so the code was not sent."
+        return out
+    try:
+        send_invite_email(db, invite)
+    except EmailError as exc:
+        out.email_error = str(exc)
+        log_error(
+            db,
+            source="email.invite",
+            message="Could not email an invite",
+            detail=str(exc),
+            context={"invite_id": invite.id, "to": invite.email},
+        )
+        return out
+    out.email_sent = True
+    return out
 
 
 @router.get("/invites", response_model=list[InviteOut])
@@ -218,7 +277,42 @@ def create_invite(payload: CreateInviteRequest, admin: AdminUser, db: DbSession)
     db.add(invite)
     db.commit()
     db.refresh(invite)
-    return InviteOut.model_validate(invite)
+    return _deliver_invite(db, invite)
+
+
+@router.post("/invites/{invite_id}/send", response_model=InviteOut)
+def send_invite(invite_id: int, admin: AdminUser, db: DbSession) -> InviteOut:
+    """Resend an invite - after fixing the SMTP settings, or if it never arrived."""
+    invite = db.get(Invite, invite_id)
+    if invite is None:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    if invite.used_by_id is not None:
+        raise HTTPException(status_code=400, detail="That invite has already been used")
+    if not invite.email:
+        raise HTTPException(
+            status_code=400,
+            detail="This invite was issued without an email address, so there is "
+                   "nobody to send it to. Copy the code instead.",
+        )
+    if not load_email_config(db).enabled:
+        raise HTTPException(
+            status_code=400,
+            detail="Turn on 'Send emails' in Settings → Email notifications first.",
+        )
+    try:
+        send_invite_email(db, invite)
+    except EmailError as exc:
+        log_error(
+            db,
+            source="email.invite",
+            message="Could not resend an invite",
+            detail=str(exc),
+            context={"invite_id": invite.id, "to": invite.email},
+        )
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    out = InviteOut.model_validate(invite)
+    out.email_sent = True
+    return out
 
 
 @router.delete("/invites/{invite_id}", status_code=status.HTTP_204_NO_CONTENT)

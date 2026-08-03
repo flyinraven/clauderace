@@ -38,6 +38,7 @@ export default function Settings() {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<{ tone: 'success' | 'error'; text: string } | null>(null)
   const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null)
+  const [emailResult, setEmailResult] = useState<{ ok: boolean; text: string } | null>(null)
   const [testing, setTesting] = useState(false)
 
   const load = () => {
@@ -84,6 +85,25 @@ export default function Settings() {
       setMessage({ tone: 'error', text: err instanceof Error ? err.message : 'Save failed' })
     } finally {
       setSaving(false)
+    }
+  }
+
+  const testEmail = async () => {
+    setTesting(true)
+    setEmailResult(null)
+    try {
+      const result = await api<{ to: string; host: string; from_address: string }>(
+        '/admin/settings/test-email',
+        { method: 'POST', body: {} },
+      )
+      setEmailResult({
+        ok: true,
+        text: `Sent via ${result.host} as ${result.from_address} — check ${result.to}.`,
+      })
+    } catch (err) {
+      setEmailResult({ ok: false, text: err instanceof Error ? err.message : 'Test failed' })
+    } finally {
+      setTesting(false)
     }
   }
 
@@ -137,12 +157,32 @@ export default function Settings() {
               <Button variant="secondary" size="sm" onClick={testConnection} loading={testing}>
                 Test connection
               </Button>
+            ) : group === 'email' ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={testEmail}
+                loading={testing}
+                disabled={dirty.length > 0}
+              >
+                Send test email
+              </Button>
             ) : undefined
           }
         >
           {group === 'ai' && testResult && (
             <div className="mb-4">
               <Alert tone={testResult.ok ? 'success' : 'error'}>{testResult.text}</Alert>
+            </div>
+          )}
+          {group === 'email' && (
+            <div className="mb-4 space-y-3">
+              {dirty.length > 0 && (
+                <Alert tone="warning">Save your changes before sending a test.</Alert>
+              )}
+              {emailResult && (
+                <Alert tone={emailResult.ok ? 'success' : 'error'}>{emailResult.text}</Alert>
+              )}
             </div>
           )}
           <div className="grid gap-4 sm:grid-cols-2">

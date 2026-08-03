@@ -238,5 +238,9 @@ Nothing is blocking. Open items, roughly in order of value:
    dropdown in the Question bank, which the API already returns options for
    but the UI never rendered. The reports contain no VSAQs, so real ones for
    a given sitting will never exist.
-6. SMTP is unconfigured, so invites are copied by hand. Fine for a few users.
+6. Invites email themselves once SMTP is filled in and "Send emails" is on
+   (Settings → Email notifications, "Send test email" to check the mailbox).
+   Until then they are still copied by hand, which the invite list says
+   plainly rather than looking as though a message went out. Set
+   `app.public_url` too, or the email carries the bare code with no link.
 7. No backup routine. SiteGround has PostgreSQL backups - worth switching on.
