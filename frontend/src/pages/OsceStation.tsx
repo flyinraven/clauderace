@@ -474,21 +474,41 @@ export default function OsceStation() {
                   As the examiner would. Each question is spoken first, then recording
                   starts — so your answer never picks up the examiner's voice.
                 </span>
-                <span className="mt-1 block text-xs text-slate-500">
-                  On iPhone, take the side switch off silent — it mutes web audio.
-                  Tap below to check you can hear it.
-                </span>
-                <button
-                  type="button"
-                  className="mt-1.5 text-xs font-medium text-clinical-700 underline"
-                  onClick={(e) => {
-                    e.preventDefault()
-                    speech.unlock()
-                    void speech.speak('Sound check. You should be able to hear this.')
-                  }}
-                >
-                  🔊 Test the sound
-                </button>
+                {speech.soundTested ? (
+                  <span className="mt-1 block text-xs text-slate-500">
+                    Sound already tested on this device.{' '}
+                    <button
+                      type="button"
+                      className="font-medium text-clinical-700 underline"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        speech.unlock()
+                        void speech.speak('Sound check. You should be able to hear this.')
+                      }}
+                    >
+                      Test it again
+                    </button>
+                  </span>
+                ) : (
+                  <>
+                    <span className="mt-1 block text-xs text-slate-500">
+                      On iPhone, take the side switch off silent — it mutes web audio.
+                      Tap below to check you can hear it.
+                    </span>
+                    <button
+                      type="button"
+                      className="mt-1.5 text-xs font-medium text-clinical-700 underline"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        speech.unlock()
+                        speech.markSoundTested()
+                        void speech.speak('Sound check. You should be able to hear this.')
+                      }}
+                    >
+                      🔊 Test the sound
+                    </button>
+                  </>
+                )}
               </span>
             </label>
           )}

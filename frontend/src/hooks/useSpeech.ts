@@ -14,11 +14,17 @@ import { useCallback, useEffect, useRef, useState } from 'react'
  */
 
 const ENABLED_KEY = 'race.readAloud'
+// The sound test is about the device, not the station, so once it has passed
+// there is nothing to learn from repeating it at each station of a circuit.
+const TESTED_KEY = 'race.soundTested'
 
 export function useSpeech() {
   const [supported, setSupported] = useState(false)
   const [enabled, setEnabled] = useState(
     () => (localStorage.getItem(ENABLED_KEY) ?? 'true') === 'true',
+  )
+  const [soundTested, setSoundTested] = useState(
+    () => localStorage.getItem(TESTED_KEY) === 'true',
   )
   const [speaking, setSpeaking] = useState(false)
   const [everSpoke, setEverSpoke] = useState(false)
@@ -32,6 +38,11 @@ export function useSpeech() {
   useEffect(() => {
     localStorage.setItem(ENABLED_KEY, String(enabled))
   }, [enabled])
+
+  const markSoundTested = useCallback(() => {
+    localStorage.setItem(TESTED_KEY, 'true')
+    setSoundTested(true)
+  }, [])
 
   const cancel = useCallback(() => {
     if ('speechSynthesis' in window) window.speechSynthesis.cancel()
@@ -131,5 +142,8 @@ export function useSpeech() {
 
   useEffect(() => cancel, [cancel])
 
-  return { supported, enabled, setEnabled, speaking, everSpoke, speak, unlock, cancel }
+  return {
+    supported, enabled, setEnabled, speaking, everSpoke, speak, unlock, cancel,
+    soundTested, markSoundTested,
+  }
 }
