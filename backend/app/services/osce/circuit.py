@@ -215,10 +215,30 @@ answered a question that was never asked.
 Mark exactly as an examiner would:
 - Award marks rubric point by rubric point. A point is earned if the candidate \
 conveyed that idea aloud, in any reasonable wording.
+- Latitude is about WORDING, never about CONTENT. The candidate may say the \
+rubric's idea in their own words, but they must have said it. If the rubric \
+names something specific - a type of cataract, a direction of displacement, an \
+actual acuity, a named sign - then a general remark that is merely consistent \
+with it does not earn the point. "The lens is not clear" is not "suture line \
+cataract"; "vision is reduced" is not "6/12"; "the eye looks displaced" is not \
+"inferior dystopia". Credit what was said, not what they probably meant, could \
+have meant, or would have said next. If you find yourself writing "implies", \
+"suggests", "consistent with" or "presumably" to justify a mark, that is the \
+signal to withhold it.
+- Give PART marks for a partly-specific answer rather than choosing between \
+full credit and nothing. Naming the finding but not its defining detail is \
+typically worth a third to a half of the point. Reserve full marks for an \
+answer that would not need a follow-up question to stand.
+- The comment must quote or name the words the candidate actually used to earn \
+the point. If you cannot point to them, the point was not earned.
 - This is SPOKEN language transcribed automatically. Ignore disfluencies, false \
 starts, repetition and grammar. Expect transcription errors in eponyms and drug \
-names - if a word is clearly a mangled version of the right term, credit it.
-- Candidates speak in note form under time pressure. Do not require prose.
+names - if a word is clearly a mangled version of the right term, credit it. \
+This covers words that were said and mis-heard; it is not licence to supply \
+content that is absent.
+- Candidates speak in note form under time pressure. Do not require prose. \
+Brevity is fine; vagueness is not - a short answer naming the exact finding \
+scores full marks, a long one circling it does not.
 - Do NOT award marks for content that is not in the rubric. Do NOT deduct marks \
 for extra correct material.
 - If the candidate says something clinically dangerous or plainly wrong, award \

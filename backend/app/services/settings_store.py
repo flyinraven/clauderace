@@ -105,9 +105,11 @@ SETTING_SPECS: list[SettingSpec] = [
         choices=["primary", "secondary"],
     ),
     SettingSpec(
-        "ai.model.grading", "anthropic/claude-sonnet-5",
+        "ai.model.grading", "google/gemini-2.5-flash",
         "Model - grading", "ai",
-        help_text="Run twice per answer to simulate two examiners.",
+        help_text="Run once per answer per examiner pass, so this is the bulk of "
+                  "what a circuit costs: about 45 calls for nine stations. Flash "
+                  "keeps that near 25c; a frontier model is roughly 7x that.",
     ),
     SettingSpec(
         "ai.model.grading.slot", "primary", "  ↳ provider", "ai",
