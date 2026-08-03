@@ -193,7 +193,11 @@ export default function OsceStation() {
       if (!sittingId) return
       const form = new FormData()
       // Filename extension matters to some servers; derive it from the type.
-      const ext = mimeType.includes('webm') ? 'webm' : 'm4a'
+      const ext = mimeType.includes('wav')
+        ? 'wav'
+        : mimeType.includes('webm')
+          ? 'webm'
+          : 'm4a'
       form.append('audio', blob, `answer-${label}.${ext}`)
       form.append('prompt_label', label)
       form.append('prompt_index', String(promptIndex))

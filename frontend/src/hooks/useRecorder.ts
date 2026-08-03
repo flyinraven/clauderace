@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { setAudioSession } from './audioSession'
+import { toWav } from './wav'
 
 /**
  * Microphone recording that works on iOS Safari.
@@ -180,12 +181,21 @@ export function useRecorder() {
       recorder.onstop = () => {
         const mimeType = recorder.mimeType || 'audio/mp4'
         const blob = new Blob(chunksRef.current, { type: mimeType })
+        const durationMs = Date.now() - startedAtRef.current
         chunksRef.current = []
         setRecording(false)
-        resolve(
-          blob.size > 0
-            ? { blob, mimeType, durationMs: Date.now() - startedAtRef.current }
-            : null,
+        if (blob.size === 0) {
+          resolve(null)
+          return
+        }
+        // Hand up WAV when the browser can produce it, so transcription stays
+        // on the OpenRouter route instead of Google's 20-a-day free tier.
+        void toWav(blob).then((wav) =>
+          resolve(
+            wav
+              ? { blob: wav, mimeType: 'audio/wav', durationMs }
+              : { blob, mimeType, durationMs },
+          ),
         )
       }
       recorder.stop()
