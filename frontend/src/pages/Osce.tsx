@@ -112,6 +112,9 @@ export default function Osce() {
   const [prepJob, setPrepJob] = useState<number | null>(null)
   // Reviewing what a station asks should not cost nine minutes of sitting it.
   const [openId, setOpenId] = useState<number | null>(null)
+  // Circuits worth revisiting are the ones already sat, so the list cannot be
+  // capped at the most recent few - what you want to review is behind them.
+  const [allCircuits, setAllCircuits] = useState(false)
   const [preview, setPreview] = useState<StationPreview | null>(null)
   const [search, setSearch] = useState('')
   const [fSubspecialty, setFSubspecialty] = useState('')
@@ -489,9 +492,12 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
       )}
 
       {circuits.length > 0 && (
-        <Card title="Your circuits">
+        <Card
+          title="Your circuits"
+          description="Everything you have sat. Open one to see its marks, your answers and the examiner's feedback."
+        >
           <ul className="divide-y divide-slate-100">
-            {circuits.slice(0, 8).map((circuit) => (
+            {(allCircuits ? circuits : circuits.slice(0, 8)).map((circuit) => (
               <li key={circuit.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
                 <div>
                   <p className="font-medium text-slate-800">{circuit.title}</p>
@@ -509,6 +515,18 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
                         : 0
                     }
                   />
+                  {/* Nothing has been marked yet, so there is nothing to read. */}
+                  {circuit.progress.completed > 0 && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => navigate(`/osce/circuits/${circuit.id}/result`)}
+                    >
+                      {circuit.progress.completed === circuit.progress.stations
+                        ? 'Review'
+                        : 'Review so far'}
+                    </Button>
+                  )}
                   <Button
                     variant="ghost"
                     size="sm"
@@ -520,6 +538,15 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
               </li>
             ))}
           </ul>
+          {circuits.length > 8 && (
+            <div className="mt-3">
+              <Button size="sm" variant="ghost" onClick={() => setAllCircuits((v) => !v)}>
+                {allCircuits
+                  ? 'Show recent circuits only'
+                  : `Show all ${circuits.length} circuits`}
+              </Button>
+            </div>
+          )}
         </Card>
       )}
 
