@@ -176,9 +176,62 @@ def segment_osce(doc: ExtractedDocument) -> list[Block]:
     which is absent from the years labelled by subspecialty and day.
     """
     by_case = _segment_osce_by_case(doc)
+    by_number = _segment_osce_by_station_number(doc)
+
+    # A deck that opens its stations inconsistently gives the case route fewer
+    # cuts than there are stations, and every station it misses is swallowed
+    # into the one before it - silently, because nothing errors and the missing
+    # stations never existed to be counted. 2021 Semester 2 opens nine stations
+    # with "SUMMARY OF CASE", seven with "PURPOSE OF STATION" and three with
+    # neither, so it ingested as nine stations of eighteen and reported success.
+    #
+    # Its footer numbering was complete and in order the whole way through. When
+    # the deck names its own stations that reliably, believe the deck: it can
+    # only produce more blocks than the case route by having found stations the
+    # case route ran together.
+    if len(by_number) > len(by_case) and _numbering_is_trustworthy(by_number):
+        return by_number
     if len(by_case) >= 2:
         return by_case
-    return _segment_osce_by_station_number(doc)
+    return by_number
+
+
+def _numbering_is_trustworthy(blocks: list[Block]) -> bool:
+    """Whether a deck's own station numbering can be taken at its word.
+
+    Complete and in order, with no station named twice. A deck that numbers
+    only part of itself, or that repeats a number because a heading bled across
+    a slide boundary, is not evidence of anything and the case markers remain
+    the better guide.
+    """
+    if len(blocks) < 2:
+        return False
+    labels = [(b.number, b.suffix or "") for b in blocks]
+    if len(set(labels)) != len(labels):
+        return False
+    if labels != sorted(labels):
+        return False
+
+    # A deck names its stations one way throughout: either every station takes
+    # a letter (1A, 1B ... 9A, 9B) or none does (1 ... 18). A mixture means a
+    # heading bled across a slide boundary and invented a station that was
+    # never sat - 2020 Semester 1 reads as 1A 1B ... 6B, then a bare "7"
+    # alongside 7A and 7B, which is nineteen stations in an eighteen-station
+    # exam. Where the naming is inconsistent the footer is not evidence and the
+    # case markers remain the better guide.
+    suffixed = [s for _, s in labels if s]
+    if suffixed and len(suffixed) != len(labels):
+        return False
+    numbers_with_letters = {n for n, s in labels if s}
+    numbers_bare = {n for n, s in labels if not s}
+    if numbers_with_letters & numbers_bare:
+        return False
+
+    # Numbers must run 1..N with nothing missing in the middle. A gap means the
+    # footer was not carried on every station, so the deck is not numbering
+    # itself reliably enough to override the case markers.
+    numbers = sorted({n for n, _ in labels})
+    return numbers == list(range(1, len(numbers) + 1))
 
 
 def _segment_osce_by_case(doc: ExtractedDocument) -> list[Block]:
