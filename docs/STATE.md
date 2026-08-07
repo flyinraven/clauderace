@@ -85,7 +85,7 @@ Total spend to date: roughly $7.
 
 ## Tests
 
-`cd backend && .venv/Scripts/python -m pytest` - 232 tests, about 45 seconds.
+`cd backend && .venv/Scripts/python -m pytest` - 429 tests, about a minute.
 
 The API is tested end to end against an in-memory database and a fake provider
 that sits at `AIClient._post`, so routing, retries, JSON repair, usage
@@ -103,6 +103,7 @@ deterministic while running the identical claim/chunk/resume path.
 | `test_ai_client.py` | the gateway, including the vision image size cap |
 | `test_query_counts.py` | pages whose query count must not grow with content |
 | `test_marking_rules.py` | the rules both marking flows now share |
+| `test_job_queue_order.py` | which job runs next, reclaim attempts, and cancellation |
 | `test_clock.py`, `test_circuit_repeats.py`, `test_transcription_guard.py` | as before |
 
 Two tests in `test_api_exams.py` skip when Paper 1's spec has no reading phase.
@@ -204,10 +205,35 @@ That is deliberate - they assert on a phase that spec may not have.
   wrong with the code - production has 75 of 78 stations showing an image. Do
   not diagnose either as a live bug from the local database; re-run the ingest
   locally, or check production.
-- The job runner reclaims a stale RUNNING job without incrementing `attempts`,
-  so a chunk that reliably kills the process would be retried forever rather
-  than failing after three tries. Not observed; the only known interruptions are
-  SiteGround dropping a connection, which the next chunk survives.
+
+## Recent changes, continued
+
+- **The job runner no longer pays for work nobody is waiting for.** A reclaim
+  spends an attempt, so a chunk that kills the process fails after three rather
+  than looping forever. Cancelling is no longer undone by the chunk in flight -
+  the worker was writing PENDING from a `job` it had loaded before the
+  cancellation committed, so a 28-station batch carried on unless the click
+  landed between chunks. `ctx.cancelled` lets a handler stop mid-chunk; image
+  sourcing checks it at its phase boundaries, which is where the spend is.
+- **A token dies when the password does.** Tokens carry `tv`, the value of
+  `users.token_version` they were issued under. Bumped on a password change and
+  when an account is disabled. `is_active` was already checked per request, so
+  disabling was already immediate; a password change was not.
+- **`/auth/login` and `/auth/redeem-invite` are rate limited** - ten failures
+  per address per fifteen minutes, ten redemptions per hour, in-process. A
+  success clears the count. Sign-in counts against the email as well, because
+  `X-Forwarded-For` is forgeable. If this is ever run on more than one
+  instance, the counters have to move out of the process.
+- **The AI budget warns at 75% before refusing at 100%**, once per calendar
+  month, in the error log and by email to the administrators. Threshold in
+  Settings (`ai.budget_warn_fraction`, 0 to disable).
+- **`station_images.py` (1759 lines) and `api/osce.py` (1381) are now
+  packages.** Pure moves: every definition unparses identically and no comment
+  was lost. `station_images` splits into constants/queries/verify/describe/
+  sourcing/ingested/settle/jobs with a one-way dependency order; `api/osce`
+  into helpers/stations/circuits/sittings, and the 33-operation route table was
+  compared before and after. Patch a name where it is looked up -
+  `station_images.sourcing.build_provider`, not the package.
 
 ## Working effectively in a new session
 
