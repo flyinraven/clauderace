@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.constants import (
@@ -366,6 +366,32 @@ def grade_prompt(
     return grade
 
 
+def unmarkable_reason(response: OsceResponse | None) -> str | None:
+    """Why this answer cannot be marked *yet*, or None if it can be.
+
+    An empty transcript has two very different causes and marking used to treat
+    them alike. The candidate saying nothing is worth zero and is a real
+    result. Transcription having failed - a rate limit, a timeout, a provider
+    blip - is not a result at all, and scoring it zero states as fact something
+    nobody measured.
+
+    That is not hypothetical: on 3 Aug 2026 twenty-nine answers were lost to a
+    quota error and five stations were reported at 0%, which read as five
+    subspecialties the candidate was hopeless at rather than five stations that
+    never got marked. A wrong mark is worse than a missing one, because a
+    missing one says so.
+
+    A response that does not exist is left markable on purpose: nothing was
+    ever recorded for that question, which is a skipped answer and genuinely
+    worth zero.
+    """
+    if response is None or response.marking_text:
+        return None
+    if response.transcription_status in {"failed", "pending"}:
+        return response.transcription_status
+    return None
+
+
 @register_handler(JOB_GRADE_OSCE)
 def handle_grade_osce_session(ctx: JobContext) -> bool:
     """Mark one prompt per chunk, both examiner passes together."""
@@ -403,6 +429,32 @@ def handle_grade_osce_session(ctx: JobContext) -> bool:
         .where(OsceResponse.prompt_label == label)
     ).scalar_one_or_none()
     transcript = response.marking_text if response else ""
+
+    blocked = unmarkable_reason(response)
+    if blocked:
+        # Leave no grade rows at all. `summarise_osce_session` counts a prompt
+        # with no grade as ungraded, which makes the station "incomplete" and
+        # withholds a verdict instead of publishing a score nobody measured.
+        # Any rows from an earlier attempt are cleared, or a stale zero would
+        # keep the prompt looking marked.
+        ctx.db.execute(
+            delete(OsceGrade)
+            .where(OsceGrade.session_id == session.id)
+            .where(OsceGrade.prompt_label == label)
+        )
+        unmarked = list((ctx.job.result or {}).get("unmarked_prompts", []))
+        unmarked.append({"prompt": label, "reason": blocked})
+        ctx.set_result(unmarked_prompts=unmarked)
+        logger.warning(
+            "OSCE %s prompt %s left unmarked: transcription %s",
+            session.id, label, blocked,
+        )
+        ctx.cursor_set(index=index + 1)
+        ctx.advance(1, f"Marked {index + 1} of {len(prompts)} questions")
+        if index + 1 >= len(prompts):
+            summarise_osce_session(ctx.db, session)
+            return True
+        return False
 
     client = AIClient(ctx.db)
     for examiner_pass in examiner_passes(ctx.db):

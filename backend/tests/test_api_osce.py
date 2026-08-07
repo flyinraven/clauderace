@@ -351,6 +351,93 @@ def test_a_station_runs_through_to_a_marked_result(client, db, student, ai, run_
     assert result["station"]["findings_elicited"]
 
 
+def test_a_failed_transcription_is_not_marked_as_a_wrong_answer(
+    client, db, student, ai, run_jobs
+):
+    """The defect that reported five subspecialties as 0%.
+
+    On 3 Aug 2026 a quota error lost twenty-nine answers. Marking could not
+    tell an empty transcript from a candidate who said nothing, scored them
+    zero, and published five stations at 0% - which read as five subspecialties
+    the candidate was hopeless at. The audio was fine; nothing had been
+    measured. A missing mark says so; a wrong one does not.
+    """
+    import app.services.osce.transcribe_job as job_module
+
+    station = make_station(db)
+    sitting_id = client.post(
+        "/api/osce/sittings", json={"station_id": station.id, "is_timed": True},
+        headers=auth(student),
+    ).json()["id"]
+    client.post(f"/api/osce/sittings/{sitting_id}/begin", headers=auth(student))
+
+    original = job_module.transcribe_response
+
+    def rate_limited(db_, response):
+        response.transcription_status = "failed"
+        response.transcription_error = "Transcription rate limit (HTTP 429)"
+        db_.commit()
+        return ""
+
+    job_module.transcribe_response = rate_limited
+    try:
+        upload(client, student, sitting_id, "A", 0)
+        upload(client, student, sitting_id, "B", 1)
+        run_jobs()
+        client.post(f"/api/osce/sittings/{sitting_id}/submit", headers=auth(student))
+        run_jobs()
+    finally:
+        job_module.transcribe_response = original
+
+    result = client.get(
+        f"/api/osce/sittings/{sitting_id}/result", headers=auth(student)
+    ).json()
+    assert result["result"]["outcome"] == "incomplete", "no verdict on what was never marked"
+    assert result["result"]["percentage"] != 0.0 or result["result"]["ungraded_prompts"], (
+        "a 0% with nothing flagged is exactly the reading that misled"
+    )
+    assert sorted(result["result"]["ungraded_prompts"]) == ["A", "B"]
+    assert result["grading_status"] == "partial"
+
+
+def test_a_candidate_who_says_nothing_still_scores_zero(client, db, student, ai, run_jobs):
+    """The other half of the distinction. Silence is a real result, and must
+    not be quietly turned into "could not be marked" by the fix above."""
+    import app.services.osce.transcribe_job as job_module
+
+    station = make_station(db)
+    sitting_id = client.post(
+        "/api/osce/sittings", json={"station_id": station.id, "is_timed": True},
+        headers=auth(student),
+    ).json()["id"]
+    client.post(f"/api/osce/sittings/{sitting_id}/begin", headers=auth(student))
+
+    original = job_module.transcribe_response
+
+    def silence(db_, response):
+        response.transcript = ""
+        response.transcription_status = "complete"
+        db_.commit()
+        return ""
+
+    job_module.transcribe_response = silence
+    try:
+        upload(client, student, sitting_id, "A", 0)
+        upload(client, student, sitting_id, "B", 1)
+        run_jobs()
+        client.post(f"/api/osce/sittings/{sitting_id}/submit", headers=auth(student))
+        run_jobs()
+    finally:
+        job_module.transcribe_response = original
+
+    result = client.get(
+        f"/api/osce/sittings/{sitting_id}/result", headers=auth(student)
+    ).json()
+    assert not result["result"]["ungraded_prompts"], "it was marked; the answer was empty"
+    assert result["result"]["percentage"] == 0.0
+    assert result["result"]["outcome"] in {"pass", "fail"}
+
+
 def test_marking_never_awards_more_than_a_rubric_point_is_worth(client, db, student, ai):
     """A model that returns 99 marks for a 6-mark point must be clamped."""
     import json
