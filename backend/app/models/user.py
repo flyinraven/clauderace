@@ -23,6 +23,13 @@ class User(TimestampMixin, Base):
     role: Mapped[str] = mapped_column(String(20), default=ROLE_STUDENT, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     last_login_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    # A token carries the version it was issued under, and any other value is
+    # refused. Bumped when the password changes or the account is disabled, so
+    # a token already in someone's hands stops working then rather than when it
+    # happens to expire. A counter rather than a timestamp because `iat` is
+    # whole seconds: a cutoff of "now" refuses a token issued in that same
+    # second, including the one handed out by signing straight back in.
+    token_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     @property
     def is_admin(self) -> bool:

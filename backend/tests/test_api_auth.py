@@ -83,6 +83,63 @@ def test_password_change_requires_the_current_password(client, student):
     ).status_code == 200
 
 
+def test_changing_the_password_retires_the_tokens_issued_under_the_old_one(client, student):
+    """A password is changed because it may be known. A 12-hour token that
+    outlived the change would make the change cosmetic."""
+    headers = auth(student)
+    assert client.get("/api/auth/me", headers=headers).status_code == 200
+
+    client.post(
+        "/api/auth/change-password",
+        json={"current_password": PASSWORD, "new_password": "a-brand-new-passphrase"},
+        headers=headers,
+    )
+    assert client.get("/api/auth/me", headers=headers).status_code == 401
+
+    fresh = client.post(
+        "/api/auth/login",
+        json={"email": student.email, "password": "a-brand-new-passphrase"},
+    ).json()["access_token"]
+    assert client.get(
+        "/api/auth/me", headers={"Authorization": f"Bearer {fresh}"}
+    ).status_code == 200, "the token issued after the change still works"
+
+
+def test_a_token_minted_before_versioning_still_works(client, student):
+    """Everyone signed in at the moment this shipped keeps their session.
+
+    Their tokens carry no `tv`, which must read as version 0 - what every
+    existing account is on - rather than as a mismatch.
+    """
+    import jwt
+
+    from app.config import settings as app_settings
+    from app.security import ALGORITHM, create_access_token
+
+    token = create_access_token(student.id, student.role)
+    payload = jwt.decode(token, app_settings.secret_key, algorithms=[ALGORITHM])
+    del payload["tv"]
+    legacy = jwt.encode(payload, app_settings.secret_key, algorithm=ALGORITHM)
+
+    assert client.get(
+        "/api/auth/me", headers={"Authorization": f"Bearer {legacy}"}
+    ).status_code == 200
+
+
+def test_re_enabling_an_account_does_not_revive_the_old_token(client, db, student, admin):
+    """The cutoff is set when the account is disabled and left alone after."""
+    headers = auth(student)
+    client.patch(
+        f"/api/admin/users/{student.id}", json={"is_active": False}, headers=auth(admin)
+    )
+    assert client.get("/api/auth/me", headers=headers).status_code == 401
+
+    client.patch(
+        f"/api/admin/users/{student.id}", json={"is_active": True}, headers=auth(admin)
+    )
+    assert client.get("/api/auth/me", headers=headers).status_code == 401
+
+
 def test_short_passwords_are_refused(client, student):
     response = client.post(
         "/api/auth/change-password",

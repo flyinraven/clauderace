@@ -37,12 +37,20 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 # --- Tokens ---------------------------------------------------------------
-def create_access_token(subject: str | int, role: str, ttl_minutes: int | None = None) -> str:
+def create_access_token(
+    subject: str | int,
+    role: str,
+    ttl_minutes: int | None = None,
+    token_version: int = 0,
+) -> str:
     ttl = ttl_minutes or settings.access_token_ttl_minutes
     now = datetime.now(timezone.utc)
     payload = {
         "sub": str(subject),
         "role": role,
+        # Checked against the user's own counter on every request, so a
+        # password change or a disabled account retires this token at once.
+        "tv": token_version,
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=ttl)).timestamp()),
     }

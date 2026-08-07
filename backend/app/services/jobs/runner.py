@@ -85,6 +85,18 @@ class JobContext:
         result.update(values)
         self.job.result = result
 
+    @property
+    def cancelled(self) -> bool:
+        """Has an administrator cancelled this job since the chunk began?
+
+        A chunk is one station or one sub-question, but that can still be a
+        dozen paid calls. A handler that reads this between phases stops on the
+        cancellation rather than finishing work nobody is waiting for. Reading
+        it is one indexed query, so it belongs at phase boundaries, not inside
+        a tight loop.
+        """
+        return _cancelled_meanwhile(self.db, self.job.id)
+
 
 # handler(ctx) -> True when the job is finished, False if more chunks remain.
 JobHandler = Callable[[JobContext], bool]
@@ -183,6 +195,13 @@ class JobWorker:
             ctx = JobContext(db=db, job=job)
             try:
                 finished = handler(ctx)
+                if _cancelled_meanwhile(db, job_id):
+                    # Cancelling commits from the request's session while this
+                    # one holds a `job` loaded before it. Writing a status here
+                    # would put the row back to PENDING and the queue would
+                    # serve the job again, so the cancellation is left standing.
+                    # The chunk's own work is kept - it is already paid for.
+                    return True
                 job.heartbeat_at = datetime.now(timezone.utc)
                 if finished:
                     job.status = JOB_COMPLETED
@@ -198,11 +217,28 @@ class JobWorker:
         return True
 
 
+def _cancelled_meanwhile(db: Session, job_id: int) -> bool:
+    """Read the job's status straight from the database.
+
+    `db.get` would hand back the instance this session already holds, which was
+    loaded before the cancellation was committed, so the status has to be
+    selected afresh.
+    """
+    status = db.execute(select(Job.status).where(Job.id == job_id)).scalar_one_or_none()
+    return status == JOB_CANCELLED
+
+
 def _fail_chunk(job_id: int, exc: Exception) -> None:
     detail = traceback.format_exc()
     with session_scope() as db:
         job = db.get(Job, job_id)
         if job is None:
+            return
+        if job.status == JOB_CANCELLED:
+            # Cancelling a job whose chunk is in flight often makes that chunk
+            # raise. Recording it as a failure would be reporting the
+            # cancellation back to the admin who asked for it.
+            logger.info("Job %s chunk raised after being cancelled: %s", job_id, exc)
             return
         job.attempts += 1
         job.error = f"{type(exc).__name__}: {exc}"[:4000]
@@ -222,7 +258,55 @@ def _fail_chunk(job_id: int, exc: Exception) -> None:
 
 
 def _claim_next(db: Session) -> Job | None:
-    """Mark the next runnable job RUNNING and return it."""
+    """Mark the next runnable job RUNNING and return it.
+
+    Returns None when the queue holds nothing runnable. A reclaimed job that has
+    exhausted its attempts is failed here and the search continues, so one
+    poisonous job does not hide the work queued behind it.
+    """
+    while True:
+        job = _take_next(db)
+        if job is None:
+            return None
+        if job.status != JOB_RUNNING:
+            # Waiting work, not a reclaim: no attempt has been spent on it yet.
+            _mark_running(job)
+            return job
+        # A reclaim. The previous attempt did not fail through `_fail_chunk` -
+        # it took the process down with it (or the host restarted), so nothing
+        # counted it. Counting it here is what stops a chunk that reliably
+        # kills the worker from being retried forever.
+        job.attempts += 1
+        if job.attempts >= MAX_ATTEMPTS:
+            job.status = JOB_FAILED
+            job.finished_at = datetime.now(timezone.utc)
+            job.error = (
+                f"Abandoned {job.attempts} times without completing a chunk. The worker "
+                "was interrupted each time rather than raising, so no error was recorded."
+            )
+            log_error(
+                db,
+                source=f"job:{job.job_type}",
+                message="Job failed after repeated interruptions",
+                context={"job_id": job.id, "attempts": job.attempts},
+            )
+            logger.error("Job %s failed after %s interruptions", job.id, job.attempts)
+            continue
+        logger.warning("Reclaiming stale job %s (attempt %s)", job.id, job.attempts + 1)
+        _mark_running(job)
+        return job
+
+
+def _mark_running(job: Job) -> None:
+    now = datetime.now(timezone.utc)
+    job.status = JOB_RUNNING
+    job.heartbeat_at = now
+    if job.started_at is None:
+        job.started_at = now
+
+
+def _take_next(db: Session) -> Job | None:
+    """The oldest job that is either waiting or abandoned, or None."""
     now = datetime.now(timezone.utc)
     stale_before = now - timedelta(seconds=STALE_AFTER_SECONDS)
 
@@ -247,14 +331,6 @@ def _claim_next(db: Session) -> Job | None:
         .order_by(Job.id)
         .limit(1)
     ).scalar_one_or_none()
-
-    if job is None:
-        return None
-
-    job.status = JOB_RUNNING
-    job.heartbeat_at = now
-    if job.started_at is None:
-        job.started_at = now
     return job
 
 

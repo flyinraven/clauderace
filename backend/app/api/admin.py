@@ -196,6 +196,10 @@ def update_user(
         if user.id == admin.id and not payload.is_active:
             raise HTTPException(status_code=400, detail="You cannot disable your own account")
         user.is_active = payload.is_active
+        if not payload.is_active:
+            # Re-enabling later must not revive the tokens they held while
+            # disabled, so the counter moves on the way out.
+            user.token_version += 1
     if payload.full_name is not None:
         user.full_name = payload.full_name
     db.commit()

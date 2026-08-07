@@ -46,6 +46,15 @@ def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Account not found or disabled"
         )
+    # Retired by a password change or by the account having been disabled. A
+    # token minted before `tv` existed carries none, which reads as 0 - the
+    # version every account starts at, so nobody is signed out by the upgrade.
+    if payload.get("tv", 0) != (user.token_version or 0):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session ended. Please sign in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return user
 
 

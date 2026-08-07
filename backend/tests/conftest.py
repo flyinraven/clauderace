@@ -134,7 +134,10 @@ def client(sessionmaker_for):
 
 
 def auth(user: User) -> dict[str, str]:
-    return {"Authorization": f"Bearer {create_access_token(user.id, user.role)}"}
+    return {
+        "Authorization": "Bearer "
+        + create_access_token(user.id, user.role, token_version=user.token_version)
+    }
 
 
 # --- Fake AI provider ----------------------------------------------------

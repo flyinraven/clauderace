@@ -77,7 +77,7 @@ def login(payload: LoginRequest, db: DbSession) -> TokenResponse:
     db.commit()
 
     return TokenResponse(
-        access_token=create_access_token(user.id, user.role),
+        access_token=create_access_token(user.id, user.role, token_version=user.token_version),
         user=UserOut.model_validate(user),
     )
 
@@ -123,7 +123,7 @@ def redeem_invite(payload: RedeemInviteRequest, db: DbSession) -> TokenResponse:
     db.commit()
 
     return TokenResponse(
-        access_token=create_access_token(user.id, user.role),
+        access_token=create_access_token(user.id, user.role, token_version=user.token_version),
         user=UserOut.model_validate(user),
     )
 
@@ -140,4 +140,8 @@ def change_password(payload: ChangePasswordRequest, user: CurrentUser, db: DbSes
             status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect"
         )
     user.password_hash = hash_password(payload.new_password)
+    # Every token issued under the old password stops here, including the one
+    # that made this call. A password is changed because it may be known, and a
+    # 12-hour token that outlives it would make the change cosmetic.
+    user.token_version += 1
     db.commit()

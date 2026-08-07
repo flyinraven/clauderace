@@ -1309,6 +1309,9 @@ def handle_source_station_images(ctx: JobContext) -> bool:
                 done.append(station.id)
                 ctx.set_result(**{key: done})
 
+            if ctx.cancelled:
+                return True
+
             # One photograph cannot carry a rubric that marks both eyes, so
             # the remaining views are filled before the station is called done.
             coverage = source_coverage_images(ctx.db, client, station, job_id=ctx.job.id)
@@ -1317,6 +1320,9 @@ def handle_source_station_images(ctx: JobContext) -> bool:
                 tally["attached"] = tally.get("attached", 0) + coverage["attached"]
                 tally["failed"] = tally.get("failed", 0) + coverage["failed"]
                 ctx.set_result(coverage=tally)
+
+            if ctx.cancelled:
+                return True
 
             # The questions may each need an image of their own on top of the
             # one the candidate opens on.

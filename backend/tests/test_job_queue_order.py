@@ -14,10 +14,16 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.models import Job
-from app.models.ops import JOB_PENDING, JOB_RUNNING
+from app.models.ops import JOB_CANCELLED, JOB_FAILED, JOB_PENDING, JOB_RUNNING
 from app.services.imagesearch.base import ImageQueryError, ImageSearchError
 from app.services.imagesearch.providers import tidy_query
-from app.services.jobs.runner import STALE_AFTER_SECONDS, _claim_next
+from app.services.jobs.runner import (
+    MAX_ATTEMPTS,
+    STALE_AFTER_SECONDS,
+    _claim_next,
+    cancel_job,
+    register_handler,
+)
 
 
 def _job(db, *, status, heartbeat_minutes_ago=None):
@@ -65,6 +71,107 @@ def test_queued_jobs_still_run_oldest_first(db):
     first = _job(db, status=JOB_PENDING)
     _job(db, status=JOB_PENDING)
     assert _claim_next(db).id == first.id
+
+
+def test_a_reclaim_spends_an_attempt(db):
+    """A crash records nothing, so the reclaim is the only place to count it."""
+    job = _job(db, status=JOB_RUNNING, heartbeat_minutes_ago=30)
+    assert job.attempts == 0
+    assert _claim_next(db).id == job.id
+    assert job.attempts == 1
+
+
+def test_a_job_that_keeps_killing_the_worker_eventually_fails(db):
+    """Otherwise a chunk that takes the process down is retried forever.
+
+    Nothing raises here - the job is simply found abandoned each time, which is
+    what a process killed mid-chunk looks like from the next tick.
+    """
+    job = _job(db, status=JOB_RUNNING, heartbeat_minutes_ago=30)
+    for _ in range(MAX_ATTEMPTS - 1):
+        assert _claim_next(db) is not None
+        job.heartbeat_at = datetime.now(timezone.utc) - timedelta(minutes=30)
+        db.commit()
+
+    assert _claim_next(db) is None, "the queue is empty now, not serving it again"
+    assert job.status == JOB_FAILED
+    assert job.attempts == MAX_ATTEMPTS
+    assert "interrupted" in (job.error or "")
+
+
+def test_a_poisonous_job_does_not_hide_the_work_behind_it(db):
+    """It is failed and the queue moves on within the same claim."""
+    doomed = _job(db, status=JOB_RUNNING, heartbeat_minutes_ago=30)
+    doomed.attempts = MAX_ATTEMPTS - 1
+    db.commit()
+    waiting = _job(db, status=JOB_PENDING)
+
+    claimed = _claim_next(db)
+    assert claimed is not None and claimed.id == waiting.id
+    assert doomed.status == JOB_FAILED
+
+
+def test_cancelling_a_job_mid_chunk_is_not_undone_by_the_chunk_finishing(
+    db, sessionmaker_for, run_jobs
+):
+    """The worker holds a `job` loaded before the cancellation committed.
+
+    Writing any status from that stale object - PENDING for "more to do" -
+    put the row straight back in the queue, so cancelling a 28-station batch
+    only worked if the click landed between two chunks. It kept spending.
+    """
+    chunks_run = []
+
+    @register_handler("test_cancel_midway")
+    def _handler(ctx):
+        chunks_run.append(ctx.job.id)
+        if len(chunks_run) == 1:
+            # Stands in for the administrator pressing cancel while this chunk
+            # is out at the provider: a different session, committed underneath.
+            other = sessionmaker_for()
+            try:
+                cancel_job(other, ctx.job.id)
+            finally:
+                other.close()
+        return False  # "more chunks to come" - the status the fix must not write
+
+    job = Job(job_type="test_cancel_midway", status=JOB_PENDING, payload={}, cursor={})
+    db.add(job)
+    db.commit()
+
+    run_jobs()
+    db.expire_all()
+
+    assert len(chunks_run) == 1, "the cancelled job must not be handed out again"
+    assert db.get(Job, job.id).status == JOB_CANCELLED
+
+
+def test_a_chunk_that_raises_after_a_cancel_is_not_reported_as_a_failure(
+    db, sessionmaker_for, run_jobs
+):
+    """Cancelling mid-flight usually makes the chunk raise. That is the
+    cancellation arriving, not a job that went wrong."""
+
+    @register_handler("test_cancel_then_raise")
+    def _handler(ctx):
+        other = sessionmaker_for()
+        try:
+            cancel_job(other, ctx.job.id)
+        finally:
+            other.close()
+        raise RuntimeError("connection closed")
+
+    job = Job(job_type="test_cancel_then_raise", status=JOB_PENDING, payload={}, cursor={})
+    db.add(job)
+    db.commit()
+
+    run_jobs()
+    db.expire_all()
+
+    stored = db.get(Job, job.id)
+    assert stored.status == JOB_CANCELLED
+    assert stored.attempts == 0
+    assert stored.error is None
 
 
 @pytest.mark.parametrize(
