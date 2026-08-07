@@ -32,6 +32,7 @@ Both keep the question and its marks. Neither touches a figure.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from sqlalchemy import select
@@ -41,7 +42,6 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.models import OsceFigure, OsceStation
 from app.services.ai import AIClient
 from app.services.errors import log_error
-from app.services.imagesearch.relevance import split_investigations
 from app.services.jobs.runner import JobContext, JobHandlerError, register_handler
 from app.services.osce.prompts import PRESENTS_INVESTIGATION_RE
 
@@ -88,24 +88,85 @@ Return JSON only:
 {"text": "<the rewritten question>", "basis": "trim" | "recorded" | "expected"}"""
 
 
-def _shown_figure_ids(db: Session, station: OsceStation) -> set[int]:
-    """Figures the candidate will actually see: attached and approved."""
+def _shown_figures(db: Session, station: OsceStation) -> dict[int, str]:
+    """Figures the candidate will really see, mapped to the words describing
+    them. Attached and approved - a figure the vision gate held back is bound
+    to its question and invisible, so it must not count as shown."""
     rows = db.execute(
-        select(OsceFigure.id).where(
+        select(OsceFigure.id, OsceFigure.caption, OsceFigure.wanted_description).where(
             OsceFigure.station_id == station.id,
             OsceFigure.image_id.is_not(None),
             OsceFigure.is_approved.is_(True),
         )
-    ).scalars().all()
-    return set(rows)
+    ).all()
+    # The caption alone, because it describes what the image IS - written after
+    # a vision model looked at it. `wanted_description` is what was asked for,
+    # and folding it in makes the comparison answer itself: a figure requested
+    # as "fundus photographs and autofluorescence" would appear to show both
+    # however little arrived, and the question asking for both would look
+    # served. That is station 194, and it is the whole failure this exists to
+    # catch. It is used only when there is no caption at all, where a stale
+    # description still beats knowing nothing.
+    return {
+        fid: (caption or wanted or "") for fid, caption, wanted in rows
+    }
 
 
-def classify_prompt(prompt: dict[str, Any], shown: set[int]) -> tuple[str, list[int], int]:
+# Fine-grained on purpose. `split_investigations` answers "what should I go and
+# buy", and `expected_modalities` answers "is this the right kind of picture" -
+# both are deliberately coarse, and reconciliation inherited that coarseness to
+# its cost. "Bilateral wide-field colour fundus photographs and fundus
+# autofluorescence" is one request to the splitter and one modality to the
+# gate, so a question asking for both and showing one photograph read as fully
+# served. That was the station a real circuit scored 17.5% on.
+#
+# Here the question is different again - "does the wording match what is on the
+# screen" - so CT is not MRI, a fundus photograph is not autofluorescence, and
+# topography is not biometry.
+_INVESTIGATION_TERMS: tuple[tuple[str, str], ...] = (
+    ("oct-a", r"\bOCT[- ]?A\b|\bangio[- ]?OCT\b|\bOCT angiograph\w*"),
+    ("oct", r"\bOCT\b|\boptical coherence tomograph\w*"),
+    ("faf", r"\bFAF\b|\bauto[- ]?fluorescen\w*"),
+    ("ffa", r"\bFFA\b|\bfluorescein angiograph\w*"),
+    ("icg", r"\bICG\b|\bindocyanine\w*"),
+    ("fundus_photo", r"\bfundus (?:photo\w*|image\w*)|\bcolour fundus\b|\bretinal photograph\w*"),
+    ("topography", r"\btopograph\w*|\bpentacam\b|\banterion\b|\btomograph\w*"),
+    ("biometry", r"\bbiometry\b|\bA[- ]?scan\b|\bIOL master\b"),
+    ("pachymetry", r"\bpachymetry\b"),
+    ("specular", r"\bspecular\w*"),
+    ("ubm", r"\bUBM\b|\bultrasound biomicroscop\w*"),
+    ("bscan", r"\bB[- ]?scan\b"),
+    ("visual_field", r"\bvisual field\w*|\bperimetry\b|\bHumphrey\b|\bHVF\b|\bGoldmann field\w*"),
+    ("erg", r"\bERG\b|\belectroretinogram\w*|\bEOG\b"),
+    ("ct", r"\bCT\b|\bcomputed tomograph\w*"),
+    ("mri", r"\bMRI\b|\bmagnetic resonance\w*"),
+    ("xray", r"\bx[- ]?ray\b|\bradiograph\w*|\bchest film\b"),
+    ("hess", r"\bHess\b|\bLees screen\b"),
+    ("gonio", r"\bgonioscop\w*|\bgonio\b"),
+    ("slitlamp_photo", r"\bslit[- ]?lamp (?:photo\w*|image\w*)|\banterior segment photo\w*"),
+)
+_COMPILED_TERMS = tuple((name, re.compile(pat, re.I)) for name, pat in _INVESTIGATION_TERMS)
+
+
+def named_investigations(*texts: str | None) -> set[str]:
+    """Every distinct investigation these texts name."""
+    blob = " ".join(t for t in texts if t)
+    return {name for name, pattern in _COMPILED_TERMS if pattern.search(blob)}
+
+
+def classify_prompt(
+    prompt: dict[str, Any], shown: dict[int, str]
+) -> tuple[str, list[int], set[str]]:
     """What, if anything, is wrong with this question. Pure - no database.
 
-    Returns the mode, the figure ids really on screen for it, and how many
-    images it asked for. Kept free of I/O so the same rule can be counted
-    across the bank without touching a model.
+    `shown` maps the id of every figure the candidate will really see to the
+    words describing it. Returns the mode, the ids on screen for this question,
+    and what the question names that is not there.
+
+    The test is one thing, not two: does the question name an investigation the
+    candidate cannot see? That covers a question promising three images and
+    given two, and a question promising a CT and given an MRI, because both are
+    the same failure - the wording claims something the screen does not have.
     """
     text = str(prompt.get("text") or "")
     wanted = str(prompt.get("image_wanted") or "").strip()
@@ -113,7 +174,6 @@ def classify_prompt(prompt: dict[str, Any], shown: set[int]) -> tuple[str, list[
         [prompt["figure_id"]] if prompt.get("figure_id") else []
     )
     here = [i for i in ids if i in shown]
-    asked = len(split_investigations(wanted)) if wanted else 0
 
     # A question that neither asks for an image nor claims to show one is fine
     # however many figures the station has.
@@ -129,13 +189,15 @@ def classify_prompt(prompt: dict[str, Any], shown: set[int]) -> tuple[str, list[
         and not prompt.get("image_impossible")
         and not PRESENTS_INVESTIGATION_RE.search(text)
     ):
-        return UNCHANGED, here, asked
+        return UNCHANGED, here, set()
 
     if not here:
-        return STATE, here, asked
-    if asked and len(here) < asked:
-        return TRIM, here, asked
-    return UNCHANGED, here, asked
+        return STATE, here, named_investigations(text, wanted)
+
+    missing = named_investigations(text, wanted) - named_investigations(
+        *(shown[i] for i in here)
+    )
+    return (TRIM if missing else UNCHANGED), here, missing
 
 
 def _describe_what_is_there(db: Session, station: OsceStation, ids: list[int]) -> str:
@@ -159,12 +221,12 @@ def reconcile_station(
     if not prompts:
         return {"trimmed": 0, "stated": 0, "expected": 0, "unchanged": 0, "failed": 0}
 
-    shown = _shown_figure_ids(db, station)
+    shown = _shown_figures(db, station)
     tally = {"trimmed": 0, "stated": 0, "expected": 0, "unchanged": 0, "failed": 0}
     changed = False
 
     for prompt in prompts:
-        mode, here, asked = classify_prompt(prompt, shown)
+        mode, here, missing = classify_prompt(prompt, shown)
         if mode == UNCHANGED:
             tally["unchanged"] += 1
             continue
@@ -178,7 +240,8 @@ def reconcile_station(
             f"{station.findings_elicited or station.findings or '(none recorded)'}\n\n"
             f"THE QUESTION AS IT STANDS:\n{prompt.get('text')}\n\n"
             f"IT ASKED TO BE SHOWN: {prompt.get('image_wanted') or '(nothing)'}\n"
-            f"WHAT IS REALLY ON SCREEN: {_describe_what_is_there(db, station, here)}"
+            f"WHAT IS REALLY ON SCREEN: {_describe_what_is_there(db, station, here)}\n"
+            f"NAMED BUT NOT ON SCREEN: {', '.join(sorted(missing)) or '(nothing)'}"
         )
         try:
             data = client.complete_json(
@@ -204,7 +267,8 @@ def reconcile_station(
         # so a bad rewrite can be put back. A model writes the replacement; the
         # original is the only copy of what the examiner report actually said.
         prompt["reconciled"] = {
-            "mode": mode, "basis": basis, "shown": len(here), "asked": asked,
+            "mode": mode, "basis": basis, "shown": len(here),
+            "missing": sorted(missing),
             "original": prompt.get("text"),
             "original_image_wanted": prompt.get("image_wanted"),
         }

@@ -100,6 +100,19 @@ export default function StationImages() {
     }
   }
 
+  /** Make every question honest about the image that actually arrived. */
+  const reconcileQuestions = async () => {
+    setError(null)
+    try {
+      const result = await api<{ job_id: number }>('/osce/stations/reconcile-questions', {
+        method: 'POST',
+      })
+      setJobId(result.job_id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nothing to reconcile')
+    }
+  }
+
   /** Re-grade the papers' own photographs under the current rule. */
   const recheckFigures = async () => {
     setError(null)
@@ -220,6 +233,9 @@ export default function StationImages() {
           <Button onClick={sourceImages}>Source missing images</Button>
           <Button variant="secondary" onClick={recheckFigures}>
             Recheck paper images
+          </Button>
+          <Button variant="secondary" onClick={reconcileQuestions}>
+            Match questions to images
           </Button>
           <Button variant="secondary" onClick={settleStations}>
             Settle stations

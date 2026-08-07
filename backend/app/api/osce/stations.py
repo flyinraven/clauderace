@@ -251,6 +251,31 @@ def settle_stations(admin: AdminUser, db: DbSession) -> dict[str, Any]:
     return {"job_id": job.id, "station_count": len(ids)}
 
 
+@router.post("/stations/reconcile-questions", status_code=status.HTTP_202_ACCEPTED)
+def reconcile_questions(admin: AdminUser, db: DbSession) -> dict[str, Any]:
+    """Make every question honest about the image that actually arrived.
+
+    Runs itself at the end of every image-sourcing batch. It is here as well
+    for the stations built before it existed, whose questions still promise
+    images that were never found - a question is written before anyone knows
+    whether its image can be had, and until this ran nothing looked again.
+
+    Only questions that name something the candidate cannot see are touched,
+    and the wording they had is kept so a rewrite can be undone.
+    """
+    from app.services.osce.reconcile import JOB_RECONCILE_QUESTIONS
+
+    ids = list(db.execute(select(OsceStation.id).order_by(OsceStation.id)).scalars().all())
+    if not ids:
+        raise HTTPException(status_code=400, detail="There are no stations")
+    job = create_job(
+        db, JOB_RECONCILE_QUESTIONS, payload={"station_ids": ids},
+        created_by_id=admin.id, total_steps=len(ids),
+        message=f"Checking the questions on {len(ids)} station(s)",
+    )
+    return {"job_id": job.id, "station_count": len(ids)}
+
+
 @router.post("/stations/recheck-figures", status_code=status.HTTP_202_ACCEPTED)
 def recheck_station_figures(admin: AdminUser, db: DbSession) -> dict[str, Any]:
     """Grade the papers' own photographs against their stations again.

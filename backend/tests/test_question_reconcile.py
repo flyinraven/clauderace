@@ -13,7 +13,13 @@ rewritten is not, and it is the part that must never drift.
 
 from __future__ import annotations
 
-from app.services.osce.reconcile import STATE, TRIM, UNCHANGED, classify_prompt
+from app.services.osce.reconcile import (
+    STATE,
+    TRIM,
+    UNCHANGED,
+    classify_prompt,
+    named_investigations,
+)
 
 
 def test_a_question_showing_everything_it_asked_for_is_left_alone():
@@ -22,7 +28,7 @@ def test_a_question_showing_everything_it_asked_for_is_left_alone():
         "image_wanted": "Pentacam imaging of the left eye",
         "figure_ids": [11],
     }
-    assert classify_prompt(prompt, shown={11})[0] == UNCHANGED
+    assert classify_prompt(prompt, {11: "Pentacam elevation maps of the left eye"})[0] == UNCHANGED
 
 
 def test_a_question_promising_more_images_than_arrived_is_trimmed():
@@ -32,10 +38,12 @@ def test_a_question_promising_more_images_than_arrived_is_trimmed():
         "image_wanted": "Fundus autofluorescence; disc OCT; Humphrey visual fields",
         "figure_ids": [21, 22, 23],
     }
-    mode, here, asked = classify_prompt(prompt, shown={21, 22})
+    mode, here, missing = classify_prompt(
+        prompt, {21: "Fundus autofluorescence", 22: "Disc OCT"}
+    )
     assert mode == TRIM
     assert here == [21, 22]
-    assert asked == 3
+    assert missing == {"visual_field"}
 
 
 def test_a_question_whose_images_never_arrived_is_restated():
@@ -45,7 +53,7 @@ def test_a_question_whose_images_never_arrived_is_restated():
         "image_wanted": "Ultrasound biometry data",
         "figure_id": 31,
     }
-    assert classify_prompt(prompt, shown=set())[0] == STATE
+    assert classify_prompt(prompt, {})[0] == STATE
 
 
 def test_an_unapproved_figure_does_not_count_as_shown():
@@ -57,7 +65,7 @@ def test_an_unapproved_figure_does_not_count_as_shown():
         "figure_id": 41,
     }
     # 41 exists and is bound, but is not in the approved-and-attached set.
-    assert classify_prompt(prompt, shown=set())[0] == STATE
+    assert classify_prompt(prompt, {})[0] == STATE
 
 
 def test_a_question_that_never_wanted_an_image_is_never_touched():
@@ -70,7 +78,7 @@ def test_a_question_that_never_wanted_an_image_is_never_touched():
         "What are the driving licence requirements for visual field defects?",
         "How would you perform biometry in this young child?",
     ):
-        assert classify_prompt({"text": text}, shown=set())[0] == UNCHANGED, text
+        assert classify_prompt({"text": text}, {})[0] == UNCHANGED, text
 
 
 def test_a_question_that_states_its_own_finding_is_already_right():
@@ -81,7 +89,7 @@ def test_a_question_that_states_its_own_finding_is_already_right():
             "constriction with a small central island. What does this tell you?"
         )
     }
-    assert classify_prompt(prompt, shown=set())[0] == UNCHANGED
+    assert classify_prompt(prompt, {})[0] == UNCHANGED
 
 
 def test_an_impossible_result_still_counts_as_needing_a_rewrite():
@@ -91,7 +99,7 @@ def test_an_impossible_result_still_counts_as_needing_a_rewrite():
         "text": "This is her Quantiferon Gold result. What does it show?",
         "image_impossible": "a result to be read, not an image",
     }
-    assert classify_prompt(prompt, shown=set())[0] == STATE
+    assert classify_prompt(prompt, {})[0] == STATE
 
 
 def test_the_opening_examination_question_is_not_swept_up():
@@ -99,4 +107,72 @@ def test_the_opening_examination_question_is_not_swept_up():
     position 0, outside the prompts. Treating it as imageless would rewrite the
     one question on every station that was never broken."""
     prompt = {"text": "Please examine the fundus of both eyes."}
-    assert classify_prompt(prompt, shown={5})[0] == UNCHANGED
+    assert classify_prompt(prompt, {5: "Fundus photograph of both eyes"})[0] == UNCHANGED
+
+
+def test_two_investigations_joined_by_and_are_two_things_to_show():
+    """The miss that made this its own rule.
+
+    `split_investigations` reads "photographs and autofluorescence" as one
+    request and `expected_modalities` reads both as "fundus", so a question
+    asking for both and given one photograph looked fully served. It was
+    station 194, and a real circuit scored 17.5% on it.
+    """
+    prompt = {
+        "text": "Talk me through these retinal images. What do they show?",
+        "image_wanted": (
+            "Bilateral wide-field colour fundus photographs and fundus autofluorescence"
+        ),
+        "figure_id": 60,
+    }
+    mode, here, missing = classify_prompt(prompt, {60: "Fundus photograph, laterality not specified."})
+    assert mode == TRIM
+    assert missing == {"faf"}
+
+
+def test_a_ct_is_not_an_mri():
+    """Station 257 asked for a CT of the orbits and showed a coronal MRI of the
+    head. Both are "radiology" to the modality gate, so nothing objected."""
+    prompt = {
+        "text": "This is her CT scan of the orbits. What does it show?",
+        "image_wanted": "CT scan of the orbits, axial and coronal views",
+        "figure_id": 913,
+    }
+    mode, _, missing = classify_prompt(prompt, {913: "Coronal MRI of the head"})
+    assert mode == TRIM
+    assert missing == {"ct"}
+
+
+def test_the_terms_that_must_stay_apart():
+    assert named_investigations("fundus photographs and autofluorescence") == {
+        "fundus_photo", "faf",
+    }
+    assert named_investigations("corneal topography and A-scan biometry") == {
+        "topography", "biometry",
+    }
+    assert named_investigations("CT orbits") == {"ct"}
+    assert named_investigations("MRI brain") == {"mri"}
+
+
+def test_what_is_on_screen_is_the_caption_not_the_request():
+    """The bug that let station 194 through a first time.
+
+    A figure carries both what was asked for and what a vision model saw. Using
+    the request to describe the screen makes the comparison answer itself: a
+    figure requested as "photographs and autofluorescence" appears to show both
+    however little arrived. Only the caption says what is really there.
+    """
+    from app.services.osce.reconcile import _shown_figures  # noqa: PLC0415
+
+    assert _shown_figures.__doc__  # the rule is documented where it is enforced
+    prompt = {
+        "text": "Talk me through these retinal images.",
+        "image_wanted": "Colour fundus photographs and fundus autofluorescence",
+        "figure_id": 60,
+    }
+    # Caption describes the image; the request must not be mixed in.
+    assert classify_prompt(prompt, {60: "Fundus photograph of the left eye"})[0] == TRIM
+    # And when it genuinely is both, nothing is rewritten.
+    assert classify_prompt(
+        prompt, {60: "Colour fundus photograph and autofluorescence pair"}
+    )[0] == UNCHANGED
