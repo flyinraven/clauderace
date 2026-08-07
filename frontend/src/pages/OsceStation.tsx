@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
 import { useImage } from '../hooks/useImage'
 import { useRecorder } from '../hooks/useRecorder'
@@ -131,6 +131,11 @@ function StationFigureView({ figure }: { figure: StationFigure }) {
 export default function OsceStation() {
   const { id } = useParams<{ id: string }>()
   const sittingId = id ? Number(id) : null
+  const [searchParams] = useSearchParams()
+  // Set by the rest screen between stations of a circuit. The candidate has
+  // already said they are ready there; "Before you begin" is a briefing for
+  // the first station, not a turnstile at every door.
+  const autostart = searchParams.get('autostart') === '1'
   const navigate = useNavigate()
 
   const [sitting, setSitting] = useState<Sitting | null>(null)
@@ -331,6 +336,24 @@ export default function OsceStation() {
       )
     }
   }
+
+  // Between stations of a circuit the candidate has already pressed "Start the
+  // next station now" (or let the rest run out, which means the same thing).
+  // Showing "Before you begin" again made them confirm one decision twice, at
+  // every door. The briefing still shows for a station opened directly, which
+  // is where it earns its place: the first station of the day.
+  //
+  // A failure inside begin() leaves the clock stopped and the card on screen
+  // with its error, so the manual path is still there when this cannot work.
+  const autoStarted = useRef(false)
+  useEffect(() => {
+    if (!autostart || autoStarted.current) return
+    if (!sitting || sitting.clock.phase !== 'not_started' || stage !== 'sitting') return
+    autoStarted.current = true
+    void begin()
+    // `begin` is redefined every render and would loop; the ref is the guard.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autostart, sitting, stage])
 
   /** Persist a corrected transcript. This is exactly what gets marked, so a
    *  failed save must never pass silently. */

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
+import { useSpeech } from '../hooks/useSpeech'
 import { Alert, Button, Card, Loading } from '../components/ui'
 
 /**
@@ -27,9 +28,17 @@ export default function OsceCircuitRest() {
   const [remaining, setRemaining] = useState(Number(params.get('rest') || 120))
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const speech = useSpeech()
 
   const startNext = useCallback(async () => {
     if (starting || !nextStationId) return
+    // Before any await, while a tap on the button still counts as a gesture.
+    // The station this leads to starts itself, so this is the last gesture
+    // WebKit will see - without it the examiner's voice is silently dropped
+    // for the rest of the circuit. Harmless when the countdown got here on
+    // its own: synthesis was already unlocked by station one, in this same
+    // document, and the SPA never reloads it.
+    speech.unlock()
     setStarting(true)
     try {
       const sitting = await api<{ id: number }>('/osce/sittings', {
@@ -40,12 +49,15 @@ export default function OsceCircuitRest() {
           is_timed: true,
         },
       })
-      navigate(`/osce/sittings/${sitting.id}`)
+      // `autostart` says the candidate has already committed to starting -
+      // they pressed the button on this screen, or let the rest run out. Asking
+      // them again on the next screen is a second gate on one decision.
+      navigate(`/osce/sittings/${sitting.id}?autostart=1`)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not start the next station')
       setStarting(false)
     }
-  }, [circuitId, navigate, nextStationId, starting])
+  }, [circuitId, navigate, nextStationId, speech, starting])
 
   useEffect(() => {
     if (remaining <= 0) {
