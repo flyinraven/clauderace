@@ -65,6 +65,13 @@ Total spend to date: roughly $7.
   the real double marking and reveals disagreement, at double the cost.
 - **Database on SiteGround, not Render.** Render's free PostgreSQL expires
   after 30 days.
+- **Email goes out through `resend`, not `smtp`.** Configured and working in
+  production. Do not switch the provider back: Render's free tier blocks
+  outbound traffic to ports 25/465/587, so the SiteGround mailbox times out
+  from there however correct the credentials are. SMTP still works locally.
+  Invites now send themselves, and the AI budget warning reaches the
+  administrators rather than only the error log. If an invite email arrives
+  carrying a bare code with no link, `app.public_url` is unset.
 - **No synthetic clinical images.** AI-generated fundus photos look convincing
   and are anatomically wrong.
 - **Station question design comes from real examiner handouts.** The RANZCO
@@ -264,12 +271,4 @@ Nothing is blocking. Open items, roughly in order of value:
    dropdown in the Question bank, which the API already returns options for
    but the UI never rendered. The reports contain no VSAQs, so real ones for
    a given sitting will never exist.
-6. Invites email themselves once "Send emails" is on and a provider is
-   configured (Settings → Email notifications, "Send test email" to check).
-   **Production must use `resend`, not `smtp`:** Render's free tier blocks
-   outbound traffic to ports 25/465/587, so the SiteGround mailbox times out
-   from there however correct the credentials are. SMTP still works locally.
-   Until a provider is working, codes are copied by hand - which the invite
-   list says plainly rather than looking as though a message went out. Set
-   `app.public_url` too, or the email carries the bare code with no link.
-7. No backup routine. SiteGround has PostgreSQL backups - worth switching on.
+6. No backup routine. SiteGround has PostgreSQL backups - worth switching on.
