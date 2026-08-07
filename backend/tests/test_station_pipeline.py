@@ -443,10 +443,10 @@ def test_a_sourced_image_is_verified_and_attached(
     photo = big_photo()
 
     monkeypatch.setattr(
-        "app.services.osce.station_images.build_provider", lambda store: search
+        "app.services.osce.station_images.sourcing.build_provider", lambda store: search
     )
     monkeypatch.setattr(
-        "app.services.osce.station_images.download_candidate",
+        "app.services.osce.station_images.sourcing.download_candidate",
         lambda candidate: (photo, "image/jpeg", 2400, 1800),
     )
 
@@ -487,10 +487,10 @@ def test_a_question_gets_its_own_image_sourced_and_kept_off_the_opening(
     search = FakeSearch(["https://example.org/mri1.jpg"])
     photo = big_photo()
     monkeypatch.setattr(
-        "app.services.osce.station_images.build_provider", lambda store: search
+        "app.services.osce.station_images.sourcing.build_provider", lambda store: search
     )
     monkeypatch.setattr(
-        "app.services.osce.station_images.download_candidate",
+        "app.services.osce.station_images.sourcing.download_candidate",
         lambda candidate: (photo, "image/jpeg", 2400, 1800),
     )
     db.commit()
@@ -530,11 +530,11 @@ def test_a_verification_call_never_sends_the_full_size_photograph(
     _configure_image_search(db)
     photo = big_photo()
     monkeypatch.setattr(
-        "app.services.osce.station_images.build_provider",
+        "app.services.osce.station_images.sourcing.build_provider",
         lambda store: FakeSearch(["https://example.org/eye1.jpg"]),
     )
     monkeypatch.setattr(
-        "app.services.osce.station_images.download_candidate",
+        "app.services.osce.station_images.sourcing.download_candidate",
         lambda candidate: (photo, "image/jpeg", 2400, 1800),
     )
 
@@ -568,11 +568,11 @@ def test_the_diagnosis_is_never_put_in_a_search_query_users_could_see(
     station = make_station(db)
     _configure_image_search(db)
     monkeypatch.setattr(
-        "app.services.osce.station_images.build_provider",
+        "app.services.osce.station_images.sourcing.build_provider",
         lambda store: FakeSearch(["https://example.org/eye1.jpg"]),
     )
     monkeypatch.setattr(
-        "app.services.osce.station_images.download_candidate",
+        "app.services.osce.station_images.sourcing.download_candidate",
         lambda candidate: (big_photo(400, 300), "image/jpeg", 400, 300),
     )
     client.post("/api/osce/stations/source-images", headers=auth(admin))
@@ -592,11 +592,11 @@ def test_every_candidate_rejected_leaves_the_station_without_an_image(
     station = make_station(db)
     _configure_image_search(db)
     monkeypatch.setattr(
-        "app.services.osce.station_images.build_provider",
+        "app.services.osce.station_images.sourcing.build_provider",
         lambda store: FakeSearch(["https://example.org/diagram.png"]),
     )
     monkeypatch.setattr(
-        "app.services.osce.station_images.download_candidate",
+        "app.services.osce.station_images.sourcing.download_candidate",
         lambda candidate: (big_photo(400, 300), "image/jpeg", 400, 300),
     )
     ai.responder = lambda body, n: json.dumps(
@@ -667,13 +667,13 @@ def test_a_previously_rejected_url_is_never_offered_back(
         return (big_photo(400, 300), "image/jpeg", 400, 300)
 
     monkeypatch.setattr(
-        "app.services.osce.station_images.build_provider",
+        "app.services.osce.station_images.sourcing.build_provider",
         lambda store: FakeSearch(
             ["https://example.org/eye1.jpg", "https://example.org/eye2.jpg"]
         ),
     )
     monkeypatch.setattr(
-        "app.services.osce.station_images.download_candidate", record
+        "app.services.osce.station_images.sourcing.download_candidate", record
     )
 
     client.post("/api/osce/stations/source-images", headers=auth(admin))
@@ -692,11 +692,11 @@ def test_the_monthly_search_quota_stops_the_batch(client, db, admin, ai, run_job
     db.commit()
 
     monkeypatch.setattr(
-        "app.services.osce.station_images.build_provider",
+        "app.services.osce.station_images.sourcing.build_provider",
         lambda store: FakeSearch(["https://example.org/eye1.jpg"]),
     )
     monkeypatch.setattr(
-        "app.services.osce.station_images.download_candidate",
+        "app.services.osce.station_images.sourcing.download_candidate",
         lambda candidate: (big_photo(400, 300), "image/jpeg", 400, 300),
     )
 
@@ -812,10 +812,10 @@ def test_a_question_asking_for_two_investigations_gets_both(
     search = FakeSearch(["https://example.org/one.jpg", "https://example.org/two.jpg"])
     photo = big_photo()
     monkeypatch.setattr(
-        "app.services.osce.station_images.build_provider", lambda store: search
+        "app.services.osce.station_images.sourcing.build_provider", lambda store: search
     )
     monkeypatch.setattr(
-        "app.services.osce.station_images.download_candidate",
+        "app.services.osce.station_images.sourcing.download_candidate",
         lambda candidate: (photo, "image/jpeg", 2400, 1800),
     )
     db.commit()
@@ -872,7 +872,7 @@ def test_an_investigation_no_search_can_find_is_not_paid_for(
     _configure_image_search(db)
     search = FakeSearch(["https://example.org/x.jpg"])
     monkeypatch.setattr(
-        "app.services.osce.station_images.build_provider", lambda store: search
+        "app.services.osce.station_images.sourcing.build_provider", lambda store: search
     )
     db.commit()
 
@@ -922,10 +922,10 @@ def test_one_provider_error_does_not_abandon_the_whole_batch(
 
     search = HalfBrokenSearch()
     monkeypatch.setattr(
-        "app.services.osce.station_images.build_provider", lambda store: search
+        "app.services.osce.station_images.sourcing.build_provider", lambda store: search
     )
     monkeypatch.setattr(
-        "app.services.osce.station_images.download_candidate",
+        "app.services.osce.station_images.sourcing.download_candidate",
         lambda candidate: (photo, "image/jpeg", 2400, 1800),
     )
     db.commit()
@@ -961,7 +961,7 @@ def test_an_exhausted_account_still_stops_the_run(
             raise ImageSearchError("Brave rate limit or credit exhausted (429).")
 
     monkeypatch.setattr(
-        "app.services.osce.station_images.build_provider", lambda store: DeadAccount()
+        "app.services.osce.station_images.sourcing.build_provider", lambda store: DeadAccount()
     )
     db.commit()
 
@@ -1288,11 +1288,11 @@ def test_sourcing_does_not_steal_the_figure_a_question_owns(
 
     _configure_image_search(db)
     monkeypatch.setattr(
-        "app.services.osce.station_images.build_provider",
+        "app.services.osce.station_images.sourcing.build_provider",
         lambda store: FakeSearch(["https://example.org/gaze.jpg"]),
     )
     monkeypatch.setattr(
-        "app.services.osce.station_images.download_candidate",
+        "app.services.osce.station_images.sourcing.download_candidate",
         lambda candidate: (big_photo(), "image/jpeg", 2400, 1800),
     )
     source_image_for_station(db, AIClient(db), station)
@@ -1363,7 +1363,7 @@ def test_a_failed_re_source_keeps_the_image_the_station_already_had(
     _configure_image_search(db)
     # Every search comes back empty, which is the case that did the damage.
     monkeypatch.setattr(
-        "app.services.osce.station_images.build_provider",
+        "app.services.osce.station_images.sourcing.build_provider",
         lambda store: FakeSearch([]),
     )
     outcome = source_image_for_station(db, AIClient(db), station)
@@ -1399,11 +1399,11 @@ def test_a_named_view_the_model_declines_gets_no_invented_words(client, db, admi
     station = make_station(db)
     _configure_image_search(db)
     monkeypatch.setattr(
-        "app.services.osce.station_images.build_provider", lambda store: FakeSearch([])
+        "app.services.osce.station_images.sourcing.build_provider", lambda store: FakeSearch([])
     )
     # The wording model declines, which is its correct behaviour, not a failure.
     monkeypatch.setattr(
-        "app.services.osce.station_images.describe_findings",
+        "app.services.osce.station_images.sourcing.describe_findings",
         lambda *a, **kw: (None, None),
     )
     source_image_for_station(db, AIClient(db), station)
@@ -1430,10 +1430,10 @@ def test_recorded_findings_that_name_the_diagnosis_are_not_read_out(
     )
     _configure_image_search(db)
     monkeypatch.setattr(
-        "app.services.osce.station_images.build_provider", lambda store: FakeSearch([])
+        "app.services.osce.station_images.sourcing.build_provider", lambda store: FakeSearch([])
     )
     monkeypatch.setattr(
-        "app.services.osce.station_images.describe_findings",
+        "app.services.osce.station_images.sourcing.describe_findings",
         lambda *a, **kw: (None, None),
     )
     source_image_for_station(db, AIClient(db), station)
