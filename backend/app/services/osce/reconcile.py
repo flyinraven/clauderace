@@ -199,12 +199,16 @@ def reconcile_station(
             tally["failed"] += 1
             continue
 
-        prompt["text"] = str(new_text).strip()
         # Kept so a later run can tell a question it has already corrected from
-        # one that was written this way, and so an admin can see why it changed.
+        # one that was written this way, so an admin can see why it changed, and
+        # so a bad rewrite can be put back. A model writes the replacement; the
+        # original is the only copy of what the examiner report actually said.
         prompt["reconciled"] = {
             "mode": mode, "basis": basis, "shown": len(here), "asked": asked,
+            "original": prompt.get("text"),
+            "original_image_wanted": prompt.get("image_wanted"),
         }
+        prompt["text"] = str(new_text).strip()
         if mode == TRIM:
             # The request now matches the wording, or the next sourcing run
             # would go looking for the images this question no longer mentions.
