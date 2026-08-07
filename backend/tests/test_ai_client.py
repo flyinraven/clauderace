@@ -238,6 +238,67 @@ def test_the_monthly_budget_stops_further_calls(db, monkeypatch):
     assert "budget" in str(exc.value)
 
 
+def _spending_client(db, monkeypatch, cost: float):
+    monkeypatch.setattr(
+        AIClient,
+        "_post",
+        lambda self, url, headers, body: {
+            "model": "fake",
+            "choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": cost},
+        },
+    )
+
+
+def test_the_budget_says_something_before_it_says_no(db, monkeypatch):
+    """Otherwise the first sign of trouble is a batch refused halfway through.
+
+    The check runs before a call, on the spend recorded so far, so the warning
+    lands on the call after the one that crossed the threshold. A budget is not
+    a tripwire and a chunk of slack is the point of warning early.
+    """
+    from app.models import ErrorLog
+
+    _configure(db, **{"ai.monthly_budget_usd": 1.0, "ai.budget_warn_fraction": 0.75})
+    _spending_client(db, monkeypatch, cost=0.4)
+
+    AIClient(db).complete(task="grading", system="s", user="u")
+    AIClient(db).complete(task="grading", system="s", user="u")
+    assert db.query(ErrorLog).filter_by(source="ai_budget").count() == 0, "40% is not a warning"
+
+    # Now 0.80 of the budget is on record, and the call still goes through.
+    AIClient(db).complete(task="grading", system="s", user="u")
+    warnings = db.query(ErrorLog).filter_by(source="ai_budget").all()
+    assert len(warnings) == 1
+    assert warnings[0].level == "warning"
+    assert "0.80" in warnings[0].message
+
+
+def test_the_budget_warning_is_sent_once_a_month_not_once_a_call(db, monkeypatch):
+    """It fires on the hot path, so a repeat would be one entry per call."""
+    from app.models import ErrorLog
+
+    _configure(db, **{"ai.monthly_budget_usd": 1.0, "ai.budget_warn_fraction": 0.5})
+    _spending_client(db, monkeypatch, cost=0.3)
+
+    for _ in range(4):
+        AIClient(db).complete(task="grading", system="s", user="u")
+
+    assert db.query(ErrorLog).filter_by(source="ai_budget").count() == 1
+
+
+def test_the_warning_can_be_switched_off(db, monkeypatch):
+    from app.models import ErrorLog
+
+    _configure(db, **{"ai.monthly_budget_usd": 1.0, "ai.budget_warn_fraction": 0})
+    _spending_client(db, monkeypatch, cost=0.9)
+
+    # 0.90 of the budget on record by the second call - well past any threshold.
+    AIClient(db).complete(task="grading", system="s", user="u")
+    AIClient(db).complete(task="grading", system="s", user="u")
+    assert db.query(ErrorLog).filter_by(source="ai_budget").count() == 0
+
+
 def test_truncated_json_is_reported_as_a_token_limit_not_a_prompt_problem(db, monkeypatch):
     _configure(db, **{"ai.max_retries": 1})
     monkeypatch.setattr(

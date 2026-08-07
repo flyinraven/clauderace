@@ -134,6 +134,18 @@ SETTING_SPECS: list[SettingSpec] = [
                   "exact figure. Set 0 to disable.",
     ),
     SettingSpec(
+        "ai.budget_warn_fraction", 0.75, "Warn at this share of the budget", "ai",
+        help_text="Raise a warning in the error log - and email the administrators "
+                  "if email is on - the first time a month's spend passes this "
+                  "share of the budget. Without it the first sign of trouble is a "
+                  "batch refused halfway through. Set 0 to disable.",
+    ),
+    SettingSpec(
+        "ai.budget_warned_month", "", "", "hidden",
+        help_text="Which month the budget warning has already been sent for. "
+                  "Written by the system, not edited by hand.",
+    ),
+    SettingSpec(
         "ai.google_reasoning_effort", "none", "Google reasoning effort", "ai2",
         choices=["none", "low", "medium", "high", "default"],
         help_text="Gemini 2.5 models think before answering, and thinking tokens "

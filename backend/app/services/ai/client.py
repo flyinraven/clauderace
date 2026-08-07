@@ -24,10 +24,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import AiCall
 from app.services.ai.images import normalise_for_vision
+from app.services.errors import log_error
 from app.services.settings_store import SettingsStore
 
 logger = logging.getLogger(__name__)
@@ -602,6 +604,64 @@ class AIClient:
                 f"(USD {spent:.2f} recorded this month). Raise it in "
                 f"Admin > Settings, or wait for the next calendar month."
             )
+        self._warn_if_budget_is_running_out(budget, spent)
+
+    def _warn_if_budget_is_running_out(self, budget: float, spent: float) -> None:
+        """Say something before the ceiling, not at it.
+
+        Nothing watched the spend: the first sign of trouble was a batch
+        refused halfway through, and the figure lived only in the provider's
+        dashboard. Warning once per calendar month, on the call that crosses
+        the threshold - `spent` is already in hand, so this costs no query
+        unless it actually fires.
+        """
+        fraction = self.store.get_float("ai.budget_warn_fraction", 0.0)
+        if fraction <= 0 or spent < budget * fraction:
+            return
+
+        month = datetime.now(timezone.utc).strftime("%Y-%m")
+        if self.store.get_str("ai.budget_warned_month", "") == month:
+            return
+
+        # Written before the message goes out. If sending fails, the admin gets
+        # one log entry rather than a warning on every subsequent call.
+        self.store.set("ai.budget_warned_month", month)
+        self.db.commit()
+
+        message = (
+            f"AI spend for {month} is USD {spent:.2f} of the USD {budget:.2f} "
+            f"monthly budget ({spent / budget:.0%}). Calls are refused outright "
+            f"once the budget is reached."
+        )
+        log_error(
+            self.db,
+            source="ai_budget",
+            message=message,
+            level="warning",
+            context={"month": month, "spent_usd": round(spent, 4), "budget_usd": budget},
+        )
+        logger.warning(message)
+        self._email_admins("RACE Exam Simulator - AI budget warning", message)
+
+    def _email_admins(self, subject: str, body: str) -> None:
+        """Best effort. Email being off or misconfigured must never be the
+        reason an AI call fails - the log entry above is the real record."""
+        from app.constants import ROLE_ADMIN
+        from app.models import User
+        from app.services.email import send_email
+
+        try:
+            admins = (
+                self.db.execute(
+                    select(User.email).where(User.role == ROLE_ADMIN, User.is_active.is_(True))
+                )
+                .scalars()
+                .all()
+            )
+            for address in admins:
+                send_email(self.db, to=address, subject=subject, text_body=body)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not email the budget warning: %s", exc)
 
     # --- Telemetry --------------------------------------------------------
     def _log_call(
