@@ -106,6 +106,11 @@ def handle_source_station_images(ctx: JobContext) -> bool:
         # this job at ingest, because which figures still need words is only
         # known once every search has been tried.
         _queue_description_of_gaps(ctx)
+        # Once, for the whole batch, and only once every search has been tried:
+        # what a question really has on screen is not final until then. Per
+        # station it would queue twenty-eight jobs for a twenty-eight station
+        # run, and each would be reading a bank still being changed.
+        _queue_reconcile(ctx, station_ids)
     return finished
 
 
@@ -127,3 +132,23 @@ def _queue_description_of_gaps(ctx: JobContext) -> None:
         message=f"Stating the findings for {len(ids)} view(s) with no image",
     )
     logger.info("Queued description job %s for %d figure(s)", job.id, len(ids))
+
+
+def _queue_reconcile(ctx: JobContext, station_ids: list[int]) -> None:
+    """Check the questions against what sourcing actually managed to attach.
+
+    Here rather than at the point the questions were written, which is the only
+    other place it could go and is too early: that moment knows what a question
+    asked for, not what arrived. A station is reconciled once its own chunk has
+    finished buying images, so the answer is final by the time it is read.
+    """
+    from app.services.jobs.runner import create_job
+    from app.services.osce.reconcile import JOB_RECONCILE_QUESTIONS
+
+    create_job(
+        ctx.db,
+        JOB_RECONCILE_QUESTIONS,
+        payload={"station_ids": station_ids},
+        total_steps=len(station_ids),
+        message="Matching questions to the images that arrived",
+    )

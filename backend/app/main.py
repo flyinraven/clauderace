@@ -27,6 +27,7 @@ from app.services.grading import grade as _grading_handlers  # noqa: F401
 from app.services.imagesearch import service as _imagesearch_handlers  # noqa: F401
 from app.services.ingest import pipeline as _ingest_handlers  # noqa: F401
 from app.services.osce import prompts as _osce_handlers  # noqa: F401
+from app.services.osce import reconcile as _reconcile_handlers  # noqa: F401
 
 logging.basicConfig(
     level=logging.DEBUG if settings.debug else logging.INFO,
