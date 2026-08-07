@@ -55,6 +55,58 @@ def test_a_token_for_a_disabled_account_stops_working(client, db, student):
     assert client.get("/api/auth/me", headers=headers).status_code == 401
 
 
+def test_guessing_a_password_is_eventually_refused(client, student):
+    """The only thing standing between the internet and an account is the
+    password, and nothing was slowing a guesser down."""
+    from app.services.throttle import LOGIN_LIMIT
+
+    for _ in range(LOGIN_LIMIT.attempts):
+        assert client.post(
+            "/api/auth/login", json={"email": student.email, "password": "wrong"}
+        ).status_code == 401
+
+    blocked = client.post(
+        "/api/auth/login", json={"email": student.email, "password": "wrong"}
+    )
+    assert blocked.status_code == 429
+    assert blocked.headers.get("Retry-After")
+
+    # And the real password does not get you past it either - otherwise the
+    # limit is only a hurdle for the honest.
+    assert client.post(
+        "/api/auth/login", json={"email": student.email, "password": PASSWORD}
+    ).status_code == 429
+
+
+def test_signing_in_forgives_the_typos_before_it(client, student):
+    """A candidate who mistypes twice must not be near a lockout an hour later."""
+    from app.services.throttle import LOGIN_LIMIT
+
+    for _ in range(LOGIN_LIMIT.attempts - 1):
+        client.post("/api/auth/login", json={"email": student.email, "password": "wrong"})
+
+    assert client.post(
+        "/api/auth/login", json={"email": student.email, "password": PASSWORD}
+    ).status_code == 200
+    assert client.post(
+        "/api/auth/login", json={"email": student.email, "password": "wrong"}
+    ).status_code == 401, "the count was cleared, not one attempt from a refusal"
+
+
+def test_guessing_invite_codes_is_eventually_refused(client):
+    from app.services.throttle import INVITE_LIMIT
+
+    body = {
+        "code": "AAAA-BBBB-CCCC",
+        "email": "guess@example.com",
+        "password": "a-long-enough-passphrase",
+    }
+    for _ in range(INVITE_LIMIT.attempts):
+        assert client.post("/api/auth/redeem-invite", json=body).status_code == 400
+
+    assert client.post("/api/auth/redeem-invite", json=body).status_code == 429
+
+
 def test_no_token_and_a_junk_token_are_both_rejected(client):
     assert client.get("/api/auth/me").status_code == 401
     assert client.get(

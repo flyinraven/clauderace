@@ -56,6 +56,19 @@ def db(sessionmaker_for) -> Session:
 
 
 @pytest.fixture(autouse=True)
+def _reset_throttles():
+    """The auth throttles are process-wide, so one test's failed sign-ins
+    would otherwise count against the next test's."""
+    from app.services.throttle import invite_throttle, login_throttle
+
+    login_throttle.reset()
+    invite_throttle.reset()
+    yield
+    login_throttle.reset()
+    invite_throttle.reset()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_job_sessions(monkeypatch, sessionmaker_for):
     """Point the job runner's own `session_scope` at the test database."""
     from contextlib import contextmanager

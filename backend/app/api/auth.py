@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func, select
 
@@ -16,6 +16,7 @@ from app.api.deps import CurrentUser, DbSession
 from app.constants import ROLE_STUDENT
 from app.models import Invite, User
 from app.security import create_access_token, hash_password, verify_password
+from app.services.throttle import client_key, invite_throttle, login_throttle
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -60,19 +61,31 @@ def _find_user_by_email(db, email: str) -> User | None:
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, db: DbSession) -> TokenResponse:
+def login(payload: LoginRequest, request: Request, db: DbSession) -> TokenResponse:
+    # Two buckets. The address one stops a script working through a password
+    # list; the email one still holds when the address is forged or shared,
+    # which is what protects a particular account.
+    by_address = client_key(request, scope="login")
+    by_email = f"login-email:{payload.email.strip().lower()}"
+    login_throttle.check(by_address)
+    login_throttle.check(by_email)
+
     user = _find_user_by_email(db, payload.email)
     # Same message either way so the endpoint cannot enumerate accounts.
     invalid = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect email or password"
     )
     if user is None or not verify_password(payload.password, user.password_hash):
+        login_throttle.record_failure(by_address)
+        login_throttle.record_failure(by_email)
         raise invalid
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="This account has been disabled"
         )
 
+    login_throttle.clear(by_address)
+    login_throttle.clear(by_email)
     user.last_login_at = datetime.now(timezone.utc)
     db.commit()
 
@@ -83,11 +96,17 @@ def login(payload: LoginRequest, db: DbSession) -> TokenResponse:
 
 
 @router.post("/redeem-invite", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-def redeem_invite(payload: RedeemInviteRequest, db: DbSession) -> TokenResponse:
+def redeem_invite(payload: RedeemInviteRequest, request: Request, db: DbSession) -> TokenResponse:
+    bucket = client_key(request, scope="invite")
+    invite_throttle.check(bucket)
+
     code = payload.code.strip().upper()
     invite = db.execute(select(Invite).where(Invite.code == code)).scalar_one_or_none()
 
     if invite is None or invite.used_by_id is not None:
+        # The only failure here that is worth counting: the others mean the
+        # caller holds a real code and got a detail wrong.
+        invite_throttle.record_failure(bucket)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="This invite code is not valid or has already been used",
@@ -118,6 +137,7 @@ def redeem_invite(payload: RedeemInviteRequest, db: DbSession) -> TokenResponse:
     db.add(user)
     db.flush()
 
+    invite_throttle.clear(bucket)
     invite.used_by_id = user.id
     invite.used_at = datetime.now(timezone.utc)
     db.commit()
