@@ -11,6 +11,7 @@ sitting.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from sqlalchemy import select
@@ -49,6 +50,8 @@ disc appearance, motility deficits, lid position, proptosis, dystopia
 Rules:
 - Copy the wording across; do not paraphrase away clinical detail or numbers.
 - Every piece of the original findings must land in exactly one group.
+- Use ONLY the raw findings given below. Nothing may appear in either group that is not in them. You are dividing a text, not writing one.
+- GIVEN must NEVER contain the diagnosis, the name of the disease, or any conclusion drawn from the findings, however it is phrased. "The patient presents with bilateral Brown's syndrome" and "glaucomatous optic neuropathy is present" are diagnoses wearing the clothes of a handed-over result. Keep the measurement - "IOP 25 mmHg", "central field loss in the right eye" - and leave the name of the disease out. A candidate told the diagnosis has nothing left to work out, and every diagnostic mark on the station becomes free.
 - If a line is ambiguous, put it in ELICITED. Withholding something a candidate \
 would have been told is a small unfairness; revealing a sign they were supposed \
 to find destroys the station.
@@ -59,6 +62,52 @@ Return ONLY a JSON object:
   "given": "the findings the examiner states, as readable lines",
   "elicited": "the signs the candidate must find, as readable lines"
 }"""
+
+
+_SENTENCE = re.compile(r"(?<=[.!?])\s+|\n+")
+
+# The words the measurements themselves are made of. A diagnosis sharing one of
+# these must not be grounds for withholding the line that carries it:
+# "Cortical visual impairment" would otherwise take "Visual acuity 6/60" out of
+# the stem, which is the very thing the stem exists to hand over.
+_STEM_VOCABULARY = frozenset(
+    """visual vision acuity aided unaided corrected pinhole refraction
+    intraocular pressure iop mmhg goldmann applanation eye eyes right left
+    both near distance""".split()
+)
+
+
+def withhold_diagnosis(given: str, station: OsceStation) -> tuple[str, list[str]]:
+    """Move any sentence of GIVEN that names the diagnosis into what must be found.
+
+    The prompt forbids this and the model still did it - station 156 opened
+    with "The patient presents with bilateral Brown's Syndrome" beside the
+    visual acuity, so every diagnostic mark on the station was free before the
+    candidate had looked at anything. A rule that only lives in a prompt is a
+    request; this is the check.
+
+    Matched on the distinctive words of the diagnosis rather than the whole
+    phrase, so "advanced glaucoma and maximally tolerated therapy" is caught
+    when the diagnosis is "primary open angle glaucoma". Generic words are
+    stripped first, or "Visual acuity 6/6" would be withheld from a station
+    whose diagnosis contains the word "visual".
+    """
+    from app.services.osce.station_images.verify import _GENERIC_WORDS, _words
+
+    distinctive = _words(station.diagnosis or "") - _GENERIC_WORDS - _STEM_VOCABULARY
+    if not distinctive or not given.strip():
+        return given, []
+
+    kept: list[str] = []
+    moved: list[str] = []
+    for sentence in _SENTENCE.split(given):
+        if not sentence.strip():
+            continue
+        if _words(sentence) & distinctive:
+            moved.append(sentence.strip())
+        else:
+            kept.append(sentence.strip())
+    return (" ".join(kept), moved) if moved else (given, [])
 
 
 def split_findings(
@@ -85,6 +134,17 @@ def split_findings(
 
     given = str(data.get("given") or "").strip()
     elicited = str(data.get("elicited") or "").strip()
+
+    given, withheld = withhold_diagnosis(given, station)
+    if withheld:
+        # Not discarded: it is a real finding, just one the candidate is meant
+        # to reach rather than be handed. Elicited is never shown before the
+        # result, so this is where it belongs.
+        elicited = "\n".join(filter(None, [elicited, *withheld]))
+        logger.warning(
+            "Station %s: withheld %d line(s) naming the diagnosis from the stem",
+            station.id, len(withheld),
+        )
 
     station.findings_given = given or None
     station.findings_elicited = elicited or None
