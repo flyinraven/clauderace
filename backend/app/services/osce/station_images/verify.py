@@ -317,3 +317,92 @@ def verbatim_findings_floor(
     if not recorded or leaked_term(recorded, station):
         return None, None
     return recorded, "stated verbatim from the station's recorded findings"
+
+
+BLIND_SYSTEM = """\
+You are describing one clinical image. You are given NO clinical context, no
+diagnosis and no expected findings, and there is nothing to agree with.
+Describe only what is visible.
+
+Report the laterality from the image alone. "one_eye" when a single eye is
+shown, or when several panels all show the same one eye. "both_eyes" when two
+different eyes appear. "unclear" when you cannot tell.
+
+If an abnormality is visible in only one of two eyes shown, that is
+"one_eye_affected" in `affected`, however many eyes are pictured.
+
+Name the modality as exactly one of: external, slit_lamp, fundus, angiogram,
+oct, ultrasound, radiology, visual_field, topography, pathology, other. For
+radiology say in `shows` whether it is CT or MRI, and which region.
+
+The caption must name only the modality, the laterality and the view. It must
+NOT name a diagnosis, and it must not describe the abnormality - a candidate
+will read it before being asked to describe the image themselves.
+
+Return ONLY a JSON object:
+{
+  "modality": "<one of the values above>",
+  "laterality": "one_eye" | "both_eyes" | "unclear",
+  "affected": "one_eye_affected" | "both_eyes_affected" | "none_visible" | "unclear",
+  "panels": <how many separate photographs are tiled together, 1 if a single image>,
+  "shows": "what is visible, one sentence, no diagnosis",
+  "caption": "a neutral caption naming modality, laterality and view only"
+}"""
+
+
+def describe_blind(client: AIClient, data: bytes, media_type: str) -> dict[str, Any]:
+    """Ask what the image shows without telling the model what to expect.
+
+    The gate asks "does this show these signs?", which primes the answer it
+    gets: a montage of one patient's unilateral Brown's syndrome was captioned
+    "bilateral" at confidence 1.00, and the notes stored beneath it restated
+    the station's own recorded findings almost word for word. It had not looked
+    and concluded bilateral; it had been told to expect bilateral and agreed.
+
+    Nothing here mentions the station, so agreement is not available. It runs
+    once, on the image about to be attached, rather than on every candidate
+    screened - a station's worth of screening is up to eighteen calls and this
+    is one.
+
+    The caption matters more than it used to: questions are now matched to
+    their images by what the caption says, so a caption that echoes the request
+    hides exactly the mismatch that check exists to find.
+    """
+    content = [
+        TextPart("Describe the image below."),
+        ImagePart(data=data, media_type=media_type),
+    ]
+    result = client.complete_json(task="vision", system=BLIND_SYSTEM, user=content)
+    return result if isinstance(result, dict) else {}
+
+
+_BILATERAL = re.compile(r"\b(both|bilateral|each eye|either eye|OU)\b", re.I)
+
+
+def blind_disagreement(blind: dict[str, Any], wanted: str | None, station: OsceStation) -> str | None:
+    """A disagreement between the blind description and what was asked for.
+
+    Only the two axes an image can be checked on without clinical judgement:
+    how many eyes are affected, and which imaging modality this is. Both are
+    reported by a model that was not told what to expect, so agreement here is
+    evidence rather than compliance.
+
+    Returns a note, not a verdict. The caller downgrades a tier and records it;
+    nothing is rejected on this. Rejecting more is what once left stations
+    showing nothing at all, and a picture with an honest caption beside it is
+    worth more than a gap.
+    """
+    if not blind:
+        return None
+    expectation = " ".join(
+        t for t in (wanted, station.findings_elicited, station.findings) if t
+    )
+
+    if _BILATERAL.search(expectation) and blind.get("affected") == "one_eye_affected":
+        return "the station describes both eyes; only one is affected in this image"
+
+    expected = expected_modalities_for(station, wanted)
+    seen = str(blind.get("modality") or "").strip().lower()
+    if expected and seen and seen not in expected:
+        return f"this is a {seen} image; the question asks for {'/'.join(sorted(expected))}"
+    return None

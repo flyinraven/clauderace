@@ -43,6 +43,8 @@ from app.services.osce.station_images.queries import (
 from app.services.osce.station_images.verify import (
     expected_modalities_for,
     verbatim_findings_floor,
+    blind_disagreement,
+    describe_blind,
     verify_image,
 )
 from app.services.osce.station_images.describe import (
@@ -335,9 +337,35 @@ def _attach(
     # deduplicate-and-store path is reused as-is.
     image = attach_image_to_figure(db, figure, candidate, downloaded)
     figure.image_id = image.id
-    figure.caption = str(verdict.get("caption") or "").strip() or None
+
+    # A second look, with the station withheld. The graded verdict above was
+    # given the expected signs and can agree with them without having seen
+    # them; this one has nothing to agree with. Its caption is the one stored,
+    # because questions are now matched to their images by what the caption
+    # says - an echoing caption hides the mismatch that check exists to find.
+    blind: dict[str, Any] = {}
+    try:
+        blind = describe_blind(client, downloaded[0], downloaded[1])
+    except Exception as exc:  # noqa: BLE001 - a caption is not worth losing the image over
+        logger.warning("Blind description failed for figure %s: %s", figure.id, exc)
+
+    figure.caption = (
+        str(blind.get("caption") or "").strip()
+        or str(verdict.get("caption") or "").strip()
+        or None
+    )
+    figure.modality = str(blind.get("modality") or verdict.get("modality") or "").strip() or None
     figure.verification_status = tier
     notes = str(verdict.get("shows") or "").strip()
+
+    disagreement = blind_disagreement(blind, figure.wanted_description, station)
+    if disagreement:
+        # Downgraded, never rejected. The image is real and a station with a
+        # picture and an honest note beside it beats a station with a gap.
+        if tier == "faithful":
+            tier = "representative"
+            confidence = min(confidence, MIN_REPRESENTATIVE_CONFIDENCE)
+        notes = f"{notes}  [Looked at without the station: {disagreement}]"
     missing = str(verdict.get("missing") or "").strip()
     if tier == "representative" and missing and missing.lower() not in {"null", "none"}:
         notes = f"{notes}  [Does NOT show: {missing}]"
