@@ -232,7 +232,7 @@ def test_re_recording_the_same_question_replaces_the_answer(client, db, student)
 
 
 def test_an_empty_or_oversized_recording_is_refused(client, db, student):
-    from app.api.osce import MAX_AUDIO_BYTES
+    from app.api.osce.helpers import MAX_AUDIO_BYTES
 
     station = make_station(db)
     sitting_id = client.post(

@@ -1,0 +1,492 @@
+"""Sitting a station: the clock, the spoken answers, and the result.
+
+This is the only part a candidate touches, and the only part where what the
+server sends back has to be watched - a station's case summary, its title and
+its marking key must not reach the browser until the result does."""
+
+from __future__ import annotations
+
+import hashlib
+from datetime import datetime, timezone
+from typing import Any
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from pydantic import BaseModel
+from sqlalchemy import select
+from app.api.deps import CurrentUser, DbSession
+from app.models import (
+    AudioClip,
+    OsceCircuit,
+    OsceGrade,
+    OsceResponse,
+    OsceResult,
+    OsceSession,
+    OsceStation,
+)
+from app.services.jobs.runner import create_job
+from app.services.osce.coverage import sittable_prompts
+from app.services.osce.circuit import JOB_GRADE_OSCE
+from app.services.osce.transcribe_job import JOB_TRANSCRIBE_RESPONSE
+from app.services.settings_store import SettingsStore
+from app.api.osce.helpers import (
+    ACCEPTED_AUDIO_PREFIXES,
+    MAX_AUDIO_BYTES,
+    _bound_figure_ids,
+    _clock,
+    _load_sitting,
+)
+from app.api.osce.circuits import _circuit_next
+
+router = APIRouter()
+
+
+# --- Sittings -------------------------------------------------------------
+class StartSittingRequest(BaseModel):
+    station_id: int
+    circuit_id: int | None = None
+    is_timed: bool = True
+
+
+@router.post("/sittings", status_code=status.HTTP_201_CREATED)
+def start_sitting(
+    payload: StartSittingRequest, user: CurrentUser, db: DbSession
+) -> dict[str, Any]:
+    station = db.get(OsceStation, payload.station_id)
+    if station is None:
+        raise HTTPException(status_code=404, detail="Station not found")
+    if not station.prompts:
+        raise HTTPException(
+            status_code=400,
+            detail="This station has no examiner questions yet. An administrator "
+                   "needs to prepare it first.",
+        )
+    if payload.circuit_id is not None:
+        # The circuit id arrives from the client, and a sitting filed against
+        # someone else's circuit counts towards their progress: their card would
+        # read further along than they had sat. Nothing of theirs leaks either
+        # way - the results query filters by user - but a candidate's own
+        # progress must be their own work.
+        circuit = db.get(OsceCircuit, payload.circuit_id)
+        if circuit is None:
+            raise HTTPException(status_code=404, detail="Circuit not found")
+        if circuit.user_id != user.id:
+            raise HTTPException(
+                status_code=403, detail="That circuit belongs to someone else"
+            )
+    sitting = OsceSession(
+        user_id=user.id,
+        station_id=station.id,
+        circuit_id=payload.circuit_id,
+        is_timed=payload.is_timed,
+    )
+    db.add(sitting)
+    db.commit()
+    db.refresh(sitting)
+    return {"id": sitting.id, "station_id": station.id}
+
+
+@router.delete("/attempts", status_code=status.HTTP_200_OK)
+def clear_all_attempts(user: CurrentUser, db: DbSession) -> dict[str, int]:
+    """Forget every attempt this candidate has made, across all stations.
+
+    Testing a station counts as sitting it, which then hides it from circuits.
+    Rather than clearing a dozen stations one at a time after a test run, wipe
+    the lot. Only this candidate's sittings go.
+    """
+    sittings = db.execute(
+        select(OsceSession).where(OsceSession.user_id == user.id)
+    ).scalars().all()
+    for sitting in sittings:
+        db.delete(sitting)
+    db.commit()
+    return {"cleared": len(sittings)}
+
+
+@router.delete("/stations/{station_id}/attempts", status_code=status.HTTP_200_OK)
+def clear_attempts(station_id: int, user: CurrentUser, db: DbSession) -> dict[str, int]:
+    """Forget this candidate's attempts at a station so it can be sat again.
+
+    Circuits never repeat a station that has been attempted, so this is how a
+    candidate deliberately asks for one back. Only their own sittings go: the
+    station stays closed for everyone else who has sat it.
+    """
+    sittings = db.execute(
+        select(OsceSession).where(
+            OsceSession.station_id == station_id, OsceSession.user_id == user.id
+        )
+    ).scalars().all()
+    for sitting in sittings:
+        db.delete(sitting)
+    db.commit()
+    return {"cleared": len(sittings)}
+
+
+@router.post("/sittings/{session_id}/begin")
+def begin_sitting(session_id: int, user: CurrentUser, db: DbSession) -> dict[str, Any]:
+    sitting = _load_sitting(db, session_id, user)
+    if sitting.started_at is not None:
+        raise HTTPException(status_code=400, detail="This station has already begun")
+    sitting.started_at = datetime.now(timezone.utc)
+    db.commit()
+    return _clock(sitting).as_dict()
+
+
+@router.get("/sittings/{session_id}/clock")
+def sitting_clock(session_id: int, user: CurrentUser, db: DbSession) -> dict[str, Any]:
+    return _clock(_load_sitting(db, session_id, user)).as_dict()
+
+
+@router.get("/sittings/{session_id}")
+def get_sitting(session_id: int, user: CurrentUser, db: DbSession) -> dict[str, Any]:
+    sitting = _load_sitting(db, session_id, user)
+    station = db.get(OsceStation, sitting.station_id)
+    clock = _clock(sitting)
+
+    responses = {
+        r.prompt_label: r
+        for r in db.execute(
+            select(OsceResponse).where(OsceResponse.session_id == sitting.id)
+        ).scalars().all()
+    }
+
+    by_id = {f.id: f for f in station.figures}
+    prompts = []
+    # Not every question the station holds is one worth asking. A station
+    # that found no image states its findings instead, so opening with
+    # "describe what you see" tests nothing and spends a minute doing it.
+    for index, prompt in enumerate(sittable_prompts(station)):
+        label = prompt.get("label") or str(index)
+        response = responses.get(label)
+        # A question may ask for two investigations - "the OCT and the
+        # angiogram" - and no one image is both, so each has its own figure and
+        # the question shows them together. `figure_ids` is the list;
+        # `figure_id` alone is the older single binding, still the common case.
+        shown = [
+            f for f in (by_id.get(i) for i in _bound_figure_ids(prompt))
+            if f
+            and (
+                (f.image_id and f.is_approved)
+                # A described view has no image to gate on: the examiner states
+                # the findings instead, and that must still reach the candidate
+                # or the question is unanswerable.
+                or (f.described_findings and f.described_findings_approved)
+            )
+        ]
+        prompts.append(
+            {
+                "label": label,
+                "index": index,
+                "text": prompt.get("text"),
+                "seconds": prompt.get("seconds"),
+                # The investigations this question asks them to read, shown only
+                # once the question is reached.
+                "figures": [
+                    {
+                        "id": f.id,
+                        "image_id": f.image_id,
+                        "caption": f.caption,
+                        "described_findings": (
+                            f.described_findings if f.described_findings_approved else None
+                        ),
+                    }
+                    for f in shown
+                ],
+                "marks": sum(pt.get("marks", 0) for pt in (prompt.get("rubric") or [])),
+                "transcript": response.transcript if response else None,
+                "transcript_edited": response.transcript_edited if response else None,
+                "transcription_status": response.transcription_status if response else "none",
+                "transcription_error": response.transcription_error if response else None,
+            }
+        )
+
+    # Only findings a real examiner would state are exposed during the sitting.
+    # The elicited signs are the answer to every "describe what you see" prompt,
+    # so they are withheld until the result. If a station has not been split
+    # yet, nothing is shown rather than risk leaking it.
+    if station.findings_split_status == "complete":
+        given = station.findings_given
+    else:
+        given = None
+
+    # An image belonging to a question is NOT shown with the patient: an MRI on
+    # screen from the start answers the question before it is asked. It travels
+    # with its own prompt instead, and appears when that prompt does.
+    prompt_figure_ids = {
+        i for p in (station.prompts or []) for i in _bound_figure_ids(p)
+    }
+    figures = [
+        {
+            "id": f.id,
+            "image_id": f.image_id,
+            "caption": f.caption,
+            "described_findings": (
+                f.described_findings if f.described_findings_approved else None
+            ),
+            "position": f.position,
+        }
+        for f in sorted(station.figures, key=lambda f: f.position)
+        if (
+            (f.image_id and f.is_approved)
+            or (f.described_findings and f.described_findings_approved)
+        )
+        and f.id not in prompt_figure_ids
+    ]
+
+    return {
+        "id": sitting.id,
+        "station": {
+            "id": station.id,
+            "subspecialty": station.subspecialty,
+            "title": station.title,
+            # Neither the case summary nor the history is shown: both name or
+            # strongly imply the diagnosis. The candidate gets the patient in
+            # front of them, the examiner's opening question, and the image -
+            # which is what a real station gives them.
+            "patient_demographic": station.patient_demographic,
+            "findings_given": given,
+            "findings_pending_split": station.findings_split_status != "complete",
+            "figures": figures,
+            "total_marks": station.total_marks,
+        },
+        "clock": clock.as_dict(),
+        "current_prompt_index": sitting.current_prompt_index,
+        "is_timed": sitting.is_timed,
+        "submitted_at": sitting.submitted_at.isoformat() if sitting.submitted_at else None,
+        "grading_status": sitting.grading_status,
+        "prompts": prompts,
+    }
+
+
+@router.post("/sittings/{session_id}/answers", status_code=status.HTTP_201_CREATED)
+async def upload_answer(
+    session_id: int,
+    user: CurrentUser,
+    db: DbSession,
+    prompt_label: str = Form(...),
+    prompt_index: int = Form(default=0),
+    duration_ms: int = Form(default=0),
+    audio: UploadFile = File(...),
+) -> dict[str, Any]:
+    """Accept one recorded answer and queue it for transcription.
+
+    Called the moment the candidate finishes a question, while they are already
+    reading the next one, so transcription overlaps the next answer rather than
+    stalling the station.
+    """
+    sitting = _load_sitting(db, session_id, user)
+    if sitting.submitted_at is not None:
+        raise HTTPException(status_code=409, detail="This station has been submitted")
+
+    clock = _clock(sitting)
+    if not clock.can_record:
+        raise HTTPException(
+            status_code=409, detail="The station clock has expired; this answer was not saved."
+        )
+
+    content_type = (audio.content_type or "").lower()
+    if content_type and not content_type.startswith(ACCEPTED_AUDIO_PREFIXES):
+        raise HTTPException(status_code=400, detail=f"Unsupported audio type '{content_type}'")
+
+    data = await audio.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="The recording was empty")
+    if len(data) > MAX_AUDIO_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Recording is {len(data) // 1024 // 1024} MB; the limit per answer "
+                   f"is {MAX_AUDIO_BYTES // 1024 // 1024} MB.",
+        )
+
+    clip = AudioClip(
+        sha256=hashlib.sha256(data).hexdigest(),
+        # iOS Safari sends audio/mp4; Chromium sends audio/webm. Both are kept
+        # verbatim and declared to the transcriber as-is.
+        content_type=content_type or "audio/mp4",
+        data=data,
+        size_bytes=len(data),
+        duration_ms=duration_ms or None,
+    )
+    db.add(clip)
+    db.flush()
+
+    response = db.execute(
+        select(OsceResponse)
+        .where(OsceResponse.session_id == sitting.id)
+        .where(OsceResponse.prompt_label == prompt_label)
+    ).scalar_one_or_none()
+    if response is None:
+        response = OsceResponse(
+            session_id=sitting.id, prompt_label=prompt_label, prompt_index=prompt_index
+        )
+        db.add(response)
+    response.audio_clip_id = clip.id
+    response.duration_ms = duration_ms or None
+    response.transcription_status = "pending"
+    response.transcription_error = None
+
+    sitting.current_prompt_index = max(sitting.current_prompt_index, prompt_index + 1)
+    db.commit()
+    db.refresh(response)
+
+    job = create_job(
+        db,
+        JOB_TRANSCRIBE_RESPONSE,
+        payload={"response_id": response.id},
+        created_by_id=user.id,
+        total_steps=1,
+        message=f"Transcribing answer {prompt_label}",
+    )
+    return {"response_id": response.id, "job_id": job.id, "bytes": len(data)}
+
+
+class EditTranscriptRequest(BaseModel):
+    transcript: str
+
+
+@router.put("/sittings/{session_id}/answers/{prompt_label}/transcript")
+def edit_transcript(
+    session_id: int,
+    prompt_label: str,
+    payload: EditTranscriptRequest,
+    user: CurrentUser,
+    db: DbSession,
+) -> dict[str, Any]:
+    """Correct a mis-heard transcript before marking."""
+    sitting = _load_sitting(db, session_id, user)
+    if sitting.grading_status in {"complete", "running"}:
+        raise HTTPException(
+            status_code=409,
+            detail="This station has already been marked. Corrections must be made "
+                   "before submitting.",
+        )
+    response = db.execute(
+        select(OsceResponse)
+        .where(OsceResponse.session_id == sitting.id)
+        .where(OsceResponse.prompt_label == prompt_label)
+    ).scalar_one_or_none()
+    if response is None:
+        raise HTTPException(status_code=404, detail="No answer recorded for that question")
+    response.transcript_edited = payload.transcript
+    db.commit()
+    return {"prompt_label": prompt_label, "saved": True}
+
+
+@router.post("/sittings/{session_id}/submit")
+def submit_sitting(session_id: int, user: CurrentUser, db: DbSession) -> dict[str, Any]:
+    sitting = _load_sitting(db, session_id, user)
+    if sitting.submitted_at is not None:
+        raise HTTPException(status_code=400, detail="Already submitted")
+    sitting.submitted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    job_id = None
+    if SettingsStore(db).get_bool("osce.auto_grade_on_submit", True):
+        sitting.grading_status = "queued"
+        db.commit()
+        job_id = create_job(
+            db, JOB_GRADE_OSCE, payload={"session_id": sitting.id},
+            created_by_id=user.id, message="Marking station",
+        ).id
+    return {
+        "submitted_at": sitting.submitted_at.isoformat(),
+        "grading_job_id": job_id,
+        # Where the candidate goes next. A circuit is nine stations in one
+        # sitting of the mind: marking runs behind them and the result waits
+        # until the end, exactly as it does on the day.
+        "circuit": _circuit_next(db, sitting, user),
+    }
+
+
+@router.post("/sittings/{session_id}/grade", status_code=status.HTTP_202_ACCEPTED)
+def grade_sitting(session_id: int, user: CurrentUser, db: DbSession) -> dict[str, Any]:
+    sitting = _load_sitting(db, session_id, user)
+    if sitting.submitted_at is None:
+        raise HTTPException(status_code=400, detail="This station has not been submitted")
+    sitting.grading_status = "queued"
+    db.commit()
+    job = create_job(
+        db, JOB_GRADE_OSCE, payload={"session_id": sitting.id},
+        created_by_id=user.id, message="Marking station",
+    )
+    return {"job_id": job.id}
+
+
+@router.get("/sittings/{session_id}/result")
+def sitting_result(session_id: int, user: CurrentUser, db: DbSession) -> dict[str, Any]:
+    sitting = _load_sitting(db, session_id, user)
+    station = db.get(OsceStation, sitting.station_id)
+    result = db.execute(
+        select(OsceResult).where(OsceResult.session_id == sitting.id)
+    ).scalar_one_or_none()
+
+    responses = {
+        r.prompt_label: r
+        for r in db.execute(
+            select(OsceResponse).where(OsceResponse.session_id == sitting.id)
+        ).scalars().all()
+    }
+
+    # Every grade for this sitting in one read, rather than one query per
+    # question per examiner pass.
+    grades_by_label: dict[str, list[OsceGrade]] = {}
+    for grade in db.execute(
+        select(OsceGrade)
+        .where(OsceGrade.session_id == sitting.id)
+        .order_by(OsceGrade.examiner_pass)
+    ).scalars().all():
+        grades_by_label.setdefault(grade.prompt_label, []).append(grade)
+
+    prompts = []
+    for index, prompt in enumerate(station.prompts or []):
+        label = prompt.get("label") or str(index)
+        grades = grades_by_label.get(label, [])
+        response = responses.get(label)
+        awarded = (
+            sum(g.awarded_marks for g in grades) / len(grades) if grades else None
+        )
+        prompts.append(
+            {
+                "label": label,
+                "text": prompt.get("text"),
+                "marks": sum(pt.get("marks", 0) for pt in (prompt.get("rubric") or [])),
+                "awarded": round(awarded, 2) if awarded is not None else None,
+                "transcript": response.marking_text if response else "",
+                "flagged": label in (result.flagged_prompts or []) if result else False,
+                "examiners": [
+                    {
+                        "pass": g.examiner_pass,
+                        "awarded": g.awarded_marks,
+                        "feedback": g.feedback,
+                        "breakdown": g.breakdown,
+                    }
+                    for g in grades
+                ],
+            }
+        )
+
+    return {
+        "id": sitting.id,
+        "station": {
+            "id": station.id,
+            "subspecialty": station.subspecialty,
+            "title": station.title,
+            "diagnosis": station.diagnosis,
+            # Safe to reveal now the candidate has answered.
+            "case_summary": station.case_summary,
+            "patient_history": station.patient_history,
+            "findings": station.findings,
+            "findings_elicited": station.findings_elicited,
+            "common_mistakes": station.common_mistakes,
+        },
+        "grading_status": sitting.grading_status,
+        "result": {
+            "total_awarded": result.total_awarded,
+            "total_available": result.total_available,
+            "percentage": result.percentage,
+            "cut_score": result.cut_score,
+            "outcome": result.outcome,
+            "overall_feedback": result.overall_feedback,
+            "flagged_prompts": result.flagged_prompts,
+            "ungraded_prompts": result.ungraded_prompts,
+        } if result else None,
+        "prompts": prompts,
+    }
