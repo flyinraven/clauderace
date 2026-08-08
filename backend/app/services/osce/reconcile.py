@@ -209,18 +209,21 @@ def classify_prompt(
         *(shown[i] for i in here)
     )
 
-    # It was restated because nothing was on screen, and what arrived covers
-    # what it asked for - the binder found the paper's own figure. The
-    # restatement has to go: station 201 was rewritten to say "her corneal
-    # topography shows approximately 2 dioptres of regular astigmatism", and
-    # with the topography now displayed beside it the candidate is shown the
-    # picture and told the answer, then asked to describe it.
+    # It was restated because nothing was on screen, and something now is. The
+    # restatement has to go whatever arrived: station 201 was rewritten to say
+    # "her corneal topography shows approximately 2 dioptres of regular
+    # astigmatism", and with the topography displayed beside it the candidate
+    # is shown the picture and told the answer, then asked to describe it.
     #
-    # Only when it matches. A restated question handed the wrong picture is
-    # trimmed like any other - putting back "this is the OCT" over a fundus
-    # photograph would rebuild the fault this whole pass exists to remove.
-    if was_restated and not missing:
-        return RESTORE, here, set()
+    # Restoring and trimming are not alternatives, which is what a first
+    # attempt got wrong. 201 named topography AND pachymetry, only the
+    # topography bound, so `missing` was not empty and it was trimmed instead -
+    # and a trim rewrites the clause naming the images while leaving the stated
+    # finding exactly where it was. The statement has to come out first; what
+    # the restored wording then over-promises is an ordinary trim, and the
+    # caller runs it in the same pass.
+    if was_restated:
+        return RESTORE, here, missing
 
     return (TRIM if missing else UNCHANGED), here, missing
 
@@ -272,7 +275,14 @@ def reconcile_station(
             prompt.pop("reconciled", None)
             tally["restored"] = tally.get("restored", 0) + 1
             changed = True
-            continue
+
+            # The wording it had back may still name more than arrived - 201
+            # asked for topography and pachymetry and was given the topography.
+            # That is an ordinary trim, and doing it now rather than next run
+            # means the question is never left over-promising.
+            mode, here, missing = classify_prompt(prompt, shown)
+            if mode != TRIM:
+                continue
 
         user = (
             f"MODE: {mode}\n"

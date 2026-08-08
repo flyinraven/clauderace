@@ -224,10 +224,12 @@ def test_a_restated_question_is_revisited_once_an_image_arrives():
 
     # What arrived is the OCT it asked for, so the restatement goes.
     assert classify_prompt(prompt, {7: "Optical coherence tomography of one macula"})[0] == RESTORE
-    # A restated question handed the WRONG picture is trimmed like any other:
-    # putting back "this is the OCT" over a fundus photograph would rebuild the
-    # fault this pass exists to remove.
-    assert classify_prompt(prompt, {7: "Fundus photograph of the left eye"})[0] == TRIM
+    # A restated question handed the WRONG picture is restored too - the stated
+    # finding must come out either way - and the caller then trims the restored
+    # wording down to what actually arrived, in the same pass.
+    mode, _, missing = classify_prompt(prompt, {7: "Fundus photograph of the left eye"})
+    assert mode == RESTORE
+    assert missing == {"oct"}, "and the trim that follows knows what is short"
 
 
 def test_a_restated_question_is_put_back_once_its_image_arrives():
@@ -266,3 +268,29 @@ def test_a_restated_question_with_still_nothing_shown_is_left_as_it_is():
         "reconciled": {"mode": STATE, "basis": "expected", "original": "This is her chest X-ray."},
     }
     assert classify_prompt(prompt, {})[0] == UNCHANGED
+
+
+def test_restoring_and_trimming_are_not_alternatives():
+    """Station 201, and what a first attempt got wrong.
+
+    It named topography AND pachymetry and only the topography bound, so
+    `missing` was not empty and it was trimmed instead of restored. A trim
+    rewrites the clause naming the images and leaves the stated finding exactly
+    where it is - so the candidate still saw the topography beside "shows
+    approximately 2 dioptres of regular astigmatism". The statement has to come
+    out first; the over-promise is then an ordinary trim.
+    """
+    from app.services.osce.reconcile import RESTORE
+
+    prompt = {
+        "text": "Her corneal topography shows approximately 2 dioptres of regular astigmatism.",
+        "image_wanted": "Bilateral corneal topography with pachymetry",
+        "figure_id": 625,
+        "reconciled": {
+            "mode": STATE,
+            "original": "This is her corneal topography and pachymetry. Talk me through them.",
+        },
+    }
+    mode, here, missing = classify_prompt(prompt, {625: "Corneal topography of the right eye"})
+    assert mode == RESTORE, "a partial match must still lose the stated finding"
+    assert missing == {"pachymetry"}, "and the trim that follows knows what is short"
