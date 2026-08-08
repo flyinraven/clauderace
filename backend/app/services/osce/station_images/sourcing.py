@@ -491,6 +491,13 @@ def source_prompt_images(
         wanted = prompt.get("image_wanted")
         if not wanted or prompt.get("figure_id"):
             continue
+        # Reconciliation has already restated this question as what the
+        # candidate would expect, because no image could be found for it. The
+        # request is kept so the binder can still match a figure the paper
+        # holds - which costs nothing - but searching again would buy the same
+        # failure twice.
+        if prompt.get("image_search_exhausted"):
+            continue
 
         # No search will ever fill a serology titre or a textbook diagram. Left
         # in, they were paid for on every run and reported as merely missing.

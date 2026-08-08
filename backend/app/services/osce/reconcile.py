@@ -192,6 +192,13 @@ def classify_prompt(
         return UNCHANGED, here, set()
 
     if not here:
+        # A question already restated as what the candidate would expect is
+        # left alone while nothing has arrived for it. Without this it would be
+        # rewritten on every run, and each rewrite overwrites the record of the
+        # one before - which is how six questions lost the request they were
+        # written with.
+        if (prompt.get("reconciled") or {}).get("mode") == STATE:
+            return UNCHANGED, here, set()
         return STATE, here, named_investigations(text, wanted)
 
     missing = named_investigations(text, wanted) - named_investigations(
@@ -283,9 +290,15 @@ def reconcile_station(
             tally["trimmed"] += 1
         else:
             # Nothing is on screen and the question no longer claims otherwise,
-            # so it must stop asking for an image - otherwise every future run
-            # pays to search for one it has been told does not exist.
-            prompt.pop("image_wanted", None)
+            # so searching for it again would spend on an image already known
+            # not to exist. That is one fact. What the question needed is
+            # another, and deleting `image_wanted` to express the first
+            # destroyed the second: `bind_ingested_figures_to_questions` matches
+            # a question's request against the figures the station already
+            # holds, and a question with no request can never be matched. It
+            # cost 22 questions the chance of being given a picture from the
+            # examiners' own report.
+            prompt["image_search_exhausted"] = True
             prompt.pop("figure_id", None)
             prompt.pop("figure_ids", None)
             tally["expected" if basis == "expected" else "stated"] += 1

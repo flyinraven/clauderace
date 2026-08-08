@@ -176,3 +176,50 @@ def test_what_is_on_screen_is_the_caption_not_the_request():
     assert classify_prompt(
         prompt, {60: "Colour fundus photograph and autofluorescence pair"}
     )[0] == UNCHANGED
+
+
+def test_restating_a_question_keeps_what_it_asked_for():
+    """Two facts, not one field.
+
+    "Do not search for this again" and "this is what the question needed" are
+    different things, and expressing the first by deleting the second cost 22
+    questions the chance of being handed a figure from the examiners' own
+    report: `bind_ingested_figures_to_questions` matches a question's request
+    against the figures the station already holds, and a question with no
+    request can never be matched.
+    """
+    import inspect
+
+    from app.services.osce.reconcile import reconcile_station
+
+    source = inspect.getsource(reconcile_station)
+    assert 'prompt["image_search_exhausted"] = True' in source
+    assert 'prompt.pop("image_wanted"' not in source, (
+        "the request must survive so the binder can still match a paper figure"
+    )
+
+
+def test_a_question_already_restated_is_not_restated_again():
+    """It would be rewritten on every run, and each rewrite overwrites the
+    record of the one before - which is how six questions lost the request they
+    were written with."""
+    prompt = {
+        "text": "What would you expect his chest X-ray to show?",
+        "image_wanted": "Chest X-ray showing bilateral hilar lymphadenopathy",
+        "reconciled": {"mode": STATE, "basis": "expected"},
+    }
+    assert classify_prompt(prompt, {})[0] == UNCHANGED
+
+
+def test_a_restated_question_is_revisited_once_an_image_arrives():
+    """The binder may yet hand it the paper's own figure, and then the wording
+    should catch up."""
+    prompt = {
+        "text": "What would you expect his OCT to show?",
+        "image_wanted": "OCT of the macula",
+        "figure_id": 7,
+        "reconciled": {"mode": STATE, "basis": "expected"},
+    }
+    assert classify_prompt(prompt, {7: "Optical coherence tomography of one macula"})[0] == UNCHANGED
+    # ...and a mismatch is still caught.
+    assert classify_prompt(prompt, {7: "Fundus photograph of the left eye"})[0] == TRIM
