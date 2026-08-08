@@ -10,7 +10,7 @@ cost a minute of a nine-minute station. 154 minutes of clock across the bank.
 from __future__ import annotations
 
 from app.services.osce.prompts import _unmarked_questions
-from app.services.osce.remark import STATION_MARKS, remark_station
+from app.services.osce.remark import STATION_MARKS, plan_marks, remark_station
 
 
 def test_a_question_with_no_rubric_is_a_problem():
@@ -38,7 +38,7 @@ def test_a_fully_marked_station_raises_nothing():
 
 
 class _Client:
-    """Returns a fixed marking key, so the repair's own arithmetic is tested."""
+    """Returns marking-point wording only, which is all the model is asked for."""
 
     def __init__(self, payload):
         self.payload = payload
@@ -64,45 +64,66 @@ def _db():
     class DB:
         def commit(self):
             pass
+
     return DB()
 
 
-def test_the_repair_gives_the_dead_question_marks_and_keeps_the_total():
-    station = _Station([
-        {"label": "A", "text": "Examine.", "rubric": [{"text": "x", "marks": 20}]},
-        {"label": "B", "text": "What next?", "rubric": []},
+def test_the_allocation_totals_twenty_and_leaves_no_question_dead():
+    """The arithmetic is done here, not by the model. Asking a model to hit an
+    exact sum across six questions failed on 84 of 98 stations."""
+    targets = plan_marks([
+        {"label": "A", "seconds": 180, "rubric": [{"marks": 10}]},
+        {"label": "B", "seconds": 90, "rubric": []},
+        {"label": "C", "seconds": 90, "rubric": []},
+        {"label": "D", "seconds": 90, "rubric": []},
+        {"label": "E", "seconds": 60, "rubric": [{"marks": 6}]},
+        {"label": "F", "seconds": 30, "rubric": [{"marks": 4}]},
     ])
-    client = _Client({
-        "A": [{"text": "x", "marks": 14, "is_critical": True}],
-        "B": [{"text": "Names the next step", "marks": 6}],
-    })
+    assert sum(targets.values()) == STATION_MARKS
+    assert all(v >= 1 for v in targets.values())
+    assert targets["B"] == targets["C"] == targets["D"], "equal time, equal worth"
+
+
+def test_a_revived_question_cannot_become_the_biggest_on_the_station():
+    targets = plan_marks([
+        {"label": "A", "seconds": 60, "rubric": [{"marks": 20}]},
+        {"label": "B", "seconds": 480, "rubric": []},
+    ])
+    assert targets["B"] <= 4.0
+    assert sum(targets.values()) == STATION_MARKS
+
+
+def test_an_allocation_that_cannot_work_is_refused():
+    """Nothing to take the marks from."""
+    assert plan_marks([{"label": "A", "seconds": 60, "rubric": []}]) is None
+
+
+def test_the_repair_writes_the_points_and_the_marks_it_planned():
+    station = _Station([
+        {"label": "A", "text": "Examine.", "seconds": 300, "rubric": [{"text": "x", "marks": 20}]},
+        {"label": "B", "text": "What next?", "seconds": 240, "rubric": []},
+    ])
+    client = _Client({"B": ["Names the next step", "Gives a reason"]})
     outcome = remark_station(_db(), client, station)
+
     assert outcome == {"remarked": 1, "questions_given_marks": 1}
     marks = [sum(pt["marks"] for pt in p["rubric"]) for p in station.prompts]
-    assert marks == [14, 6]
     assert sum(marks) == STATION_MARKS
+    assert all(m >= 1 for m in marks)
+    assert [pt["text"] for pt in station.prompts[1]["rubric"]] == [
+        "Names the next step", "Gives a reason",
+    ]
+    # The surviving point is scaled, not deleted: it is still a thing the
+    # candidate is credited for saying.
+    assert station.prompts[0]["rubric"][0]["text"] == "x"
 
 
-def test_a_key_that_no_longer_totals_twenty_is_refused():
-    """Every candidate would otherwise be marked against a different maximum."""
+def test_a_question_the_model_wrote_no_points_for_is_refused():
     station = _Station([
-        {"label": "A", "text": "Examine.", "rubric": [{"text": "x", "marks": 20}]},
-        {"label": "B", "text": "What next?", "rubric": []},
+        {"label": "A", "text": "Examine.", "seconds": 300, "rubric": [{"text": "x", "marks": 20}]},
+        {"label": "B", "text": "What next?", "seconds": 240, "rubric": []},
     ])
-    client = _Client({
-        "A": [{"text": "x", "marks": 14}],
-        "B": [{"text": "y", "marks": 2}],      # totals 16
-    })
-    outcome = remark_station(_db(), client, station)
+    outcome = remark_station(_db(), _Client({}), station)
     assert outcome["rejected"] == 1
+    assert "B" in outcome["reason"]
     assert station.prompts[1]["rubric"] == [], "the station is left as it was"
-
-
-def test_a_key_that_leaves_a_question_dead_is_refused():
-    station = _Station([
-        {"label": "A", "text": "Examine.", "rubric": [{"text": "x", "marks": 20}]},
-        {"label": "B", "text": "What next?", "rubric": []},
-    ])
-    client = _Client({"A": [{"text": "x", "marks": 20}]})
-    outcome = remark_station(_db(), client, station)
-    assert outcome["rejected"] == 1

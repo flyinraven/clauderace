@@ -16,6 +16,12 @@ arrived, and made to ask for a differential before the diagnosis is revealed -
 and rebuilding the questions would discard all of it and change what images
 each one wants, which would mean sourcing the bank again. A rebuild is the
 expensive way to fix an arithmetic problem.
+
+**The model writes wording; this file does the arithmetic.** The first attempt
+asked the model to allocate the marks too, and 84 of 98 stations came back not
+totalling 20. That was the wrong job to give it - hitting an exact sum across
+six questions is arithmetic, and a language model is the least reliable way to
+do arithmetic.
 """
 
 from __future__ import annotations
@@ -32,6 +38,7 @@ from app.services.ai import AIClient
 from app.services.coerce import as_float
 from app.services.errors import log_error
 from app.services.jobs.runner import JobContext, JobHandlerError, register_handler
+from app.services.marking import absorb_mark_drift
 
 logger = logging.getLogger(__name__)
 
@@ -40,32 +47,24 @@ JOB_REMARK_STATIONS = "remark_osce_stations"
 STATION_MARKS = 20.0
 
 SYSTEM_PROMPT = """\
-You are a RANZCO examiner repairing the marking key of one OSCE station.
+You are a RANZCO examiner writing the marking key for questions at an OSCE \
+station that were left without one.
 
-Every question is already written and must NOT be changed. Some carry no marks \
-at all, which means the candidate answers them for nothing. Your job is to give \
-those questions a marking key, and to take the marks for them from the \
-questions that have more than their share.
+You are given the whole station, so you can see what has already been asked and \
+credited, and then the questions carrying no marks. Write the points an \
+examiner would tick for each.
 
-Rules:
-- The station totals exactly 20 marks. It must still total exactly 20.
-- EVERY question must end up worth at least 1 mark.
-- Do not change any question's text.
-- Write the new rubric points from what the question actually asks and from the \
-station's recorded findings and diagnosis. Each point is something the \
-candidate says, marked present or absent - "Identifies the inferior corneal \
-thinning", not "Understands keratoconus".
-- Keep the existing rubric points of the questions that already have them, \
-reducing their marks where you must rather than deleting them. A point that \
-survives with fewer marks is still a point the candidate is credited for; a \
-deleted one is a thing they said and were not.
-- Marks are whole numbers or halves. Give the longer, harder questions more.
+A point is something the candidate SAYS, marked present or absent - "Identifies \
+the inferior corneal thinning", "Names posterior polymorphous dystrophy as a \
+differential" - not a judgement of them, and never "Understands keratoconus". \
+Draw them from what the question asks and from the station's findings and \
+diagnosis. Do not repeat a point another question already credits.
 
-Return ONLY a JSON object mapping every question's label to its rubric:
-{
-  "A": [{"text": "...", "marks": 4, "is_critical": true}, ...],
-  "B": [...]
-}"""
+Write between 2 and 4 points for each question. Do NOT assign marks: the marks \
+are worked out separately and any you wrote would be discarded.
+
+Return ONLY a JSON object mapping each named label to its points:
+{"C": ["...", "..."], "E": ["...", "...", "..."]}"""
 
 
 def stations_needing_marks(db: Session) -> list[int]:
@@ -82,36 +81,96 @@ def stations_needing_marks(db: Session) -> list[int]:
     return out
 
 
+def _half(value: float) -> float:
+    """Marks are whole numbers or halves; nothing finer is defensible."""
+    return round(value * 2) / 2
+
+
+def _question_marks(prompt: dict[str, Any]) -> float:
+    return sum(as_float(pt.get("marks"), 0.0) for pt in (prompt.get("rubric") or []))
+
+
 def _total(prompts: list[dict[str, Any]]) -> float:
-    return sum(
-        as_float(pt.get("marks"), 0.0)
-        for p in prompts
-        for pt in (p.get("rubric") or [])
-    )
+    return sum(_question_marks(p) for p in prompts)
+
+
+def plan_marks(prompts: list[dict[str, Any]]) -> dict[str, float] | None:
+    """What each question should be worth. Pure arithmetic, no model.
+
+    A dead question is paid for out of the questions holding more than their
+    share, in proportion to what they hold, and is worth a share of the 20
+    proportional to the time it is given on the clock - which is the station's
+    own statement of how much it matters. Every question keeps at least one
+    mark. Returns None when there is no allocation that works, which is a
+    refusal, not a repair.
+    """
+    dead = [p for p in prompts if _question_marks(p) <= 0]
+    alive = [p for p in prompts if _question_marks(p) > 0]
+    if not dead or not alive:
+        return None
+
+    total_seconds = sum(as_float(p.get("seconds"), 0.0) for p in prompts)
+    targets: dict[str, float] = {}
+    for prompt in dead:
+        seconds = as_float(prompt.get("seconds"), 0.0)
+        share = (
+            STATION_MARKS * seconds / total_seconds
+            if total_seconds
+            else STATION_MARKS / len(prompts)
+        )
+        # Capped: a question that was worth nothing should not come back as the
+        # most valuable one on the station.
+        targets[str(prompt.get("label"))] = min(max(_half(share), 1.0), 4.0)
+
+    pool = STATION_MARKS - sum(targets.values())
+    if pool < len(alive):
+        return None  # the survivors could not keep a mark each
+
+    held = sum(_question_marks(p) for p in alive)
+    for prompt in alive:
+        scaled = pool * _question_marks(prompt) / held if held else pool / len(alive)
+        targets[str(prompt.get("label"))] = max(1.0, _half(scaled))
+
+    # Rounding leaves a remainder either way. It goes on the largest question,
+    # where half a mark is least visible.
+    drift = STATION_MARKS - sum(targets.values())
+    if abs(drift) > 0.001:
+        largest = max(targets, key=lambda k: targets[k])
+        targets[largest] = max(1.0, targets[largest] + drift)
+    if abs(sum(targets.values()) - STATION_MARKS) > 0.01:
+        return None
+    return targets
+
+
+def _spread(points: list[dict[str, Any]], marks: float) -> list[dict[str, Any]]:
+    """Share one question's marks across its points, evenly, absorbing drift."""
+    if not points:
+        return points
+    each = _half(marks / len(points)) or 0.5
+    for point in points:
+        point["marks"] = each
+    absorb_mark_drift(points, marks)
+    return points
 
 
 def remark_station(
     db: Session, client: AIClient, station: OsceStation, job_id: int | None = None
 ) -> dict[str, Any]:
-    """Redistribute one station's 20 marks so every question carries some."""
+    """Give every question marks, keeping the station at 20."""
     prompts = [dict(p) for p in (station.prompts or [])]
     if not prompts:
         return {"skipped": 1}
-    unmarked = [
-        p.get("label")
-        for p in prompts
-        if sum(as_float(pt.get("marks"), 0.0) for pt in (p.get("rubric") or [])) <= 0
-    ]
+    unmarked = [str(p.get("label")) for p in prompts if _question_marks(p) <= 0]
     if not unmarked:
         return {"already_marked": 1}
 
+    targets = plan_marks(prompts)
+    if targets is None:
+        return {"rejected": 1, "reason": "no workable allocation of the 20 marks"}
+
     listing = "\n\n".join(
-        f"[{p.get('label')}] ({sum(as_float(pt.get('marks'), 0.0) for pt in (p.get('rubric') or [])):g} marks now)"
-        f" {p.get('text')}\n"
-        + "\n".join(
-            f"    - ({as_float(pt.get('marks'), 0.0):g}) {pt.get('text')}"
-            for pt in (p.get("rubric") or [])
-        )
+        f"[{p.get('label')}] ({_question_marks(p):g} marks now) {p.get('text')}\n"
+        + "\n".join(f"    - {pt.get('text')}" for pt in (p.get("rubric") or []))
         for p in prompts
     )
     user = (
@@ -119,9 +178,9 @@ def remark_station(
         f"DIAGNOSIS: {station.diagnosis or 'not recorded'}\n"
         f"FINDINGS:\n{station.findings_elicited or station.findings or '(none)'}\n\n"
         f"MISTAKES THE EXAMINERS NOTED:\n{station.common_mistakes or '(none)'}\n\n"
-        f"THE QUESTIONS AND THEIR MARKS AS THEY STAND:\n{listing}\n\n"
-        f"Questions carrying no marks: {', '.join(str(u) for u in unmarked)}\n"
-        f"Return the full marking key for every question."
+        f"THE STATION AS IT STANDS:\n{listing}\n\n"
+        f"Write the marking points for these questions, which have none: "
+        f"{', '.join(unmarked)}"
     )
     data = client.complete_json(
         task="utility", system=SYSTEM_PROMPT, user=user, job_id=job_id
@@ -129,38 +188,36 @@ def remark_station(
     if not isinstance(data, dict):
         raise ValueError("Re-marking did not return a JSON object")
 
-    rebuilt = []
     for prompt in prompts:
-        points = data.get(str(prompt.get("label")))
-        if isinstance(points, list) and points:
-            prompt["rubric"] = [
-                {
-                    "text": str(pt.get("text") or "").strip(),
-                    "marks": as_float(pt.get("marks"), 0.0),
-                    "is_critical": bool(pt.get("is_critical")),
-                }
-                for pt in points
-                if str(pt.get("text") or "").strip()
+        label = str(prompt.get("label"))
+        if label in unmarked:
+            texts = [
+                str(t).strip()
+                for t in (data.get(label) or [])
+                if isinstance(t, str) and str(t).strip()
             ]
-        rebuilt.append(prompt)
+            if not texts:
+                return {"rejected": 1, "reason": f"no marking points written for {label}"}
+            prompt["rubric"] = _spread(
+                [{"text": t, "is_critical": False} for t in texts], targets[label]
+            )
+        else:
+            # Scaled, not rewritten. A point that survives with fewer marks is
+            # still a point the candidate is credited for; a deleted one is a
+            # thing they said and were not.
+            prompt["rubric"] = _spread(
+                [dict(pt) for pt in (prompt.get("rubric") or [])], targets[label]
+            )
 
-    still_unmarked = [
-        p.get("label")
-        for p in rebuilt
-        if sum(as_float(pt.get("marks"), 0.0) for pt in (p.get("rubric") or [])) <= 0
-    ]
-    total = _total(rebuilt)
-    if still_unmarked or abs(total - STATION_MARKS) > 0.01:
-        # Refused rather than saved. A station that no longer totals 20 marks
-        # every candidate against a different maximum, and one still carrying a
-        # dead question has not been repaired - either is worse than the
-        # station as it stands, which at least is understood.
+    total = _total(prompts)
+    still_dead = [str(p.get("label")) for p in prompts if _question_marks(p) <= 0]
+    if still_dead or abs(total - STATION_MARKS) > 0.01:
         return {
             "rejected": 1,
-            "reason": f"totals {total:g}, unmarked: {still_unmarked or 'none'}",
+            "reason": f"totals {total:g}, still worth nothing: {still_dead or 'none'}",
         }
 
-    station.prompts = rebuilt
+    station.prompts = prompts
     flag_modified(station, "prompts")
     station.total_marks = int(STATION_MARKS)
     db.commit()
@@ -192,6 +249,18 @@ def handle_remark_stations(ctx: JobContext) -> bool:
             log_error(ctx.db, source="osce_remark", message=str(exc),
                       context={"station_id": station.id})
             outcome = {"failed": 1}
+
+        # A refusal used to be counted and forgotten, so 84 of 98 stations
+        # declined for reasons nobody could read. It is recorded now.
+        if outcome.get("rejected"):
+            log_error(
+                ctx.db,
+                source="osce_remark",
+                level="warning",
+                message=f"Station {station.id} left as it was: {outcome.get('reason')}",
+                context={"station_id": station.id},
+            )
+
         running = dict(ctx.job.result or {})
         for key, value in outcome.items():
             if isinstance(value, int):
