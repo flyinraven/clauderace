@@ -115,7 +115,7 @@ Total spend to date: USD 12.62, of which 5.64 in August 2026.
 
 ## Tests
 
-`cd backend && .venv/Scripts/python -m pytest` - 471 tests, about 90 seconds.
+`cd backend && .venv/Scripts/python -m pytest` - 473 tests, about 90 seconds.
 
 The API is tested end to end against an in-memory database and a fake provider
 that sits at `AIClient._post`, so routing, retries, JSON repair, usage
@@ -220,6 +220,16 @@ That is deliberate - they assert on a phase that spec may not have.
 - **Three stations have no image**: Fuchs with DMEK plus untreated fellow eye,
   homonymous hemianopia (field charts are almost always annotated, which the
   gate rejects), thyroid restrictive strabismus.
+- **A background job and a live station compete for one tenth of a CPU.** The
+  job worker runs inside the web process on the free tier, so an ingest or an
+  image sweep can starve the request handler for a minute at a time. That is
+  what cost sitting 42 an answer. The retry survives it; the contention is
+  still there. **Do not start an admin job while sitting a station.**
+- **Audio is 16 kHz mono WAV, about 32 KB per second** - roughly 3 MB for a
+  100-second answer. That is minimal for PCM and cannot be tuned down without
+  hurting recognition of clinical terms. Reaching mp3, a tenth the size, needs
+  an encoder library in the browser; WAV is not the cause of any failure so far
+  and was chosen to keep transcription off Google's 20-a-day free tier.
 - **iOS `audio/mp4` transcription** — the last sub-question was not transcribed
   in the first real test; the upload was racing the review screen. Fixed but
   not yet re-tested on a phone.
@@ -300,6 +310,15 @@ candidate. Each of these is fixed, with the repair applied to the bank:
   nothing, and the marker answers "This question carries no marks" to a reply
   that cost a minute of a nine-minute station. `_unmarked_questions` is now
   part of the arc check, so a new station cannot ship one.
+- **A lost answer was marked as one never given.** Sitting 42 on 8 Aug: an
+  ingest started eight minutes earlier kept taking the instance down, answer
+  B's transcription waited 79 seconds, and answer C never arrived. It scored 0
+  of 2.5 - "Nothing was recorded for this question" - and the result read 55%,
+  pass, nothing ungraded. The upload now retries three times and keeps the
+  recording either way, so the review screen offers to send it again; and a
+  failure the client reports withholds the question from marking, as a failed
+  transcription does. **Marking still scores a genuinely skipped question
+  zero** - the distinction is entirely the client's report.
 - **The review showed no images.** A station whose question turned on a picture
   was reviewed without it. The result now returns what the sitting showed, by
   the same `visible_figure` rule rather than a second copy of it - an attached
@@ -337,6 +356,12 @@ POSTs, and all are safe to run again - they select only what still needs them.
 | `/api/osce/figures/recaption` | describes each image again with the station withheld |
 | `/api/osce/stations/remark` | gives marks to questions carrying none |
 
+Deploy the backend and the front end in that order when a release spans both,
+and wait for the new route before shipping the client - otherwise the new
+client calls an endpoint that is not there yet. A backend push restarts Render,
+which fails any upload in flight, so do not deploy while a station is being
+sat.
+
 `scripts/` holds three more that need no model and no key, and repair stored
 data directly: `withhold_leaked_diagnoses.py`,
 `ask_differentials_before_reveal.py`, `undo_false_modality_downgrades.py`. Each
@@ -366,21 +391,17 @@ Nothing is blocking. Open items, roughly in order of value:
    by the first, worse version, which let the model set the marks; they total
    20 and have no dead questions, but their allocation was not computed the way
    a re-run would do it.
-3. **The review frontend.** The result payload now carries `figures` per
-   question, the station's opening figures, `aims` and `cohort_performance`,
-   and written results already return model answers - but `OsceResult.tsx`
-   renders none of it. The data is there; the rendering is not.
-4. **37 figures genuinely do not match what their question asked for.** The
+3. **37 figures genuinely do not match what their question asked for.** The
    questions were made honest about it; the images were not replaced.
-5. **The re-caption sweep has no button.** `POST /api/osce/figures/recaption`
+4. **The re-caption sweep has no button.** `POST /api/osce/figures/recaption`
    exists and has been run once, by hand, over all 789 figures. Whoever needs
    it next either adds the button beside "Match questions to images" in
    `admin/StationImages.tsx`, or calls the endpoint with an admin token.
-6. **Daily circuit** builder works but has never been run through a real
+5. **Daily circuit** builder works but has never been run through a real
    nine-station sitting.
-7. **Written papers** have been sat once end-to-end; the OSCE has been sat for
+6. **Written papers** have been sat once end-to-end; the OSCE has been sat for
    a single station. Neither has had a full user run.
-8. **Sit one past sitting (deferred - raise once the OSCE work is done).**
+7. **Sit one past sitting (deferred - raise once the OSCE work is done).**
    Asked for on 26 Jul 2026 and parked to conserve AI credits for the OSCE.
    Wanted: pick "2026 Semester 1" and sit Papers 1-4 built from that exam's
    own 18 SEQs in the 5/4/5/4 split, topped up with generated VSAQs and
@@ -389,14 +410,14 @@ Nothing is blocking. Open items, roughly in order of value:
    dropdown in the Question bank, which the API already returns options for
    but the UI never rendered. The reports contain no VSAQs, so real ones for
    a given sitting will never exist.
-9. **The rest of the question arc.** The handouts ask for differentials
+8. **The rest of the question arc.** The handouts ask for differentials
    grouped by category - hereditary, compressive, inflammatory, infective -
    where the bank asks for a number, and they supply concrete results ("all
    bloods normal and MRI showed...") where the bank poses a hypothetical. The
    marking keys hold flat lists, so this is more than a stem rewrite.
-10. **Some questions name the diagnosis in their own stem** - station 261 asks
+9. **Some questions name the diagnosis in their own stem** - station 261 asks
    for "the diagnostic criteria for Neurofibromatosis Type 1" before any
    differential is possible. A handful of stations; not yet counted.
-11. No backup routine. SiteGround has PostgreSQL backups - worth switching on.
+10. No backup routine. SiteGround has PostgreSQL backups - worth switching on.
    Parked on 8 Aug 2026 at the user's request: `scripts/backup_db.ps1` works
    and has been run by hand, it simply is not scheduled.
