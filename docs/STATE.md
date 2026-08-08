@@ -67,7 +67,7 @@ All through **OpenRouter**. The Google AI Studio key is configured but unused:
 its free tier is **20 requests per day**, which one OSCE circuit exhausts twice
 over. Do not route anything to it unless billing is enabled on that project.
 
-Total spend to date: roughly $7.
+Total spend to date: USD 12.62, of which 5.64 in August 2026.
 
 ## Decisions worth not re-litigating
 
@@ -115,7 +115,7 @@ Total spend to date: roughly $7.
 
 ## Tests
 
-`cd backend && .venv/Scripts/python -m pytest` - 461 tests, about 70 seconds.
+`cd backend && .venv/Scripts/python -m pytest` - 471 tests, about 90 seconds.
 
 The API is tested end to end against an in-memory database and a fake provider
 that sits at `AIClient._post`, so routing, retries, JSON repair, usage
@@ -294,13 +294,53 @@ candidate. Each of these is fixed, with the repair applied to the bank:
   reconciliation matches questions to images by what they say. All 789 figures
   were re-captioned and `modality` is now populated on all of them.
 
-**A caution learned the hard way in that pass.** The blind sweep's modality arm
+- **147 questions carried no marks.** The builder was told the marks must
+  total 20 and that was checked; nothing said every question must be worth
+  some, so the model concentrated them. One station had three of its six worth
+  nothing, and the marker answers "This question carries no marks" to a reply
+  that cost a minute of a nine-minute station. `_unmarked_questions` is now
+  part of the arc check, so a new station cannot ship one.
+- **The review showed no images.** A station whose question turned on a picture
+  was reviewed without it. The result now returns what the sitting showed, by
+  the same `visible_figure` rule rather than a second copy of it - an attached
+  and approved image, or the approved words the examiner states where no search
+  could find one. A rejected figure is returned by neither.
+
+**Two cautions learned the hard way in that pass**, both the same mistake. The blind sweep's modality arm
 compared an observed modality against `expected_modalities_for`, which for a
 figure that named no view guesses from the station's findings blob - "corneal
 neovascularisation" yields angiogram and calls a correct slit lamp photograph
 wrong. It produced 109 false disagreements before being restricted to questions
 that really asked for a named investigation. If a check compares against
 something inferred rather than something requested, it is not a check.
+
+And `remark.py` first asked the model to write the marking points AND allocate
+the marks so the station still totalled exactly 20. It refused 84 of 98
+stations. Hitting an exact sum across six questions is arithmetic, and a
+language model is the least reliable way to do it - the marks are worked out in
+code now and the model writes wording only.
+
+Both are the same error: giving a model work that should have been computed.
+The guard caught each, which is the argument for writing the guard first. But
+the re-mark refusals were returned in a dict whose non-integer values the job
+tally dropped, so 84 stations declined for reasons nobody could read. **A guard
+that refuses silently is only half a guard.**
+
+## Repairs that run from an endpoint, not a button
+
+Each was written for a one-off sweep and left without UI. All are admin-only
+POSTs, and all are safe to run again - they select only what still needs them.
+
+| Endpoint | What it does |
+|---|---|
+| `/api/osce/stations/reconcile-questions` | matches questions to the images that arrived |
+| `/api/osce/figures/recaption` | describes each image again with the station withheld |
+| `/api/osce/stations/remark` | gives marks to questions carrying none |
+
+`scripts/` holds three more that need no model and no key, and repair stored
+data directly: `withhold_leaked_diagnoses.py`,
+`ask_differentials_before_reveal.py`, `undo_false_modality_downgrades.py`. Each
+takes `--apply` and reports without it.
 
 ## Working effectively in a new session
 
@@ -318,15 +358,29 @@ Nothing is blocking. Open items, roughly in order of value:
 1. **Re-test a station on the phone** — read-aloud, and whether the last
    answer's transcript now lands. Both were fixed but only the first has been
    confirmed by the user.
-2. **The re-caption sweep has no button.** `POST /api/osce/figures/recaption`
+2. **132 questions across 84 stations still carry no marks**, 138 minutes of
+   clock across the bank. Every station still totals exactly 20, so nothing is
+   broken - those questions simply cannot score. `POST
+   /api/osce/stations/remark` fixes them and is deployed and tested; the user
+   chose to move on rather than run it on 8 Aug 2026. 14 stations were repaired
+   by the first, worse version, which let the model set the marks; they total
+   20 and have no dead questions, but their allocation was not computed the way
+   a re-run would do it.
+3. **The review frontend.** The result payload now carries `figures` per
+   question, the station's opening figures, `aims` and `cohort_performance`,
+   and written results already return model answers - but `OsceResult.tsx`
+   renders none of it. The data is there; the rendering is not.
+4. **37 figures genuinely do not match what their question asked for.** The
+   questions were made honest about it; the images were not replaced.
+5. **The re-caption sweep has no button.** `POST /api/osce/figures/recaption`
    exists and has been run once, by hand, over all 789 figures. Whoever needs
    it next either adds the button beside "Match questions to images" in
    `admin/StationImages.tsx`, or calls the endpoint with an admin token.
-3. **Daily circuit** builder works but has never been run through a real
+6. **Daily circuit** builder works but has never been run through a real
    nine-station sitting.
-4. **Written papers** have been sat once end-to-end; the OSCE has been sat for
+7. **Written papers** have been sat once end-to-end; the OSCE has been sat for
    a single station. Neither has had a full user run.
-5. **Sit one past sitting (deferred - raise once the OSCE work is done).**
+8. **Sit one past sitting (deferred - raise once the OSCE work is done).**
    Asked for on 26 Jul 2026 and parked to conserve AI credits for the OSCE.
    Wanted: pick "2026 Semester 1" and sit Papers 1-4 built from that exam's
    own 18 SEQs in the 5/4/5/4 split, topped up with generated VSAQs and
@@ -335,14 +389,14 @@ Nothing is blocking. Open items, roughly in order of value:
    dropdown in the Question bank, which the API already returns options for
    but the UI never rendered. The reports contain no VSAQs, so real ones for
    a given sitting will never exist.
-6. **The rest of the question arc.** The handouts ask for differentials
+9. **The rest of the question arc.** The handouts ask for differentials
    grouped by category - hereditary, compressive, inflammatory, infective -
    where the bank asks for a number, and they supply concrete results ("all
    bloods normal and MRI showed...") where the bank poses a hypothetical. The
    marking keys hold flat lists, so this is more than a stem rewrite.
-7. **Some questions name the diagnosis in their own stem** - station 261 asks
+10. **Some questions name the diagnosis in their own stem** - station 261 asks
    for "the diagnostic criteria for Neurofibromatosis Type 1" before any
    differential is possible. A handful of stations; not yet counted.
-8. No backup routine. SiteGround has PostgreSQL backups - worth switching on.
+11. No backup routine. SiteGround has PostgreSQL backups - worth switching on.
    Parked on 8 Aug 2026 at the user's request: `scripts/backup_db.ps1` works
    and has been run by hand, it simply is not scheduled.
