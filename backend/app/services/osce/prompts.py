@@ -780,3 +780,61 @@ def stations_needing_prompts(db: Session) -> list[int]:
         ).scalars().all()
     )
 
+
+
+# --- The reveal must follow a differential ---------------------------------
+REVEALS_DIAGNOSIS_RE = re.compile(r"\bthe diagnosis (?:is|here is)\b", re.I)
+ASKS_DIFFERENTIAL_RE = re.compile(r"\bdifferential", re.I)
+# "give me your leading diagnosis", "and give me a diagnosis", and the six
+# other wordings the bank actually uses.
+_ASKS_ONE_DIAGNOSIS_RE = re.compile(
+    r",?\s*and\s+(?:give\s+me|tell\s+me)\s+"
+    r"(?:a|your|the|my)?\s*"
+    r"(?:leading|likely|most likely|working|presumed|final|unifying)?\s*"
+    r"diagnosis\b",
+    re.I,
+)
+
+_DIFFERENTIAL_CLAUSE = ", and give me your differential diagnoses and which you favour"
+_DIFFERENTIAL_APPEND = " And what are your differential diagnoses?"
+
+
+def needs_differential_first(prompts: list[dict[str, Any]]) -> int | None:
+    """Index of a question that states the diagnosis with none asked for first.
+
+    Stating the diagnosis mid-station is how the real examiners stop later
+    marks depending on earlier ones - Lisa Cooke is told she has the 11778
+    mutation and then asked what it means. But in the handouts the reveal
+    always lands *after* the candidate has been asked to reason: "What are
+    your differential diagnoses so far?" comes first, grouped by hereditary,
+    compressive, inflammatory and infective.
+
+    Where the bank asks only for "your leading diagnosis" and then announces
+    the answer, the candidate names one thing, is told the answer, and is never
+    asked to think across possibilities at all. Fifty-six stations do that.
+    """
+    texts = [str(p.get("text") or "") for p in prompts]
+    index = next((i for i, t in enumerate(texts) if REVEALS_DIAGNOSIS_RE.search(t)), None)
+    if index is None:
+        return None
+    if any(ASKS_DIFFERENTIAL_RE.search(t) for t in texts[:index]):
+        return None
+    return index
+
+
+def ask_for_differentials(text: str) -> str:
+    """Turn a question that asks for one diagnosis into one that asks for several.
+
+    Deterministic, because the bank says it eight ways and all of them are the
+    same sentence. "which you favour" is kept deliberately: the rubric for
+    these questions awards a mark for naming the diagnosis, and a rewrite that
+    dropped it would leave a marking key asking for something the question no
+    longer requests - the exact fault this session has spent its day undoing.
+    """
+    if ASKS_DIFFERENTIAL_RE.search(text):
+        return text
+    replaced, count = _ASKS_ONE_DIAGNOSIS_RE.subn(_DIFFERENTIAL_CLAUSE, text, count=1)
+    if count:
+        return replaced
+    # No diagnosis clause to convert, so the differential is added instead.
+    return text.rstrip() + _DIFFERENTIAL_APPEND
