@@ -31,6 +31,8 @@ from app.api.osce.helpers import (
     ACCEPTED_AUDIO_PREFIXES,
     MAX_AUDIO_BYTES,
     _bound_figure_ids,
+    figures_for_prompt,
+    opening_figures_payload,
     _clock,
     _load_sitting,
 )
@@ -160,17 +162,7 @@ def get_sitting(session_id: int, user: CurrentUser, db: DbSession) -> dict[str, 
         # angiogram" - and no one image is both, so each has its own figure and
         # the question shows them together. `figure_ids` is the list;
         # `figure_id` alone is the older single binding, still the common case.
-        shown = [
-            f for f in (by_id.get(i) for i in _bound_figure_ids(prompt))
-            if f
-            and (
-                (f.image_id and f.is_approved)
-                # A described view has no image to gate on: the examiner states
-                # the findings instead, and that must still reach the candidate
-                # or the question is unanswerable.
-                or (f.described_findings and f.described_findings_approved)
-            )
-        ]
+        shown = figures_for_prompt(by_id, prompt)
         prompts.append(
             {
                 "label": label,
@@ -179,17 +171,7 @@ def get_sitting(session_id: int, user: CurrentUser, db: DbSession) -> dict[str, 
                 "seconds": prompt.get("seconds"),
                 # The investigations this question asks them to read, shown only
                 # once the question is reached.
-                "figures": [
-                    {
-                        "id": f.id,
-                        "image_id": f.image_id,
-                        "caption": f.caption,
-                        "described_findings": (
-                            f.described_findings if f.described_findings_approved else None
-                        ),
-                    }
-                    for f in shown
-                ],
+                "figures": shown,
                 "marks": sum(pt.get("marks", 0) for pt in (prompt.get("rubric") or [])),
                 "transcript": response.transcript if response else None,
                 "transcript_edited": response.transcript_edited if response else None,
@@ -210,26 +192,7 @@ def get_sitting(session_id: int, user: CurrentUser, db: DbSession) -> dict[str, 
     # An image belonging to a question is NOT shown with the patient: an MRI on
     # screen from the start answers the question before it is asked. It travels
     # with its own prompt instead, and appears when that prompt does.
-    prompt_figure_ids = {
-        i for p in (station.prompts or []) for i in _bound_figure_ids(p)
-    }
-    figures = [
-        {
-            "id": f.id,
-            "image_id": f.image_id,
-            "caption": f.caption,
-            "described_findings": (
-                f.described_findings if f.described_findings_approved else None
-            ),
-            "position": f.position,
-        }
-        for f in sorted(station.figures, key=lambda f: f.position)
-        if (
-            (f.image_id and f.is_approved)
-            or (f.described_findings and f.described_findings_approved)
-        )
-        and f.id not in prompt_figure_ids
-    ]
+    figures = opening_figures_payload(station)
 
     return {
         "id": sitting.id,
@@ -435,6 +398,7 @@ def sitting_result(session_id: int, user: CurrentUser, db: DbSession) -> dict[st
     ).scalars().all():
         grades_by_label.setdefault(grade.prompt_label, []).append(grade)
 
+    by_id = {f.id: f for f in station.figures}
     prompts = []
     for index, prompt in enumerate(station.prompts or []):
         label = prompt.get("label") or str(index)
@@ -450,6 +414,10 @@ def sitting_result(session_id: int, user: CurrentUser, db: DbSession) -> dict[st
                 "marks": sum(pt.get("marks", 0) for pt in (prompt.get("rubric") or [])),
                 "awarded": round(awarded, 2) if awarded is not None else None,
                 "transcript": response.marking_text if response else "",
+                # Exactly what was on screen when the question was asked, so a
+                # mark can be read against the picture it was given for. A
+                # rejected figure was never shown and is not shown here either.
+                "figures": figures_for_prompt(by_id, prompt),
                 "flagged": label in (result.flagged_prompts or []) if result else False,
                 "examiners": [
                     {
@@ -476,6 +444,10 @@ def sitting_result(session_id: int, user: CurrentUser, db: DbSession) -> dict[st
             "findings": station.findings,
             "findings_elicited": station.findings_elicited,
             "common_mistakes": station.common_mistakes,
+            "cohort_performance": station.cohort_performance,
+            "aims": station.aims,
+            # The patient, as the candidate opened on them.
+            "figures": opening_figures_payload(station),
         },
         "grading_status": sitting.grading_status,
         "result": {

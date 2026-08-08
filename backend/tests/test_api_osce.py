@@ -1109,3 +1109,43 @@ def test_circuit_progress_counts_only_the_owners_sittings(client, db, student):
     circuits = client.get("/api/osce/circuits", headers=auth(student)).json()
     mine = next(c for c in circuits if c["id"] == circuit_id)
     assert mine["progress"]["completed"] == 0
+
+
+def test_the_review_shows_what_was_on_screen_and_nothing_more(client, db, student, ai):
+    """A mark can only be read against the picture it was given for.
+
+    The review returned no figures at all, so a station whose question turned on
+    an image was reviewed without it. It must show what the sitting showed -
+    and a figure that was rejected was never on screen, so it stays off.
+    """
+    from app.api.osce.helpers import visible_figure
+    from app.models import OsceFigure
+
+    station = make_station(db)
+    shown = OsceFigure(station_id=station.id, position=0, caption="Fundus photograph",
+                       image_id=None, is_approved=True)
+    rejected = OsceFigure(station_id=station.id, position=1, caption="Wrong image",
+                          image_id=None, is_approved=False)
+    described = OsceFigure(station_id=station.id, position=2,
+                           described_findings="The disc is pale temporally.",
+                           described_findings_approved=True)
+    db.add_all([shown, rejected, described])
+    db.commit()
+
+    # No image attached, so the approved words are the only way it reaches them.
+    assert visible_figure(shown) is None, "approved but with no image is not on screen"
+    assert visible_figure(rejected) is None
+    payload = visible_figure(described)
+    assert payload and payload["described_findings"] == "The disc is pale temporally."
+    assert payload["image_id"] is None
+
+
+def test_a_described_figure_carries_no_caption(client, db, student, ai):
+    """The caption describes an image. With no image there is nothing to caption,
+    and showing one written for a picture that was never found would mislead."""
+    from app.api.osce.helpers import visible_figure
+    from app.models import OsceFigure
+
+    figure = OsceFigure(station_id=1, position=0, caption="Left fundus",
+                        described_findings="Pale disc.", described_findings_approved=True)
+    assert visible_figure(figure)["caption"] is None

@@ -42,3 +42,67 @@ def _clock(sitting: OsceSession):
     return compute_station_clock(
         sitting.started_at, sitting.submitted_at, sitting.is_timed
     )
+
+
+def visible_figure(figure) -> dict[str, Any] | None:
+    """One figure as the candidate may see it, or None if they may not.
+
+    Two ways a figure reaches them, and a figure with neither reaches them not
+    at all - a search that found nothing leaves a row behind, and showing it
+    would put an empty frame on the screen.
+
+      - an image that was attached and approved;
+      - the protocol's last resort: no image could be found, so the examiner
+        states the findings and the candidate reads those instead.
+
+    A rejected figure is neither, so it is never returned. That is the point of
+    rejecting it.
+
+    Shared by the sitting and the review deliberately. They showed the same
+    thing by two copies of this rule until the review needed images too, and a
+    review that showed a figure the sitting withheld would be marking the
+    candidate against something they never saw.
+    """
+    shows_image = bool(figure.image_id and figure.is_approved)
+    described = (
+        figure.described_findings if figure.described_findings_approved else None
+    )
+    if not shows_image and not described:
+        return None
+    return {
+        "id": figure.id,
+        "image_id": figure.image_id if shows_image else None,
+        "caption": figure.caption if shows_image else None,
+        "described_findings": described,
+        "position": figure.position,
+    }
+
+
+def figures_for_prompt(by_id: dict[int, Any], prompt: dict[str, Any]) -> list[dict[str, Any]]:
+    """The investigations one question asks the candidate to read."""
+    out = []
+    for figure_id in _bound_figure_ids(prompt):
+        figure = by_id.get(figure_id)
+        if figure is None:
+            continue
+        payload = visible_figure(figure)
+        if payload:
+            out.append(payload)
+    return out
+
+
+def opening_figures_payload(station) -> list[dict[str, Any]]:
+    """What is on screen from the start: the patient, and nothing a question owns.
+
+    An image belonging to a question is not shown with the patient - an MRI on
+    screen from the beginning answers the question before it is asked.
+    """
+    owned = {i for p in (station.prompts or []) for i in _bound_figure_ids(p)}
+    out = []
+    for figure in sorted(station.figures, key=lambda f: f.position):
+        if figure.id in owned:
+            continue
+        payload = visible_figure(figure)
+        if payload:
+            out.append(payload)
+    return out
