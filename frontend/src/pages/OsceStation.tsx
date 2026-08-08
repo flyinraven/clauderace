@@ -127,35 +127,84 @@ export default function OsceStation() {
   }, [sitting?.clock.phase, stage, sittingId])
 
   const prompts = sitting?.prompts ?? []
+  // Answers recorded but not yet accepted by the server, by prompt label.
+  const [unsent, setUnsent] = useState<
+    Record<string, { blob: Blob; mimeType: string; durationMs: number; promptIndex: number }>
+  >({})
+
   const prompt = prompts[index]
 
+  /**
+   * Send one answer, retrying a few times before giving up.
+   *
+   * The free instance runs the job worker inside the web process on a tenth of
+   * a CPU, so a background job can starve the request handler for a minute at
+   * a time. On 8 Aug an ingest job did exactly that and answer C of a live
+   * station never arrived - it was marked zero, "nothing was recorded",
+   * against a candidate who had answered it.
+   *
+   * A single attempt is what turned a slow minute into a lost answer. Three,
+   * spaced out, outlast the kind of stall that caused it, and the blob is kept
+   * either way so the answer can still be sent from the review screen.
+   */
   const uploadAnswer = useCallback(
     async (label: string, promptIndex: number, blob: Blob, mimeType: string, durationMs: number) => {
       if (!sittingId) return
-      const form = new FormData()
-      // Filename extension matters to some servers; derive it from the type.
       const ext = mimeType.includes('wav')
         ? 'wav'
         : mimeType.includes('webm')
           ? 'webm'
           : 'm4a'
-      form.append('audio', blob, `answer-${label}.${ext}`)
-      form.append('prompt_label', label)
-      form.append('prompt_index', String(promptIndex))
-      form.append('duration_ms', String(durationMs))
+
+      const send = async () => {
+        // Rebuilt per attempt: a FormData that has been sent once cannot be
+        // replayed reliably.
+        const form = new FormData()
+        form.append('audio', blob, `answer-${label}.${ext}`)
+        form.append('prompt_label', label)
+        form.append('prompt_index', String(promptIndex))
+        form.append('duration_ms', String(durationMs))
+        await api(`/osce/sittings/${sittingId}/answers`, { method: 'POST', body: form })
+      }
 
       setUploading(label)
-      try {
-        await api(`/osce/sittings/${sittingId}/answers`, { method: 'POST', body: form })
-      } catch (err) {
-        setError(
-          err instanceof Error
-            ? `Answer ${label} did not upload: ${err.message}`
-            : `Answer ${label} did not upload`,
-        )
-      } finally {
-        setUploading(null)
+      let lastError: unknown = null
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        try {
+          await send()
+          setUnsent((current) => {
+            const next = { ...current }
+            delete next[label]
+            return next
+          })
+          setError(null)
+          setUploading(null)
+          return
+        } catch (err) {
+          lastError = err
+          if (attempt < 3) {
+            await new Promise((resolve) => window.setTimeout(resolve, attempt * 4000))
+          }
+        }
       }
+
+      // Held so the review screen can send it, and so the server can be told
+      // that an answer exists but did not arrive - which is not the same as a
+      // question the candidate skipped, and must not be marked as one.
+      setUnsent((current) => ({ ...current, [label]: { blob, mimeType, durationMs, promptIndex } }))
+      void api(`/osce/sittings/${sittingId}/answers/${label}/upload-failed`, {
+        method: 'POST',
+        body: {
+          reason: lastError instanceof Error ? lastError.message : 'upload failed',
+          duration_ms: durationMs,
+        },
+      }).catch(() => undefined)
+      setError(
+        lastError instanceof Error
+          ? `Answer ${label} did not upload after three tries: ${lastError.message}. It is kept — send it again from the review screen before you submit.`
+          : `Answer ${label} did not upload. It is kept — send it again from the review screen before you submit.`,
+      )
+      setUploading(null)
     },
     [sittingId],
   )
@@ -629,6 +678,34 @@ export default function OsceStation() {
             invent whole sentences. Delete anything you did not say and correct anything
             wrong — what is here is exactly what gets marked.
           </Alert>
+
+          {/* An answer the server never accepted. The recording is still here,
+              so it can be sent now rather than marked as one you never gave. */}
+          {Object.keys(unsent).length > 0 && (
+            <Alert tone="error" title="Some answers never reached the server">
+              <p>
+                {Object.keys(unsent).sort().join(', ')} recorded but did not upload. They
+                are still on this device. Send them before submitting, or they cannot be
+                marked.
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {Object.entries(unsent).map(([label, held]) => (
+                  <Button
+                    key={label}
+                    variant="secondary"
+                    loading={uploading === label}
+                    onClick={() =>
+                      void uploadAnswer(
+                        label, held.promptIndex, held.blob, held.mimeType, held.durationMs,
+                      ).then(load)
+                    }
+                  >
+                    Send answer {label} again
+                  </Button>
+                ))}
+              </div>
+            </Alert>
+          )}
 
           {prompts.map((p) => {
             const current = edits[p.label] ?? p.transcript_edited ?? p.transcript ?? ''

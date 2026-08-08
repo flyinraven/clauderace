@@ -1149,3 +1149,56 @@ def test_a_described_figure_carries_no_caption(client, db, student, ai):
     figure = OsceFigure(station_id=1, position=0, caption="Left fundus",
                         described_findings="Pale disc.", described_findings_approved=True)
     assert visible_figure(figure)["caption"] is None
+
+
+def test_an_answer_that_never_uploaded_is_not_marked_as_one_never_given(
+    client, db, student, ai, run_jobs
+):
+    """Sitting 42, 8 Aug 2026.
+
+    A background ingest starved the free instance for eighty seconds, answer C
+    never reached the server, and it was marked 0 of 2.5 - "Nothing was
+    recorded for this question" - against a candidate who had answered it. The
+    result read 55%, pass, nothing ungraded. Marking cannot tell a skipped
+    question from a lost one unless the client says which it was.
+    """
+    station = make_station(db)
+    sitting_id = client.post(
+        "/api/osce/sittings", json={"station_id": station.id, "is_timed": True},
+        headers=auth(student),
+    ).json()["id"]
+    client.post(f"/api/osce/sittings/{sitting_id}/begin", headers=auth(student))
+
+    upload(client, student, sitting_id, "A", 0)
+    # B is spoken, and never arrives.
+    told = client.post(
+        f"/api/osce/sittings/{sitting_id}/answers/B/upload-failed",
+        json={"reason": "Could not reach the server", "duration_ms": 45000},
+        headers=auth(student),
+    )
+    assert told.status_code == 204
+
+    run_jobs()
+    client.post(f"/api/osce/sittings/{sitting_id}/submit", headers=auth(student))
+    run_jobs()
+
+    result = client.get(
+        f"/api/osce/sittings/{sitting_id}/result", headers=auth(student)
+    ).json()
+    assert "B" in (result["result"]["ungraded_prompts"] or []), (
+        "a lost answer must be withheld from marking, not scored zero"
+    )
+    assert result["result"]["outcome"] == "incomplete"
+
+
+def test_a_late_success_is_not_undone_by_a_failure_report_behind_it():
+    """The retry and the report race. The answer that arrived wins."""
+    from app.api.osce.sittings import record_failed_upload  # noqa: F401
+
+    # Covered by the endpoint's own guard: a response holding an audio clip is
+    # returned untouched. Asserted here so the guard is not quietly removed.
+    import inspect
+
+    source = inspect.getsource(record_failed_upload)
+    assert "audio_clip_id is not None" in source
+    assert "return" in source

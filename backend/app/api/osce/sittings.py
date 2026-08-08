@@ -301,6 +301,60 @@ async def upload_answer(
     return {"response_id": response.id, "job_id": job.id, "bytes": len(data)}
 
 
+class UploadFailedRequest(BaseModel):
+    reason: str = ""
+    duration_ms: int = 0
+
+
+@router.post("/sittings/{session_id}/answers/{prompt_label}/upload-failed",
+             status_code=status.HTTP_204_NO_CONTENT)
+def record_failed_upload(
+    session_id: int,
+    prompt_label: str,
+    payload: UploadFailedRequest,
+    user: CurrentUser,
+    db: DbSession,
+) -> None:
+    """Record that an answer was given and never arrived.
+
+    Marking treats a question with no response row as one the candidate
+    skipped, and scores it zero - which is right, until the reason there is no
+    row is that the upload failed. On 8 Aug a background job starved the
+    instance for eighty seconds, answer C of a live station never landed, and
+    it was marked 0 of 2.5 with "nothing was recorded" against a candidate who
+    had answered it.
+
+    The client is the only thing that knows. This is it saying so, and it is
+    deliberately cheap: no audio, because the audio is what could not be sent.
+
+    It never overwrites an answer that did arrive - a late retry that succeeds
+    must not be undone by a failure report still in flight behind it.
+    """
+    sitting = _load_sitting(db, session_id, user)
+    response = db.execute(
+        select(OsceResponse)
+        .where(OsceResponse.session_id == sitting.id)
+        .where(OsceResponse.prompt_label == prompt_label)
+    ).scalar_one_or_none()
+    if response is not None and response.audio_clip_id is not None:
+        return  # it arrived after all
+
+    if response is None:
+        response = OsceResponse(
+            session_id=sitting.id,
+            prompt_label=prompt_label,
+            prompt_index=0,
+            duration_ms=payload.duration_ms or None,
+        )
+        db.add(response)
+    response.transcription_status = "failed"
+    response.transcription_error = (
+        f"The answer was recorded but never reached the server: "
+        f"{payload.reason or 'upload failed'}"
+    )
+    db.commit()
+
+
 class EditTranscriptRequest(BaseModel):
     transcript: str
 
