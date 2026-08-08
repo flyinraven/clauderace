@@ -319,11 +319,20 @@ def reconcile_station(
         # one that was written this way, so an admin can see why it changed, and
         # so a bad rewrite can be put back. A model writes the replacement; the
         # original is the only copy of what the examiner report actually said.
+        # The FIRST original is the one worth keeping. A second rewrite used to
+        # overwrite it with its own input, which is the already-rewritten text -
+        # so station 201's true wording was replaced by the sentence that stated
+        # its findings, and the restore that would have removed that statement
+        # had nothing left to restore to. Six questions lost their image request
+        # the same way.
+        previous = prompt.get("reconciled") or {}
         prompt["reconciled"] = {
             "mode": mode, "basis": basis, "shown": len(here),
             "missing": sorted(missing),
-            "original": prompt.get("text"),
-            "original_image_wanted": prompt.get("image_wanted"),
+            "original": previous.get("original") or prompt.get("text"),
+            "original_image_wanted": (
+                previous.get("original_image_wanted") or prompt.get("image_wanted")
+            ),
         }
         prompt["text"] = str(new_text).strip()
         if mode == TRIM:

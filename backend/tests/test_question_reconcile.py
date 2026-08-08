@@ -294,3 +294,21 @@ def test_restoring_and_trimming_are_not_alternatives():
     mode, here, missing = classify_prompt(prompt, {625: "Corneal topography of the right eye"})
     assert mode == RESTORE, "a partial match must still lose the stated finding"
     assert missing == {"pachymetry"}, "and the trim that follows knows what is short"
+
+
+def test_a_second_rewrite_does_not_overwrite_the_first_original():
+    """Station 201 lost its true wording this way.
+
+    A rewrite stored `original` as the text it was given - which on a second
+    pass is the text the first pass wrote. So the sentence that stated the
+    station's findings became the "original", and the restore meant to remove
+    that statement had nothing to restore to. Six questions lost their image
+    request identically.
+    """
+    import inspect
+
+    from app.services.osce.reconcile import reconcile_station
+
+    source = inspect.getsource(reconcile_station)
+    assert 'previous.get("original") or prompt.get("text")' in source
+    assert 'previous.get("original_image_wanted")' in source
