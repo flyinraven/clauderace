@@ -22,6 +22,7 @@ SETTLED_MATCH_CONFIDENCE = 0.78
 
 
 JOB_VERIFY_STATION_FIGURES = "verify_station_figures"
+JOB_BIND_STATION_FIGURES = "bind_station_figures"
 
 # What ingest wrote before its figures were checked. Anything else has been
 # through a vision model and must not be re-graded for free.

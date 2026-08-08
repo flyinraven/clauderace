@@ -301,6 +301,37 @@ def recaption_figures(admin: AdminUser, db: DbSession) -> dict[str, Any]:
     return {"job_id": job.id, "figure_count": len(ids)}
 
 
+@router.post("/stations/bind-figures", status_code=status.HTTP_202_ACCEPTED)
+def bind_figures(admin: AdminUser, db: DbSession) -> dict[str, Any]:
+    """Give a question the report's own investigation instead of buying one.
+
+    Binding used to run only inside the figure recheck, which selects stations
+    by whether a figure still needs verifying - so once every figure had been
+    verified it could not be reached at all. This asks the question the binder
+    answers: is there an unclaimed paper figure here and a question wanting
+    one?
+
+    Costs nothing. The binder makes no model calls; it matches the modality a
+    question named against the modality a figure was recorded as, and refuses
+    anything short of exact.
+    """
+    from app.services.osce.station_images.constants import JOB_BIND_STATION_FIGURES
+    from app.services.osce.station_images.ingested import stations_with_bindable_figures
+
+    ids = stations_with_bindable_figures(db)
+    if not ids:
+        raise HTTPException(
+            status_code=400,
+            detail="No station has both an unclaimed figure from its report and a question wanting one",
+        )
+    job = create_job(
+        db, JOB_BIND_STATION_FIGURES, payload={"station_ids": ids},
+        created_by_id=admin.id, total_steps=len(ids),
+        message=f"Binding figures on {len(ids)} station(s)",
+    )
+    return {"job_id": job.id, "station_count": len(ids)}
+
+
 @router.post("/stations/reconcile-questions", status_code=status.HTTP_202_ACCEPTED)
 def reconcile_questions(admin: AdminUser, db: DbSession) -> dict[str, Any]:
     """Make every question honest about the image that actually arrived.

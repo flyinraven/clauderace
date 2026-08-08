@@ -20,6 +20,7 @@ from app.services.imagesearch.relevance import named_modality
 from app.services.jobs.runner import JobContext, JobHandlerError, register_handler
 from app.services.osce.station_images.constants import (
     FROM_PAPER,
+    JOB_BIND_STATION_FIGURES,
     JOB_VERIFY_STATION_FIGURES,
     REVIEWABLE_STATUSES,
 )
@@ -205,6 +206,82 @@ def handle_verify_station_figures(ctx: JobContext) -> bool:
 
     ctx.cursor_set(index=index + 1)
     ctx.advance(1, f"Figures: {index + 1} of {len(station_ids)}")
+    return index + 1 >= len(station_ids)
+
+
+def stations_with_bindable_figures(db: Session) -> list[int]:
+    """Stations holding a paper figure nothing has claimed, and a question wanting one.
+
+    Binding only ever ran inside the figure recheck, which selects stations by
+    whether a figure still needs *verifying*. Once every figure had been
+    verified that query returned nothing, so the binder became unreachable -
+    with seventeen questions holding a restored request and the paper's own
+    figures sitting unclaimed beside them.
+
+    This asks the question the binder actually answers: is there anything here
+    to match? It costs nothing to run. The binder makes no model calls; it
+    compares the modality a question named against the modality a figure was
+    recorded as, and refuses anything short of an exact match.
+    """
+    out: list[int] = []
+    rows = db.execute(
+        select(OsceStation.id, OsceStation.prompts).order_by(OsceStation.id)
+    ).all()
+    figures_by_station: dict[int, list[int]] = {}
+    for figure_id, station_id in db.execute(
+        select(OsceFigure.id, OsceFigure.station_id)
+        .join(Image, Image.id == OsceFigure.image_id)
+        .where(Image.origin == "pdf")
+    ).all():
+        figures_by_station.setdefault(station_id, []).append(figure_id)
+
+    for station_id, prompts in rows:
+        prompts = prompts or []
+        claimed = {i for p in prompts for i in bound_figure_ids(p)}
+        spare = [f for f in figures_by_station.get(station_id, []) if f not in claimed]
+        if not spare:
+            continue
+        wants = any(
+            str(p.get("image_wanted") or "").strip()
+            and not bound_figure_ids(p)
+            and not p.get("image_impossible")
+            for p in prompts
+        )
+        if wants:
+            out.append(station_id)
+    return out
+
+
+@register_handler(JOB_BIND_STATION_FIGURES)
+def handle_bind_station_figures(ctx: JobContext) -> bool:
+    """One station per chunk. No model calls: this is matching, not judging."""
+    station_ids: list[int] = ctx.payload.get("station_ids") or []
+    if not station_ids:
+        raise JobHandlerError("No station_ids supplied")
+    if not ctx.job.total_steps:
+        ctx.set_total(len(station_ids))
+
+    index = ctx.cursor_get("index", 0)
+    if index >= len(station_ids):
+        return True
+    if ctx.cancelled:
+        return True
+
+    station = ctx.db.get(OsceStation, station_ids[index])
+    if station is not None:
+        try:
+            outcome = bind_ingested_figures_to_questions(ctx.db, AIClient(ctx.db), station)
+            running = dict(ctx.job.result or {})
+            running["bound"] = running.get("bound", 0) + outcome.get("bound", 0)
+            ctx.set_result(**running)
+        except Exception as exc:  # noqa: BLE001 - one station must not stop the run
+            ctx.db.rollback()
+            logger.exception("Could not bind the figures of station %s", station.id)
+            log_error(ctx.db, source="osce_images", message=str(exc),
+                      context={"station_id": station.id})
+
+    ctx.cursor_set(index=index + 1)
+    ctx.advance(1, f"Bound {index + 1} of {len(station_ids)} stations")
     return index + 1 >= len(station_ids)
 
 

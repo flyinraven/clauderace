@@ -1706,3 +1706,69 @@ def test_the_papers_own_photograph_is_never_re_bought(db):
     db.commit()
     db.refresh(station)
     assert opening_image_is_settled(station) is False
+
+
+def test_the_binder_can_be_reached_once_every_figure_is_verified(db):
+    """It could not be, and that was the whole point of it.
+
+    Binding ran only inside the figure recheck, which selects stations by
+    whether a figure still needs verifying. Once every figure had been verified
+    that query returned nothing, so the binder became unreachable - with
+    seventeen questions holding a restored request and the report's own figures
+    sitting unclaimed beside them.
+    """
+    from app.models import Image, OsceFigure, OsceStation
+    from app.services.osce.station_images.constants import FROM_PAPER
+    from app.services.osce.station_images.ingested import (
+        stations_with_bindable_figures,
+        stations_with_unchecked_figures,
+    )
+
+    image = Image(
+        sha256="b" * 64, content_type="image/png", data=b"x", size_bytes=1, origin="pdf"
+    )
+    db.add(image)
+    db.flush()
+    station = OsceStation(
+        title="Bindable", subspecialty="Glaucoma", source="past_paper",
+        prompts=[{"label": "C", "text": "This is his OCT.", "image_wanted": "OCT of the macula"}],
+    )
+    db.add(station)
+    db.flush()
+    db.add(OsceFigure(
+        station_id=station.id, position=1, image_id=image.id,
+        is_approved=True, verification_status=FROM_PAPER, modality="oct",
+    ))
+    db.commit()
+
+    # Every figure is verified, so the recheck sees nothing to do...
+    assert station.id not in stations_with_unchecked_figures(db)
+    # ...but there is plainly a figure to bind.
+    assert station.id in stations_with_bindable_figures(db)
+
+
+def test_a_station_whose_figures_are_all_claimed_is_not_selected(db):
+    from app.models import Image, OsceFigure, OsceStation
+    from app.services.osce.station_images.constants import FROM_PAPER
+    from app.services.osce.station_images.ingested import stations_with_bindable_figures
+
+    image = Image(
+        sha256="c" * 64, content_type="image/png", data=b"x", size_bytes=1, origin="pdf"
+    )
+    db.add(image)
+    db.flush()
+    station = OsceStation(title="Done", subspecialty="Glaucoma", source="past_paper", prompts=[])
+    db.add(station)
+    db.flush()
+    figure = OsceFigure(
+        station_id=station.id, position=1, image_id=image.id,
+        is_approved=True, verification_status=FROM_PAPER, modality="oct",
+    )
+    db.add(figure)
+    db.commit()
+    station.prompts = [
+        {"label": "C", "text": "This is his OCT.", "image_wanted": "OCT", "figure_id": figure.id}
+    ]
+    db.commit()
+
+    assert station.id not in stations_with_bindable_figures(db)
