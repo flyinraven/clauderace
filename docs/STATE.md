@@ -28,12 +28,21 @@ then `scp` the contents of `frontend/dist` (including `.htaccess`) to
 - 36 SEQs + 63 VSAQs, 250 sub-questions, **every one has a marking key**
 - 822 marking key points, 65 examiner feedback records
 - 4 published papers (Papers 1–4)
-- 78 OSCE stations, all with examiner prompts: 24 generated and 54 ingested
-  from three past OSCE reports (2025 Sem 1, 2025 Sem 2, 2026 Sem 1)
-- 75 of 78 stations show a live image, all web-sourced and vision-checked.
-  Every station has its findings split into given (acuity, pressure) and
-  elicited
-- 6 full 9-station circuits with no repeats
+- **219 OSCE stations**, all with examiner prompts: 60 generated and 159
+  ingested from ten past OSCE reports (2021 Sem 1 through 2025 Sem 1)
+- 214 of 219 stations show a live image; 789 figures in all. Every station has
+  its findings split into given (acuity, pressure) and elicited
+- Circuits are built on demand, one station per subspecialty, never repeating a
+  station this candidate has sat
+
+## The exam this is for
+
+**The user sits the RANZCO OSCE on 3-4 September 2026.** Judge everything
+against that date: only two things count before it, that a station can be sat
+end to end without a defect interrupting it, and that there is enough
+non-repeating content to sit one most days. Sitting is nearly free - a marked
+nine-station circuit costs about three cents - while generating a station costs
+USD 0.09 and ingesting one costs USD 0.003. Content is not the constraint.
 
 ## AI routing
 
@@ -89,10 +98,15 @@ Total spend to date: roughly $7.
   Station pages have no images and no vector drawings. Ingestion attaches a
   report's own figures where they exist, but every station image in production
   is web-sourced and vision-checked. Do not re-ingest hoping for images.
+- **Rejecting more images is the wrong lever.** Holding them for approval once
+  left stations showing nothing at all. Every fix since moves the *question* to
+  match the image, or writes an honest caption beside it - never discards a
+  picture or raises a threshold. A station with a loose image and a note beats
+  a station with a gap.
 
 ## Tests
 
-`cd backend && .venv/Scripts/python -m pytest` - 429 tests, about a minute.
+`cd backend && .venv/Scripts/python -m pytest` - 461 tests, about 70 seconds.
 
 The API is tested end to end against an in-memory database and a fake provider
 that sits at `AIClient._post`, so routing, retries, JSON repair, usage
@@ -242,6 +256,43 @@ That is deliberate - they assert on a phase that spec may not have.
   compared before and after. Patch a name where it is looked up -
   `station_images.sourcing.build_provider`, not the package.
 
+## The 7-8 August pass over question and image quality
+
+A real circuit was sat and scored badly for reasons that were not the
+candidate. Each of these is fixed, with the repair applied to the bank:
+
+- **A failed transcription was marked 0%.** Twenty-nine answers were lost to
+  the Google AI Studio free tier (20/day) on 3 Aug and five stations published
+  at 0%, reading as five subspecialties the candidate was hopeless at. The
+  routing cause was already fixed by sending every recording as WAV; the
+  marking now refuses a verdict instead, as a partly-marked written paper does.
+- **Questions promised images that never arrived.** 60 questions rewritten
+  across two passes: a question naming more than is on screen is trimmed to
+  what came, and one with nothing on screen has the examiner state the result
+  or asks what the candidate would expect. Runs automatically at the end of
+  every sourcing batch - `services/osce/reconcile.py`.
+- **The stem gave away the diagnosis.** 24 stations, including one that opened
+  with "The patient presents with bilateral Brown's Syndrome" beside the visual
+  acuity. The findings split is no longer shown the case summary, and a
+  deterministic check moves any sentence naming the diagnosis out of GIVEN.
+- **The diagnosis was revealed before any differential was asked.** 56
+  stations. Stating it mid-station is what the real handouts do, but only after
+  the candidate has been made to reason across possibilities.
+- **The vision gate agreed with what it was told to expect.** It captioned a
+  montage of unilateral Brown's as "bilateral" at confidence 1.00, restating
+  the station's own findings. `describe_blind` now looks once with the station
+  withheld, and its caption is the one stored - captions are load-bearing, as
+  reconciliation matches questions to images by what they say. All 789 figures
+  were re-captioned and `modality` is now populated on all of them.
+
+**A caution learned the hard way in that pass.** The blind sweep's modality arm
+compared an observed modality against `expected_modalities_for`, which for a
+figure that named no view guesses from the station's findings blob - "corneal
+neovascularisation" yields angiogram and calls a correct slit lamp photograph
+wrong. It produced 109 false disagreements before being restricted to questions
+that really asked for a named investigation. If a check compares against
+something inferred rather than something requested, it is not a check.
+
 ## Working effectively in a new session
 
 Read this file first, then work from the code. Avoid re-running the expensive
@@ -258,6 +309,10 @@ Nothing is blocking. Open items, roughly in order of value:
 1. **Re-test a station on the phone** — read-aloud, and whether the last
    answer's transcript now lands. Both were fixed but only the first has been
    confirmed by the user.
+2. **Deploy the frontend.** Two things are committed but not shipped: the
+   between-stations autostart (the briefing card no longer appears at every
+   door of a circuit) and the two admin buttons, "Match questions to images"
+   and the re-caption sweep. `.\scripts\deploy_frontend.ps1` then scp.
 3. **Daily circuit** builder works but has never been run through a real
    nine-station sitting.
 4. **Written papers** have been sat once end-to-end; the OSCE has been sat for
@@ -271,4 +326,14 @@ Nothing is blocking. Open items, roughly in order of value:
    dropdown in the Question bank, which the API already returns options for
    but the UI never rendered. The reports contain no VSAQs, so real ones for
    a given sitting will never exist.
-6. No backup routine. SiteGround has PostgreSQL backups - worth switching on.
+6. **The rest of the question arc.** The handouts ask for differentials
+   grouped by category - hereditary, compressive, inflammatory, infective -
+   where the bank asks for a number, and they supply concrete results ("all
+   bloods normal and MRI showed...") where the bank poses a hypothetical. The
+   marking keys hold flat lists, so this is more than a stem rewrite.
+7. **Some questions name the diagnosis in their own stem** - station 261 asks
+   for "the diagnostic criteria for Neurofibromatosis Type 1" before any
+   differential is possible. A handful of stations; not yet counted.
+8. No backup routine. SiteGround has PostgreSQL backups - worth switching on.
+   Parked on 8 Aug 2026 at the user's request: `scripts/backup_db.ps1` works
+   and has been run by hand, it simply is not scheduled.
