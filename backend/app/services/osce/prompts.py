@@ -568,6 +568,31 @@ def _unshowable_questions(prompts: list[dict[str, Any]]) -> list[str]:
     return problems
 
 
+def _unmarked_questions(prompts: list[dict[str, Any]]) -> list[str]:
+    """Questions the candidate answers for nothing.
+
+    The builder is told the marks must total 20 and that is checked, but
+    nothing said every question must carry some - so the model concentrates
+    them and leaves the rest at zero. 147 questions across 98 stations ended up
+    worth nothing, one station with three of its six, and the marker replies
+    "This question carries no marks" to an answer that took a minute of a
+    nine-minute station to give.
+
+    A question worth nothing is not a question. Either it earns marks or it
+    should not be asked.
+    """
+    problems = []
+    for index, prompt in enumerate(prompts):
+        rubric = prompt.get("rubric") or []
+        marks = sum(pt.get("marks", 0) or 0 for pt in rubric)
+        if marks <= 0:
+            problems.append(
+                f"question {prompt.get('label') or index} carries no marks; every question "
+                f"must be worth at least 1 of the 20"
+            )
+    return problems
+
+
 def _arc_problems(
     prompts: list[dict[str, Any]],
     has_image: bool = True,
@@ -580,6 +605,15 @@ def _arc_problems(
     steps = [p.get("step") for p in prompts]
     problems.extend(_generic_problems(prompts, vocabulary, aims))
     problems.extend(_unshowable_questions(prompts))
+    problems.extend(_unmarked_questions(prompts))
+
+    index = needs_differential_first(prompts)
+    if index is not None:
+        problems.append(
+            f"question {prompts[index].get('label') or index} states the diagnosis, but no "
+            f"earlier question asks for a differential - the candidate is told the answer "
+            f"before being asked to reason towards it"
+        )
 
     # Step 3 reads an ancillary image. The station need not already have one -
     # a question that asks for it says what it needs and the image is sourced -

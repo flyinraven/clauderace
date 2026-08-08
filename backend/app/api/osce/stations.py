@@ -251,6 +251,27 @@ def settle_stations(admin: AdminUser, db: DbSession) -> dict[str, Any]:
     return {"job_id": job.id, "station_count": len(ids)}
 
 
+@router.post("/stations/remark", status_code=status.HTTP_202_ACCEPTED)
+def remark_stations(admin: AdminUser, db: DbSession) -> dict[str, Any]:
+    """Give marks to the questions that carry none.
+
+    Only the marking key moves; the questions are left exactly as written.
+    Rebuilding them would discard the stems rewritten on 7-8 August and change
+    what images each question wants, which would mean sourcing the bank again.
+    """
+    from app.services.osce.remark import JOB_REMARK_STATIONS, stations_needing_marks
+
+    ids = stations_needing_marks(db)
+    if not ids:
+        raise HTTPException(status_code=400, detail="Every question already carries marks")
+    job = create_job(
+        db, JOB_REMARK_STATIONS, payload={"station_ids": ids},
+        created_by_id=admin.id, total_steps=len(ids),
+        message=f"Re-marking {len(ids)} station(s)",
+    )
+    return {"job_id": job.id, "station_count": len(ids)}
+
+
 @router.post("/figures/recaption", status_code=status.HTTP_202_ACCEPTED)
 def recaption_figures(admin: AdminUser, db: DbSession) -> dict[str, Any]:
     """Describe every stored image again, with the station withheld.
