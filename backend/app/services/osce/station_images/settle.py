@@ -14,6 +14,7 @@ from app.services.errors import log_error
 from app.services.imagesearch.relevance import named_modality, unsourceable_reason
 from app.services.jobs.runner import JobContext, JobHandlerError, register_handler
 from app.services.osce.station_images.constants import JOB_SETTLE_STATIONS
+from app.services.osce.sittability import answers_a_view
 from app.services.osce.station_images.verify import leaked_term, verbatim_findings_floor
 from app.services.osce.station_images.ingested import bound_figure_ids
 
@@ -79,15 +80,36 @@ def settle_station(db: Session, station: OsceStation) -> dict[str, int]:
     # A question's investigation, where the station already holds it.
     prompts = list(station.prompts or [])
     claimed = {i for p in prompts for i in bound_figure_ids(p)}
-    spare = [f for f in station.figures if f.image_id and f.id not in claimed]
+    # Words answer a question as well as a picture does. Sourcing binds only
+    # what it attached, so a figure that found no image and had its findings
+    # stated instead was left unbound and the question went on showing nothing:
+    # station 259 holds a description of the specular microscopy its question C
+    # asks for, written, approved, and attached to nobody.
+    spare = [f for f in station.figures if answers_a_view(f) and f.id not in claimed]
     for prompt in prompts:
         wanted = str(prompt.get("image_wanted") or "").strip()
         if not wanted or bound_figure_ids(prompt) or prompt.get("image_impossible"):
             continue
+
+        # The figure this question's own request created, matched on that
+        # request. Exact, because the string was copied from the question -
+        # and it is the only thing that can match a figure with no image,
+        # which has no modality to compare.
+        exact = next(
+            (f for f in spare if (f.wanted_description or "").strip() == wanted), None
+        )
+        if exact is not None:
+            prompt["figure_id"] = exact.id
+            spare.remove(exact)
+            bound += 1
+            continue
+
         asked = named_modality(wanted)
         if asked is None:
             continue
         for figure in list(spare):
+            if figure.image_id is None:
+                continue  # nothing to read a modality from
             if (figure.modality or named_modality(figure.caption or "")) != asked:
                 continue
             prompt["figure_id"] = figure.id

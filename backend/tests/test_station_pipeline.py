@@ -1851,3 +1851,84 @@ def test_a_station_whose_figures_are_all_claimed_is_not_selected(db):
     db.commit()
 
     assert station.id not in stations_with_bindable_figures(db)
+
+
+def test_settling_binds_stated_findings_to_the_question_that_asked(db):
+    """Station 259: the words exist, approved, attached to nobody.
+
+    Sourcing binds a figure to its question only when an image was attached,
+    so a question whose investigation could not be found - but whose findings
+    were stated instead - went on showing a blank screen next to a description
+    written for it. The audit reported "question C has no image", which was
+    true and not the problem.
+    """
+    from app.services.osce.station_images import settle_station
+
+    wanted = "Specular microscopy of the left cornea, showing abnormal endothelial cells"
+    station = make_station(db, prompts=[
+        {"label": "A", "text": "Please examine the anterior segment.", "seconds": 300,
+         "rubric": [{"text": "Describes the findings", "marks": 10}]},
+        {"label": "C", "text": "What does this specular microscopy show?", "seconds": 120,
+         "image_wanted": wanted, "rubric": [{"text": "Reads it", "marks": 10}]},
+    ])
+    figure = _figure(
+        db, station, image_id=None, position=1, wanted_description=wanted,
+        described_findings="The left cornea shows abnormal endothelial cells and "
+                           "reduced cell density.",
+        described_findings_approved=True,
+    )
+
+    outcome = settle_station(db, station)
+    db.expire_all()
+    station = db.query(type(station)).filter_by(id=station.id).one()
+
+    assert outcome["bound"] == 1
+    assert station.prompts[1]["figure_id"] == figure.id
+
+
+def test_settling_does_not_hand_a_question_words_written_for_another_view(db):
+    """The exact request is what matches, because it is what created the figure."""
+    from app.services.osce.station_images import settle_station
+
+    station = make_station(db, prompts=[
+        {"label": "C", "text": "What does this angiogram show?", "seconds": 120,
+         "image_wanted": "Cerebral angiogram of the circle of Willis",
+         "rubric": [{"text": "Reads it", "marks": 10}]},
+    ])
+    _figure(
+        db, station, image_id=None, position=1,
+        wanted_description="external photograph of the right eye",
+        described_findings="The right eye is proptosed with chemosis.",
+        described_findings_approved=True,
+    )
+
+    outcome = settle_station(db, station)
+    db.expire_all()
+    station = db.query(type(station)).filter_by(id=station.id).one()
+
+    assert outcome["bound"] == 0
+    assert station.prompts[0].get("figure_id") is None
+
+
+def test_settling_leaves_unpublished_words_unbound(db):
+    """Nothing is shown until it is released, so it answers nothing yet."""
+    from app.services.osce.station_images import settle_station
+
+    wanted = "OCT of the right macula"
+    station = make_station(db, prompts=[
+        {"label": "C", "text": "What does this OCT show?", "seconds": 120,
+         "image_wanted": wanted, "rubric": [{"text": "Reads it", "marks": 10}]},
+    ])
+    _figure(db, station, image_id=None, position=1, wanted_description=wanted,
+            described_findings="There is a full-thickness defect at the fovea.",
+            described_findings_approved=False)
+
+    outcome = settle_station(db, station)
+    db.expire_all()
+    station = db.query(type(station)).filter_by(id=station.id).one()
+
+    # Publishing and binding happen in one pass: the words are released first,
+    # and a released description is then bound like any other answer.
+    assert outcome["published"] == 1
+    assert outcome["bound"] == 1
+    assert station.prompts[0]["figure_id"] is not None

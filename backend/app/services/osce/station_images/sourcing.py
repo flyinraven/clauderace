@@ -30,6 +30,7 @@ from app.services.imagesearch.service import (
     download_candidate,
 )
 from app.services.osce.coverage import station_views
+from app.services.osce.sittability import answers_a_view
 from app.services.settings_store import SettingsStore
 from app.services.osce.station_images.constants import (
     MIN_MATCH_CONFIDENCE,
@@ -485,7 +486,7 @@ def source_prompt_images(
     the question carries them all.
     """
     prompts = list(station.prompts or [])
-    attached, failed, skipped = 0, 0, 0
+    attached, failed, skipped, described = 0, 0, 0, 0
 
     for index, prompt in enumerate(prompts):
         wanted = prompt.get("image_wanted")
@@ -534,6 +535,13 @@ def source_prompt_images(
             if outcome.get("attached"):
                 bound.append(figure.id)
                 attached += 1
+            elif answers_a_view(figure):
+                # No image, but the last resort wrote the findings and published
+                # them. That is an answer, and binding only what was attached
+                # left it on a figure the question never shows - so the words
+                # were written, approved, and read by nobody.
+                bound.append(figure.id)
+                described += 1
             else:
                 # Nothing suitable was found. The question would ask the
                 # candidate to read a blank screen, so the figure is left for an
@@ -548,14 +556,15 @@ def source_prompt_images(
             prompt["figure_id"] = bound[0]
             prompt["figure_ids"] = bound
 
-    if attached or skipped:
+    if attached or skipped or described:
         # Rebinding alone does not survive: the intermediate commit inside
         # image attachment leaves the column looking unchanged, and the
         # figure_id is quietly dropped. Flagging it dirty is what persists it.
         station.prompts = [dict(p) for p in prompts]
         flag_modified(station, "prompts")
     db.commit()
-    return {"attached": attached, "failed": failed, "impossible": skipped}
+    return {"attached": attached, "failed": failed, "impossible": skipped,
+            "described": described}
 
 
 def opening_figures(station: OsceStation) -> list[OsceFigure]:
