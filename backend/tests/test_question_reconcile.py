@@ -220,6 +220,49 @@ def test_a_restated_question_is_revisited_once_an_image_arrives():
         "figure_id": 7,
         "reconciled": {"mode": STATE, "basis": "expected"},
     }
-    assert classify_prompt(prompt, {7: "Optical coherence tomography of one macula"})[0] == UNCHANGED
-    # ...and a mismatch is still caught.
+    from app.services.osce.reconcile import RESTORE
+
+    # What arrived is the OCT it asked for, so the restatement goes.
+    assert classify_prompt(prompt, {7: "Optical coherence tomography of one macula"})[0] == RESTORE
+    # A restated question handed the WRONG picture is trimmed like any other:
+    # putting back "this is the OCT" over a fundus photograph would rebuild the
+    # fault this pass exists to remove.
     assert classify_prompt(prompt, {7: "Fundus photograph of the left eye"})[0] == TRIM
+
+
+def test_a_restated_question_is_put_back_once_its_image_arrives():
+    """Station 201, and the reason this cannot be left alone.
+
+    It was restated to "her corneal topography shows approximately 2 dioptres
+    of regular astigmatism" because no image could be found. The binder then
+    found the report's own topography. With the picture displayed beside that
+    sentence the candidate is shown the image and told the answer, and then
+    asked to describe it - a free mark, and the opposite of what the station
+    tests.
+    """
+    from app.services.osce.reconcile import RESTORE
+
+    prompt = {
+        "text": "Her corneal topography shows approximately 2 dioptres of regular astigmatism.",
+        "image_wanted": "Bilateral corneal topography",
+        "figure_id": 625,
+        "image_search_exhausted": True,
+        "reconciled": {
+            "mode": STATE,
+            "basis": "recorded",
+            "original": "This is her corneal topography. Talk me through what it shows.",
+        },
+    }
+    mode, here, _ = classify_prompt(prompt, {625: "Corneal topography of the right eye"})
+    assert mode == RESTORE
+    assert here == [625]
+
+
+def test_a_restated_question_with_still_nothing_shown_is_left_as_it_is():
+    prompt = {
+        "text": "What would you expect her chest X-ray to show?",
+        "image_wanted": "Chest X-ray",
+        "image_search_exhausted": True,
+        "reconciled": {"mode": STATE, "basis": "expected", "original": "This is her chest X-ray."},
+    }
+    assert classify_prompt(prompt, {})[0] == UNCHANGED

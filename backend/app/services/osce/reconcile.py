@@ -51,6 +51,8 @@ JOB_RECONCILE_QUESTIONS = "reconcile_station_questions"
 
 TRIM = "trim"
 STATE = "state"
+# A question restated because nothing was on screen, which now has something.
+RESTORE = "restore"
 UNCHANGED = "unchanged"
 
 SYSTEM_PROMPT = """\
@@ -191,19 +193,35 @@ def classify_prompt(
     ):
         return UNCHANGED, here, set()
 
+    was_restated = (prompt.get("reconciled") or {}).get("mode") == STATE
+
     if not here:
         # A question already restated as what the candidate would expect is
         # left alone while nothing has arrived for it. Without this it would be
         # rewritten on every run, and each rewrite overwrites the record of the
         # one before - which is how six questions lost the request they were
         # written with.
-        if (prompt.get("reconciled") or {}).get("mode") == STATE:
+        if was_restated:
             return UNCHANGED, here, set()
         return STATE, here, named_investigations(text, wanted)
 
     missing = named_investigations(text, wanted) - named_investigations(
         *(shown[i] for i in here)
     )
+
+    # It was restated because nothing was on screen, and what arrived covers
+    # what it asked for - the binder found the paper's own figure. The
+    # restatement has to go: station 201 was rewritten to say "her corneal
+    # topography shows approximately 2 dioptres of regular astigmatism", and
+    # with the topography now displayed beside it the candidate is shown the
+    # picture and told the answer, then asked to describe it.
+    #
+    # Only when it matches. A restated question handed the wrong picture is
+    # trimmed like any other - putting back "this is the OCT" over a fundus
+    # photograph would rebuild the fault this whole pass exists to remove.
+    if was_restated and not missing:
+        return RESTORE, here, set()
+
     return (TRIM if missing else UNCHANGED), here, missing
 
 
@@ -229,13 +247,31 @@ def reconcile_station(
         return {"trimmed": 0, "stated": 0, "expected": 0, "unchanged": 0, "failed": 0}
 
     shown = _shown_figures(db, station)
-    tally = {"trimmed": 0, "stated": 0, "expected": 0, "unchanged": 0, "failed": 0}
+    tally = {"trimmed": 0, "stated": 0, "expected": 0, "restored": 0,
+             "unchanged": 0, "failed": 0}
     changed = False
 
     for prompt in prompts:
         mode, here, missing = classify_prompt(prompt, shown)
         if mode == UNCHANGED:
             tally["unchanged"] += 1
+            continue
+
+        if mode == RESTORE:
+            # Deterministic: the wording it had before the restatement is
+            # stored, and it is the wording written for exactly this - a
+            # question with its image present. No model is needed to put back
+            # a sentence.
+            record = prompt.get("reconciled") or {}
+            original = record.get("original")
+            if not original:
+                tally["failed"] += 1
+                continue
+            prompt["text"] = original
+            prompt.pop("image_search_exhausted", None)
+            prompt.pop("reconciled", None)
+            tally["restored"] = tally.get("restored", 0) + 1
+            changed = True
             continue
 
         user = (
