@@ -313,6 +313,39 @@ function PartResult({ part }: { part: ResultPart }) {
         </p>
       </div>
 
+      {part.model_answer?.length > 0 && (
+        <div className="mt-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            The model answer
+          </p>
+          <p className="mt-0.5 text-xs text-slate-500">
+            What the marking key credits. It is not what marked you — the marker
+            works from the key itself — so read this to learn the answer, not to
+            argue with the score.
+          </p>
+          <ul className="mt-2 space-y-1.5">
+            {part.model_answer.map((point) => (
+              <li key={point.id} className="flex gap-3 text-sm">
+                <span className="mt-0.5 min-w-10 shrink-0 text-right text-xs font-semibold tabular-nums text-slate-500">
+                  {point.marks}
+                </span>
+                <div className="min-w-0">
+                  <p className="text-slate-800">{point.text}</p>
+                  <div className="mt-0.5 flex flex-wrap gap-1.5">
+                    {point.is_critical && <Badge tone="red">Critical</Badge>}
+                    {/* The highest-value points in the bank: what the examiners
+                        themselves wrote that the real cohort missed. */}
+                    {point.from_examiner_feedback && (
+                      <Badge tone="amber">From the examiners' report</Badge>
+                    )}
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {merged.size > 0 && (
         <div className="mt-3">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../api/client'
 import { Alert, Badge, Button, Card, Loading, cx } from '../components/ui'
+import { StationFigureView, type StationFigure } from '../components/StationFigureView'
 
 interface BreakdownItem {
   index: number
@@ -18,6 +19,9 @@ interface PromptResult {
   marks: number
   awarded: number | null
   transcript: string
+  // What was on screen when this question was asked. A mark can only be read
+  // against the picture it was given for.
+  figures: StationFigure[]
   flagged: boolean
   examiners: { pass: number; awarded: number; feedback: string | null; breakdown: BreakdownItem[] | null }[]
 }
@@ -32,6 +36,9 @@ interface Payload {
     findings: string | null
     findings_elicited: string | null
     common_mistakes: string[] | null
+    cohort_performance: string | null
+    aims: string[] | null
+    figures: StationFigure[]
   }
   grading_status: string
   result: {
@@ -176,6 +183,16 @@ export default function OsceResult() {
         </Card>
       )}
 
+      {data.station.figures?.length > 0 && (
+        <Card title="The patient you examined">
+          <div className="grid gap-3 sm:grid-cols-2">
+            {data.station.figures.map((figure) => (
+              <StationFigureView key={figure.id} figure={figure} />
+            ))}
+          </div>
+        </Card>
+      )}
+
       {data.station.diagnosis && (
         <Card title="The diagnosis">
           <p className="prose-clinical">{data.station.diagnosis}</p>
@@ -189,6 +206,26 @@ export default function OsceResult() {
                   <li key={i}>{m}</li>
                 ))}
               </ul>
+            </div>
+          )}
+          {data.station.aims && data.station.aims.length > 0 && (
+            <div className="mt-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                What the station was testing
+              </p>
+              <ul className="mt-1 list-inside list-disc space-y-1 text-sm text-slate-600">
+                {data.station.aims.map((a, i) => (
+                  <li key={i}>{a}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {data.station.cohort_performance && (
+            <div className="mt-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                How the real cohort performed
+              </p>
+              <p className="mt-1 text-sm text-slate-600">{data.station.cohort_performance}</p>
             </div>
           )}
         </Card>
@@ -215,6 +252,14 @@ export default function OsceResult() {
             </div>
           }
         >
+          {prompt.figures?.length > 0 && (
+            <div className="mb-3 grid gap-3 sm:grid-cols-2">
+              {prompt.figures.map((figure) => (
+                <StationFigureView key={figure.id} figure={figure} />
+              ))}
+            </div>
+          )}
+
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
             What you said
           </p>
