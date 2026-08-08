@@ -1516,6 +1516,54 @@ def test_sourcing_hands_over_to_describing_when_it_finishes(db, admin, run_jobs,
     assert queued[0].payload["figure_ids"]
 
 
+def test_a_description_that_names_the_condition_is_asked_again(db, ai):
+    """A leak is a wording problem, and the model cannot see it.
+
+    The guard is the only thing that knows which phrase gave the answer away,
+    so discarding the description silently threw away the findings as well as
+    the name. It is told the phrase and asked for the appearance instead.
+    """
+    from app.services.ai import AIClient
+    from app.services.osce.station_images import describe_findings
+
+    station = make_station(db)
+    station.diagnosis = "Keratoconus with corneal scarring"
+    station.findings_elicited = "There is corneal scarring and irregular astigmatism."
+    db.commit()
+
+    replies = [
+        {"description": "The appearances are those of keratoconus with corneal scarring."},
+        {"description": "The cornea is conical, with a central scar and irregular reflexes."},
+    ]
+    ai.responder = lambda body, n: json.dumps(replies[min(n, len(replies)) - 1])
+
+    text, _concern = describe_findings(AIClient(db), station, "slit lamp photograph")
+
+    assert text == replies[1]["description"], "the second answer is the one kept"
+    assert len(ai.requests) == 2, "exactly one correction, not a retry loop"
+    assert "keratoconus" in ai.user_text(1).lower(), (
+        "the correction has to name the phrase that leaked"
+    )
+
+
+def test_a_description_that_leaks_twice_is_given_up_on(db, ai):
+    """One correction, then the station goes without rather than give it away."""
+    from app.services.ai import AIClient
+    from app.services.osce.station_images import describe_findings
+
+    station = make_station(db)
+    station.diagnosis = "Keratoconus with corneal scarring"
+    station.findings_elicited = "There is corneal scarring and irregular astigmatism."
+    db.commit()
+
+    ai.responder = lambda body, n: json.dumps({"description": "This is keratoconus."})
+
+    text, _concern = describe_findings(AIClient(db), station, "slit lamp photograph")
+
+    assert text is None
+    assert len(ai.requests) == 2
+
+
 def test_describing_a_gap_actually_writes_the_words_down(db, admin, run_jobs, ai):
     """The describe job has to persist what it was asked to write.
 

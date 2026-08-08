@@ -97,41 +97,47 @@ def describe_findings(
     # exists for.
     if not truth and not rubric_points and not (station.diagnosis or "").strip():
         return None, None
-    try:
-        data = client.complete_json(
-            task="model_answer",
-            system=DESCRIBE_SYSTEM,
-            user=(
-                f"SUBSPECIALTY: {station.subspecialty or 'unknown'}\n\n"
-                f"THIS STATION'S RECORDED FINDINGS - authoritative where they speak:\n"
-                f"{truth or '(none recorded)'}\n\n"
-                f"CONFIRMED DIAGNOSIS - established, so its signs are not a guess. "
-                f"Never name it, or any of its terms:\n"
-                f"{station.diagnosis or '(not recorded)'}\n\n"
-                f"WHAT THE CANDIDATE IS MARKED ON - every one of these must be "
-                f"earnable by someone looking at the patient you describe:\n"
-                f"{rubric_points or '(not specified)'}\n\n"
-                f"State what this patient demonstrates."
-            ),
-            # Enough for the description AND whatever the model thinks first.
-            # At 320 the reply was cut off mid-JSON and every station came back
-            # "Could not describe findings" - a parse failure reported as the
-            # model declining, which is why 47 stations looked like refusals.
-            max_tokens=900,
-            temperature=0.0,
-        )
-    except (AIError, ValueError, AttributeError) as exc:
-        # NOT the same as declining, and it must never again be reported as if
-        # it were. Returning "no description" here made 47 HTTP 404s indis-
-        # tinguishable from 47 stations the model had rightly refused to invent
-        # for: the job finished, said "described 0, failed 0", and looked like
-        # a healthy no-op while nothing worked at all.
-        logger.warning(
-            "Could not describe findings for station %s: %s", station.id, exc
-        )
-        raise DescriptionUnavailable(str(exc)) from exc
 
-    text = str((data or {}).get("description") or "").strip()
+    request = (
+        f"SUBSPECIALTY: {station.subspecialty or 'unknown'}\n\n"
+        f"THIS STATION'S RECORDED FINDINGS - authoritative where they speak:\n"
+        f"{truth or '(none recorded)'}\n\n"
+        f"CONFIRMED DIAGNOSIS - established, so its signs are not a guess. "
+        f"Never name it, or any of its terms:\n"
+        f"{station.diagnosis or '(not recorded)'}\n\n"
+        f"WHAT THE CANDIDATE IS MARKED ON - every one of these must be "
+        f"earnable by someone looking at the patient you describe:\n"
+        f"{rubric_points or '(not specified)'}\n\n"
+        f"State what this patient demonstrates."
+    )
+
+    def ask(user: str) -> str:
+        try:
+            data = client.complete_json(
+                task="model_answer",
+                system=DESCRIBE_SYSTEM,
+                user=user,
+                # Enough for the description AND whatever the model thinks
+                # first. At 320 the reply was cut off mid-JSON and every station
+                # came back "Could not describe findings" - a parse failure
+                # reported as the model declining, which is why 47 stations
+                # looked like refusals.
+                max_tokens=900,
+                temperature=0.0,
+            )
+        except (AIError, ValueError, AttributeError) as exc:
+            # NOT the same as declining, and it must never again be reported as
+            # if it were. Returning "no description" here made 47 HTTP 404s
+            # indistinguishable from 47 stations the model had rightly refused
+            # to invent for: the job finished, said "described 0, failed 0",
+            # and looked like a healthy no-op while nothing worked at all.
+            logger.warning(
+                "Could not describe findings for station %s: %s", station.id, exc
+            )
+            raise DescriptionUnavailable(str(exc)) from exc
+        return str((data or {}).get("description") or "").strip()
+
+    text = ask(request)
     if not text:
         # The model is told to return nothing rather than fill a gap, so this
         # is a legitimate outcome - but it used to be the one path that logged
@@ -142,12 +148,36 @@ def describe_findings(
             station.id, (rubric_points or truth)[:120],
         )
         return None, None
+
     leak = leaked_term(text, station)
     if leak:
-        logger.warning(
-            "Discarded a description of station %s: it gave away %r", station.id, leak
+        # One correction, not a discard. The model is not refusing here - it has
+        # written the findings and reached for the name while doing it, which is
+        # a wording problem and the only one it cannot see, because the guard is
+        # the thing that knows. Told which words gave the answer away it writes
+        # the appearance instead; thrown away silently, the station gets nothing
+        # and nobody learns why.
+        logger.info(
+            "Station %s gave away %r; asking once for the appearance instead",
+            station.id, leak,
         )
-        return None, None
+        text = ask(
+            f"{request}\n\n"
+            f"Your previous answer said {leak!r}. That names the diagnosis "
+            f"rather than reporting the sign, and the candidate is marked on "
+            f"arriving at it themselves. Say the same thing again as raw "
+            f"appearance - what is seen, measured or moves, in plain words - "
+            f"without that phrase and without any other name for the condition."
+        )
+        if not text:
+            return None, None
+        leak = leaked_term(text, station)
+        if leak:
+            logger.warning(
+                "Discarded a description of station %s: it gave away %r even "
+                "after being asked for the appearance instead", station.id, leak
+            )
+            return None, None
     # Advisory, not a veto. Three runs in a row it discarded a correct
     # description for using ordinary examination words the findings happened
     # not to contain - "larger" and "constricts" for a dilated pupil with

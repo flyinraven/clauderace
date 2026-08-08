@@ -127,6 +127,8 @@ larger smaller equal unequal bigger reacts react reacting reaction reactive
 responds response constricts constrict constricting dilates dilate dilated
 brisk sluggish target fixation blink blinks closes closed opens open
 greater lesser difference size shape position movement excursion range
+status post previous history also known stable untreated residual
+only signs surgery despite childhood muscles angle peripheral
 """.split())
 
 # Words are matched on a shared opening, not by stripping suffixes. A suffix
@@ -201,17 +203,58 @@ def grounding_problem(
     return None
 
 
+def _significant(text: str | None) -> list[str]:
+    """The words of a phrase that carry a clinical claim, in order."""
+    innocuous = _DIAGNOSIS_STOPWORDS | _GENERIC_WORDS
+    return [
+        w
+        for w in re.findall(r"[a-z][a-z'\-]{3,}", (text or "").lower())
+        if w not in innocuous
+    ]
+
+
+def _adjacent_pairs(words: list[str]) -> set[frozenset[str]]:
+    """Neighbouring word pairs, unordered.
+
+    Unordered because "overaction of the inferior oblique" and "inferior
+    oblique overaction" are the same phrase, and a rule that caught only one of
+    them catches nothing - the model writes whichever reads better.
+    """
+    return {frozenset(pair) for pair in zip(words, words[1:]) if len(set(pair)) == 2}
+
+
 def leaked_term(text: str, station: OsceStation) -> str | None:
     """What this description gives away, or None if it only reports signs.
 
     Deterministic rather than another model call: it has to be reliable, it
     runs on every description, and it has to be free.
 
-    Two ways to give the game away. Naming the condition is the obvious one,
-    and is checked against the station's diagnosis and its case summary, since
-    the summary names it too. The subtler one is characterising the sign -
-    "congruous, with macular sparing" names no diagnosis at all and is still
-    the answer to the question being asked.
+    Three ways to give the game away.
+
+    Characterising the sign is the subtlest: "congruous, with macular sparing"
+    names no diagnosis at all and is still the whole answer.
+
+    Naming the condition is the obvious one - but a word check alone could not
+    tell the name from the sign, and refused almost every description ever
+    written. Of 38 figures put through the pass, 37 had good descriptions
+    thrown away: a monocular elevation deficiency may not say "elevation", a
+    glaucomatous disc may not say "cupping", and station 40 could not say
+    "stable" because its diagnosis says "status post DMEK". The station was
+    left with no image and no words, which is the one thing a candidate cannot
+    work with.
+
+    What separates the name from the sign is the station's own recorded
+    findings. Those are what the examiners printed, and they are the signs the
+    candidate is meant to have described to them: a word they use is a word
+    this may use. A word that appears only in the diagnosis - "myasthenia",
+    "Fuchs", "keratoconus" - is the label, and the label is the answer.
+
+    The label is rarely one word, though. "Partially accommodative esotropia"
+    is a station whose findings say all three, so every word of it is fair -
+    and stating them together is still handing over the diagnosis. So any
+    neighbouring pair of the diagnosis's own words is refused however well
+    grounded each half is, which is what stops the findings being quoted back
+    as a name.
     """
     conclusion = _CONCLUSION_RE.search(text)
     if conclusion:
@@ -220,16 +263,28 @@ def leaked_term(text: str, station: OsceStation) -> str | None:
     # Only the diagnosis, not the case summary. The summary is prose full of
     # ordinary clinical vocabulary - checking it rejected "there is a defect in
     # the left half of each field" because the summary happened to say "field".
+    diagnosis = _significant(station.diagnosis)
+    if not diagnosis:
+        return None
+
+    spoken = _significant(text)
+    named = _adjacent_pairs(diagnosis) & _adjacent_pairs(spoken)
+    if named:
+        return " ".join(sorted(next(iter(named))))
+
     # Anatomy is not a giveaway. "Adie's pupil" made "pupil" a forbidden word,
     # and a dilated pupil with light-near dissociation cannot be described
-    # without it - so the only possible description was discarded every time.
-    # The same trap sits under every diagnosis named after a structure: optic
-    # disc drusen, band keratopathy, macular hole. What gives the answer away
-    # is the distinctive part, "Adie".
-    innocuous = _DIAGNOSIS_STOPWORDS | _GENERIC_WORDS
-    lowered = text.lower()
-    for word in re.findall(r"[a-z][a-z'\-]{3,}", (station.diagnosis or "").lower()):
-        if word not in innocuous and word in lowered:
+    # without it. The same trap sits under every diagnosis named after a
+    # structure: optic disc drusen, band keratopathy, macular hole. What gives
+    # the answer away is the distinctive part, "Adie".
+    allowed = set(
+        _significant(getattr(station, "findings_elicited", None))
+        + _significant(getattr(station, "findings", None))
+    )
+    for word in diagnosis:
+        if _grounded(word, allowed):
+            continue
+        if re.search(rf"\b{re.escape(word)}\w*", text, re.IGNORECASE):
             return word
     return None
 

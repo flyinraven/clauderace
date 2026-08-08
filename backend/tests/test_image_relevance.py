@@ -86,6 +86,87 @@ def test_an_unknown_modality_answer_does_not_gate() -> None:
 from app.services.osce.station_images import leaked_term  # noqa: E402
 
 
+class _ExaminedStation:
+    """A station whose examiners printed their findings, as every real one does."""
+
+    def __init__(self, diagnosis: str, findings: str):
+        self.diagnosis = diagnosis
+        self.findings_elicited = findings
+        self.findings = None
+        self.case_summary = None
+        self.id = 1
+
+
+def test_the_sign_the_examiners_printed_may_be_stated() -> None:
+    """The failure that left 37 of 38 figures with no words at all.
+
+    Every one of these is a word the station's own findings use, and none of
+    them can be worked around: an eye that does not elevate, a disc that is
+    cupped, a lid that droops. Refusing them refused the whole description,
+    and the candidate met a station with no image and nothing written either.
+    """
+    cases = [
+        ("Right monocular elevation deficiency with hypotropia and ptosis",
+         "There is a right hypotropia in primary position with ptosis, and "
+         "elevation of the right eye is limited.",
+         "The right eye sits lower and does not elevate past the midline. "
+         "There is a droop of the right upper lid."),
+        ("Traumatic right aphakia with glaucoma and advanced optic disc cupping",
+         "The right eye is aphakic with advanced cupping of the optic disc.",
+         "The right disc is deeply cupped and no lens is present behind the pupil."),
+        ("Fuchs endothelial corneal dystrophy - right eye status post DMEK",
+         "Corneal guttata with stromal thickening in the left eye; the right "
+         "cornea is clear following graft.",
+         "The left cornea shows guttata with stromal thickening. The right "
+         "cornea is clear and the graft looks stable."),
+    ]
+    for diagnosis, findings, description in cases:
+        station = _ExaminedStation(diagnosis, findings)
+        assert leaked_term(description, station) is None, (
+            f"{diagnosis!r} refused a description made of its own findings"
+        )
+
+
+def test_the_words_of_the_findings_still_may_not_be_assembled_into_the_name() -> None:
+    """Grounded words, put back together, are the answer again.
+
+    Station 119's findings say "partially accommodative esotropia" in so many
+    words, so each of them is fair to state. Saying them next to each other is
+    handing the candidate what the station exists to ask.
+    """
+    station = _ExaminedStation(
+        "Partially accommodative esotropia with bilateral inferior oblique overaction.",
+        "The patient has a partially accommodative esotropia. There is "
+        "bilateral inferior oblique overaction.",
+    )
+    assert leaked_term("There is an accommodative esotropia.", station)
+    assert leaked_term("There is overaction of the inferior oblique muscles.", station), (
+        "the same phrase reordered is the same phrase"
+    )
+    assert leaked_term(
+        "The eyes show an esotropia which is accommodative in nature.", station
+    )
+    # The sign itself, without the qualifier that names the condition.
+    assert leaked_term(
+        "The right eye turns inwards, and the deviation reduces when the "
+        "glasses are worn.", station
+    ) is None
+
+
+def test_a_name_the_findings_never_use_is_still_refused() -> None:
+    """The label lives in the diagnosis alone; that is what makes it the label."""
+    station = _ExaminedStation(
+        "Myasthenia gravis with ocular involvement",
+        "Bilateral asymmetric ptosis, worse on the left, fatiguing on sustained upgaze.",
+    )
+    assert leaked_term("The findings are those of ocular myasthenia.", station)
+    assert leaked_term("There is bilateral ptosis due to myasthenia gravis.", station)
+    assert leaked_term(
+        "There is a droop of both upper lids which worsens on sustained upgaze.",
+        station,
+    ) is None
+
+
 class _DiagnosedStation:
     def __init__(self, diagnosis: str | None, case_summary: str | None = None):
         self.diagnosis = diagnosis
