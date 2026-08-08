@@ -412,6 +412,18 @@ def blind_disagreement(blind: dict[str, Any], wanted: str | None, station: OsceS
     if _BILATERAL.search(expectation) and blind.get("affected") == "one_eye_affected":
         return "the station describes both eyes; only one is affected in this image"
 
+    # Only where `wanted` is a request for a particular investigation - "CT scan
+    # of the orbits". A figure that named no view carries the station's whole
+    # findings blob instead, and `expected_modalities_for` then guesses from
+    # whatever words happen to be in it: "anterior segment and an optic nerve
+    # pigmented lesion" yields external/slit_lamp/topography and calls the
+    # correct fundus photograph wrong, and "corneal neovascularisation" yields
+    # angiogram and calls the correct slit lamp photograph wrong. Comparing a
+    # modality against a guess produced 146 false disagreements on the first
+    # sweep. Laterality above is safe either way: the findings text really does
+    # say whether both eyes are involved.
+    if not (wanted or "").strip():
+        return None
     expected = expected_modalities_for(station, wanted)
     seen = str(blind.get("modality") or "").strip().lower()
     if expected and seen and seen not in expected:

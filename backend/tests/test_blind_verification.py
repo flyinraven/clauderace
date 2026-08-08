@@ -74,3 +74,22 @@ def test_a_missing_blind_description_is_not_a_disagreement():
     """The call is allowed to fail; losing a caption must not lose the image."""
     station = OsceStation(diagnosis="Anything", findings_elicited="both eyes affected")
     assert blind_disagreement({}, None, station) is None
+
+
+def test_modality_is_not_judged_against_a_findings_blob():
+    """A figure that named no view carries the station's whole findings text,
+    and `expected_modalities_for` then guesses from whatever words are in it.
+
+    Figure 19 wanted "a normal anterior segment and an optic nerve pigmented
+    lesion" - which yields external/slit_lamp/topography and calls the correct
+    fundus photograph wrong. 146 of the first sweep's 169 disagreements were
+    this.
+    """
+    station = OsceStation(
+        diagnosis="Optic disc melanocytoma",
+        findings_elicited="normal anterior segment and an optic nerve pigmented lesion",
+    )
+    blind = {"modality": "fundus", "laterality": "one_eye", "affected": "one_eye_affected"}
+    assert blind_disagreement(blind, None, station) is None
+    # But a question that really did ask for a CT is still checked.
+    assert blind_disagreement(blind, "CT scan of the orbits", station) is not None
