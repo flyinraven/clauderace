@@ -78,6 +78,26 @@ def opening_figures(station: OsceStation) -> list[OsceFigure]:
     )
 
 
+def answers_a_view(figure: OsceFigure) -> bool:
+    """Whether this figure actually puts the view in front of the candidate.
+
+    An image does. So do the findings stated in words: that is the last resort
+    of the image protocol, reached only when every search has failed, and the
+    candidate reads them on entering exactly where a photograph would have
+    been. Counting images alone called 20 stations unanswerable on the same
+    day the describing pass gave every one of them something to read - and,
+    worse, the sitting and the audit then disagreed about the same station,
+    because `sittable_prompts` has always treated stated findings as something
+    shown.
+    """
+    if figure.image_id is not None and figure.verification_status != "rejected":
+        return True
+    # Unapproved words are not shown, so they answer nothing yet.
+    return bool(
+        (figure.described_findings or "").strip() and figure.described_findings_approved
+    )
+
+
 def station_faults(station: OsceStation) -> list[Fault]:
     """Every reason this station's marks cannot currently be earned."""
     faults: list[Fault] = []
@@ -86,11 +106,7 @@ def station_faults(station: OsceStation) -> list[Fault]:
     # Counting it as "not approved" made a station carrying three refused images
     # report three faults that no one could act on, and inflated the audit with
     # work that does not exist.
-    opening = [
-        f
-        for f in opening_figures(station)
-        if f.image_id is not None and f.verification_status != "rejected"
-    ]
+    opening = [f for f in opening_figures(station) if answers_a_view(f)]
 
     # --- What the candidate opens on ------------------------------------
     if views and not opening:
@@ -107,6 +123,12 @@ def station_faults(station: OsceStation) -> list[Fault]:
     seen_images: dict[int, int] = {}
     for figure in opening:
         label = f"figure {figure.position}"
+        # Everything below judges a photograph - whether it is the right one,
+        # whether it repeats another, whether anyone has approved it. A view
+        # answered in words has no photograph to judge, and the description was
+        # written and published under the leak guard rather than the image one.
+        if figure.image_id is None:
+            continue
         # The same photograph attached twice is one view shown twice, which is
         # what a rubric split into technique marks used to produce.
         if figure.image_id in seen_images:

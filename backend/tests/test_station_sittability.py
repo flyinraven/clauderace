@@ -183,3 +183,67 @@ def test_a_rejected_figure_is_a_decision_taken_not_one_outstanding(db):
     db.refresh(station)
 
     assert station_faults(station) == [], "only the approved opening image counts"
+
+
+def test_findings_stated_in_words_answer_the_view(db):
+    """Station 119: no photograph exists, so the examiner states the signs.
+
+    That is the last resort of the image protocol, not a hole in it - the
+    candidate reads the findings on entering, where a photograph would have
+    been. Counting images alone called 20 stations unanswerable on the day the
+    describing pass had just given every one of them something to read, and put
+    the audit at odds with `sittable_prompts`, which has always treated stated
+    findings as something shown.
+    """
+    station = make_station(db, prompts=[
+        {"label": "A", "text": "Please examine the patient's eye movements.",
+         "seconds": 400, "rubric": [{"text": "Describes the deviation", "marks": 18}]},
+        {"label": "B", "text": "How would you manage her?", "seconds": 140,
+         "rubric": [{"text": "Gives a plan", "marks": 2}]},
+    ])
+    _figure(db, station, None, position=0, verification_status="described",
+            is_approved=False, match_confidence=None,
+            described_findings="The right eye turns inwards in primary position.",
+            described_findings_approved=True)
+    db.commit()
+    db.refresh(station)
+
+    assert station_faults(station) == []
+    assert is_sittable(station)
+
+
+def test_words_nobody_has_published_answer_nothing(db):
+    """Held for approval is not shown, and what is not shown cannot be read."""
+    station = make_station(db, prompts=[
+        {"label": "A", "text": "Please examine the patient's eye movements.",
+         "seconds": 400, "rubric": [{"text": "Describes the deviation", "marks": 18}]},
+    ])
+    _figure(db, station, None, position=0, verification_status="described",
+            is_approved=False, match_confidence=None,
+            described_findings="The right eye turns inwards in primary position.",
+            described_findings_approved=False)
+    db.commit()
+    db.refresh(station)
+
+    assert "no_opening_image" in _kinds(station)
+
+
+def test_a_described_view_is_not_judged_as_a_photograph(db):
+    """It has none, so the image checks have nothing to say about it.
+
+    A figure with no image carries no approval and no confidence score. Running
+    the photograph checks over it reported that nothing was approved and that
+    it scraped in at 0% - two faults about a picture that does not exist.
+    """
+    station = make_station(db, prompts=[
+        {"label": "A", "text": "Please examine the patient's eye movements.",
+         "seconds": 400, "rubric": [{"text": "Describes the deviation", "marks": 18}]},
+    ])
+    _figure(db, station, None, position=0, verification_status="described",
+            is_approved=False, match_confidence=None,
+            described_findings="The right eye turns inwards in primary position.",
+            described_findings_approved=True)
+    db.commit()
+    db.refresh(station)
+
+    assert _kinds(station) & {"not_approved", "low_confidence"} == set()
