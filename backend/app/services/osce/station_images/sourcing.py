@@ -33,6 +33,7 @@ from app.services.osce.coverage import station_views
 from app.services.settings_store import SettingsStore
 from app.services.osce.station_images.constants import (
     MIN_MATCH_CONFIDENCE,
+    FROM_PAPER,
     MIN_REPRESENTATIVE_CONFIDENCE,
     SETTLED_MATCH_CONFIDENCE,
 )
@@ -588,7 +589,14 @@ def opening_image_is_settled(station: OsceStation) -> bool:
     # A representative image is a picture of the right disease and the wrong
     # patient; it is worth another search. `faithful` is what the vision model
     # writes now, `verified` what it wrote before the tiers were named.
-    if figure.verification_status not in {"faithful", "verified"}:
+    #
+    # `from_paper` is settled by definition and was missing from this set. It is
+    # the photograph the examiners themselves printed - the real candidates were
+    # shown it - so there is nothing a search could find that would be better,
+    # and a re-source was buying a stranger's picture over it on 25 stations.
+    # Trusting it is also the cheap answer: a search plus its vision calls is
+    # the largest per-station cost in the pipeline.
+    if figure.verification_status not in {"faithful", "verified", FROM_PAPER}:
         return False
     # No confidence at all is a figure from before the score was recorded, not a
     # bad one - it is left alone, as the audit leaves it.

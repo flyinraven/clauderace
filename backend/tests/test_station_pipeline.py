@@ -1664,3 +1664,45 @@ def test_an_unreachable_model_is_a_failure_not_a_shrug(db, monkeypatch):
             return {"description": ""}
 
     assert describe_findings(_Declines(), station, "external photograph") == (None, None)
+
+
+def test_the_papers_own_photograph_is_never_re_bought(db):
+    """It is the image the real candidates were shown.
+
+    `opening_image_is_settled` listed only the tiers the web grader writes, so
+    a station whose opening image came from the examiners' report was never
+    settled and a re-source went shopping for a replacement - on 25 stations.
+    A search plus its vision calls is the largest per-station cost there is,
+    and it was being spent to replace the best image available with a
+    stranger's.
+    """
+    from app.models import Image, OsceFigure, OsceStation
+    from app.services.osce.station_images import opening_image_is_settled
+    from app.services.osce.station_images.constants import FROM_PAPER
+
+    image = Image(
+        sha256="x" * 64, content_type="image/png", data=b"x", size_bytes=1, origin="pdf"
+    )
+    db.add(image)
+    db.flush()
+
+    station = OsceStation(
+        title="Paper station", subspecialty="Glaucoma", prompts=[], source="past_paper"
+    )
+    db.add(station)
+    db.flush()
+    figure = OsceFigure(
+        station_id=station.id, position=0, image_id=image.id,
+        is_approved=True, verification_status=FROM_PAPER, match_confidence=None,
+    )
+    db.add(figure)
+    db.commit()
+    db.refresh(station)
+
+    assert opening_image_is_settled(station) is True
+
+    # And one the vision gate called representative is still worth another look.
+    figure.verification_status = "representative"
+    db.commit()
+    db.refresh(station)
+    assert opening_image_is_settled(station) is False
