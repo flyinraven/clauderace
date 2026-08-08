@@ -210,19 +210,6 @@ def handle_describe_station_figures(ctx: JobContext) -> bool:
             described, concern = describe_findings(
                 AIClient(ctx.db), station, figure.wanted_description
             )
-        except DescriptionUnavailable as exc:
-            # Every figure will hit the same wall - a bad model id, a provider
-            # that serves none of them, an exhausted key - so failing the job
-            # is the honest report. Finishing 47 times and calling it "no
-            # words" is what hid this for an evening.
-            ctx.db.rollback()
-            log_error(ctx.db, source="osce_images", message=str(exc),
-                      context={"figure_id": figure.id, "station_id": station.id})
-            raise JobHandlerError(
-                f"Could not write any findings: {exc}. Nothing was described - "
-                f"check Admin > Settings that the model id is one your provider "
-                f"serves."
-            ) from exc
             if not described:
                 # Almost every figure that reaches this job has no
                 # `wanted_description`: it was written by ingest, or the view it
@@ -265,6 +252,19 @@ def handle_describe_station_figures(ctx: JobContext) -> bool:
                 empty.append(figure.id)
                 ctx.set_result(no_words=empty)
             ctx.db.commit()
+        except DescriptionUnavailable as exc:
+            # Every figure will hit the same wall - a bad model id, a provider
+            # that serves none of them, an exhausted key - so failing the job
+            # is the honest report. Finishing 47 times and calling it "no
+            # words" is what hid this for an evening.
+            ctx.db.rollback()
+            log_error(ctx.db, source="osce_images", message=str(exc),
+                      context={"figure_id": figure.id, "station_id": station.id})
+            raise JobHandlerError(
+                f"Could not write any findings: {exc}. Nothing was described - "
+                f"check Admin > Settings that the model id is one your provider "
+                f"serves."
+            ) from exc
         except Exception as exc:  # noqa: BLE001 - one figure must not stop the pass
             ctx.db.rollback()
             logger.exception("Could not describe figure %s", figure.id)

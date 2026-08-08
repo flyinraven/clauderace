@@ -1516,6 +1516,37 @@ def test_sourcing_hands_over_to_describing_when_it_finishes(db, admin, run_jobs,
     assert queued[0].payload["figure_ids"]
 
 
+def test_describing_a_gap_actually_writes_the_words_down(db, admin, run_jobs, ai):
+    """The describe job has to persist what it was asked to write.
+
+    Everything after the description call once sat inside the `except` block
+    that raises, so the job read the words and stored none of them: every
+    station whose search came back empty stayed empty, image and text both,
+    and the pass reported a clean finish each time.
+    """
+    from app.models import OsceFigure
+    from app.services.jobs.runner import create_job
+    from app.services.osce.station_images import JOB_DESCRIBE_STATION_FIGURES
+
+    station = make_station(db)
+    figure = OsceFigure(station_id=station.id, position=0, image_id=None,
+                        wanted_description="external photograph of both eyes")
+    db.add(figure)
+    db.commit()
+
+    ai.responder = lambda body, n: json.dumps(
+        {"description": "The right eye turns inwards in primary position."}
+    )
+    create_job(db, JOB_DESCRIBE_STATION_FIGURES, payload={"figure_ids": [figure.id]},
+               created_by_id=admin.id, total_steps=1)
+    run_jobs()
+
+    db.refresh(figure)
+    assert figure.described_findings, "the words the job wrote must reach the figure"
+    assert figure.described_findings_approved, "there is no image, so they are shown"
+    assert figure.verification_status == "described"
+
+
 def test_the_stations_findings_do_not_stand_in_for_an_investigation(db):
     """Fundus findings are not a description of a CT angiogram.
 
