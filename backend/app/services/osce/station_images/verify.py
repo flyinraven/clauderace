@@ -335,9 +335,20 @@ Name the modality as exactly one of: external, slit_lamp, fundus, angiogram,
 oct, ultrasound, radiology, visual_field, topography, pathology, other. For
 radiology say in `shows` whether it is CT or MRI, and which region.
 
-The caption must name only the modality, the laterality and the view. It must
-NOT name a diagnosis, and it must not describe the abnormality - a candidate
-will read it before being asked to describe the image themselves.
+The caption is read by a candidate sitting the station, so write it as English,
+not as the field values above. Never put "one_eye", "both_eyes" or "unclear"
+in it. Say "the right eye", "both eyes", or leave laterality out when you
+cannot tell.
+
+Good captions:
+  "Fundus photograph of the left eye"
+  "Slit lamp photograph of both eyes"
+  "Nine positions of gaze"
+  "Axial MRI of the head"
+  "Optical coherence tomography of one macula"
+
+It must NOT name a diagnosis and must not describe the abnormality - the
+candidate reads it before being asked to describe the image themselves.
 
 Return ONLY a JSON object:
 {
