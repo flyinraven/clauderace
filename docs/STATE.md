@@ -20,8 +20,17 @@ Front end is **not** auto-deployed. To ship it:
 .\scripts\deploy_frontend.ps1 -ApiUrl https://clauderace.onrender.com
 ```
 
-then `scp` the contents of `frontend/dist` (including `.htaccess`) to
-`~/www/exam.txglobal.com.au/public_html`.
+Passing `-SshHost`/`-SshUser`/`-SshPort`/`-IdentityFile` makes the script do
+the upload too, including the `chmod 755` that scp otherwise leaves at 700 -
+which serves a blank site. The SSH values are in `backend/.env.production`
+and the key is `~/.ssh/race_siteground`.
+
+**Check the deployed bundle, not the script's exit code.** A build made before
+pulling deploys cleanly and silently ships the previous version. Fetch
+`index.html`, read the `assets/index-*.js` name out of it, and confirm it
+matches what `vite build` just printed - on 8 Aug a deploy reported success
+while the live bundle was three commits behind and had none of the fixes in
+it.
 
 ## Content in production
 
@@ -309,10 +318,10 @@ Nothing is blocking. Open items, roughly in order of value:
 1. **Re-test a station on the phone** — read-aloud, and whether the last
    answer's transcript now lands. Both were fixed but only the first has been
    confirmed by the user.
-2. **Deploy the frontend.** Two things are committed but not shipped: the
-   between-stations autostart (the briefing card no longer appears at every
-   door of a circuit) and the two admin buttons, "Match questions to images"
-   and the re-caption sweep. `.\scripts\deploy_frontend.ps1` then scp.
+2. **The re-caption sweep has no button.** `POST /api/osce/figures/recaption`
+   exists and has been run once, by hand, over all 789 figures. Whoever needs
+   it next either adds the button beside "Match questions to images" in
+   `admin/StationImages.tsx`, or calls the endpoint with an admin token.
 3. **Daily circuit** builder works but has never been run through a real
    nine-station sitting.
 4. **Written papers** have been sat once end-to-end; the OSCE has been sat for
