@@ -39,7 +39,9 @@ it.
 - 4 published papers (Papers 1–4)
 - **219 OSCE stations**, all with examiner prompts: 60 generated and 159
   ingested from ten past OSCE reports (2021 Sem 1 through 2025 Sem 1)
-- 214 of 219 stations show a live image; 789 figures in all. Every station has
+- 214 of 219 stations show a live image; 789 figures in all, every one with a
+  recorded modality and a caption written without the station in view. 364 come
+  from the examiners' own reports. Every station has
   its findings split into given (acuity, pressure) and elicited
 - Circuits are built on demand, one station per subspecialty, never repeating a
   station this candidate has sat
@@ -115,7 +117,7 @@ Total spend to date: USD 12.62, of which 5.64 in August 2026.
 
 ## Tests
 
-`cd backend && .venv/Scripts/python -m pytest` - 473 tests, about 90 seconds.
+`cd backend && .venv/Scripts/python -m pytest` - 483 tests, about 90 seconds.
 
 The API is tested end to end against an in-memory database and a fake provider
 that sits at `AIClient._post`, so routing, retries, JSON repair, usage
@@ -325,7 +327,28 @@ candidate. Each of these is fixed, with the repair applied to the bank:
   and approved image, or the approved words the examiner states where no search
   could find one. A rejected figure is returned by neither.
 
-**Two cautions learned the hard way in that pass**, both the same mistake. The blind sweep's modality arm
+- **The papers' own images were hidden, and substitutes bought over them.** 116
+  figures from the examiners' reports sat marked `not_clinical` - the blind pass
+  describes 104 as real clinical images, 55 of them OCTs - while 28 stations
+  held both a hidden paper image and a purchased one. `verify_ingested_figures`
+  had already stopped gating a paper's own images; these were survivors from
+  before that, and the existing figure recheck set all 116 live. Two more gaps
+  closed with it: `opening_image_is_settled` did not count `from_paper`, so a
+  re-source went shopping over the report's own photograph on 25 stations; and
+  the binder could only ever run inside that recheck, so once every figure was
+  verified it could not be reached at all. It has its own endpoint now, and
+  found two more matches.
+- **A question restated for want of an image kept saying so after one arrived.**
+  Station 201 was shown its topography beside "her corneal topography shows
+  approximately 2 dioptres of regular astigmatism. Talk me through what it
+  shows" - the picture and the answer together. A restatement is now undone the
+  moment anything binds, and what the restored wording over-promises is trimmed
+  in the same pass.
+
+**Three cautions learned the hard way in that pass.** The first two are the same
+mistake.
+
+The blind sweep's modality arm
 compared an observed modality against `expected_modalities_for`, which for a
 figure that named no view guesses from the station's findings blob - "corneal
 neovascularisation" yields angiogram and calls a correct slit lamp photograph
@@ -345,6 +368,18 @@ the re-mark refusals were returned in a dict whose non-integer values the job
 tally dropped, so 84 stations declined for reasons nobody could read. **A guard
 that refuses silently is only half a guard.**
 
+The third is about the record rather than the rule. Station 201 took three
+attempts, each failing differently - restore only on a full match when the case
+was partial; restore *or* trim when it needed both; and finally a marker reading
+"trim" because the previous attempt had already run, with `reconciled.original`
+overwritten by that attempt's own input. The true wording was gone and the
+station had to be repaired by hand. Two other repairs deleted what a later one
+needed: reconciliation removed `image_wanted` to mean "stop searching", which
+also stopped the binder ever matching that question, and six questions lost
+their request entirely the same way. **A repair that rewrites its own input
+destroys what the next repair needs.** Say the second thing in a second field -
+`image_search_exhausted` - and keep the first original, not the latest.
+
 ## Repairs that run from an endpoint, not a button
 
 Each was written for a one-off sweep and left without UI. All are admin-only
@@ -355,6 +390,8 @@ POSTs, and all are safe to run again - they select only what still needs them.
 | `/api/osce/stations/reconcile-questions` | matches questions to the images that arrived |
 | `/api/osce/figures/recaption` | describes each image again with the station withheld |
 | `/api/osce/stations/remark` | gives marks to questions carrying none |
+| `/api/osce/stations/bind-figures` | gives a question the report's own investigation; no model calls |
+| `/api/osce/stations/recheck-figures` | puts a report's figures live and records what they are |
 
 Deploy the backend and the front end in that order when a release spans both,
 and wait for the new route before shipping the client - otherwise the new
@@ -364,8 +401,8 @@ sat.
 
 `scripts/` holds three more that need no model and no key, and repair stored
 data directly: `withhold_leaked_diagnoses.py`,
-`ask_differentials_before_reveal.py`, `undo_false_modality_downgrades.py`. Each
-takes `--apply` and reports without it.
+`ask_differentials_before_reveal.py`, `undo_false_modality_downgrades.py`,
+`restore_image_requests.py`. Each takes `--apply` and reports without it.
 
 ## Working effectively in a new session
 
