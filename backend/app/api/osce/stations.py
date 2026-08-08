@@ -251,6 +251,35 @@ def settle_stations(admin: AdminUser, db: DbSession) -> dict[str, Any]:
     return {"job_id": job.id, "station_count": len(ids)}
 
 
+@router.post("/figures/recaption", status_code=status.HTTP_202_ACCEPTED)
+def recaption_figures(admin: AdminUser, db: DbSession) -> dict[str, Any]:
+    """Describe every stored image again, with the station withheld.
+
+    Captions written before the blind pass existed were produced by a
+    verification that had been told what to expect and could agree without
+    looking. Questions are now matched to their images by what the caption
+    says, so an echoing caption hides the mismatch that check exists to find.
+
+    Costs one vision call per figure. Nothing is rejected and no image is
+    detached; a figure whose description disagrees with what was asked for is
+    downgraded and the disagreement written beside it.
+    """
+    from app.services.osce.station_images.recaption import (
+        JOB_RECAPTION_FIGURES,
+        figures_needing_caption,
+    )
+
+    ids = figures_needing_caption(db)
+    if not ids:
+        raise HTTPException(status_code=400, detail="No figures carry an image")
+    job = create_job(
+        db, JOB_RECAPTION_FIGURES, payload={"figure_ids": ids},
+        created_by_id=admin.id, total_steps=len(ids),
+        message=f"Re-captioning {len(ids)} figure(s)",
+    )
+    return {"job_id": job.id, "figure_count": len(ids)}
+
+
 @router.post("/stations/reconcile-questions", status_code=status.HTTP_202_ACCEPTED)
 def reconcile_questions(admin: AdminUser, db: DbSession) -> dict[str, Any]:
     """Make every question honest about the image that actually arrived.
