@@ -232,3 +232,36 @@ def test_a_stock_photograph_of_a_view_the_paper_lacks_is_kept(db):
     settle_station(db, station)
 
     assert db.query(type(stock)).filter_by(id=stock.id).one_or_none() is not None
+
+
+def test_sourcing_does_not_buy_what_the_paper_already_holds(db, ai):
+    """Station 210 bought a stock anterior segment montage while holding five
+    slit lamp photographs the examiners printed.
+
+    The settled check reads only the lowest-positioned figure, so a request
+    created beneath the paper's own pictures looked unanswered. There is
+    nothing a search can find that beats the picture the real candidates were
+    shown - and the search costs quota to lose.
+    """
+    from app.models import Setting
+    from app.services.ai import AIClient
+    from app.services.osce.station_images import source_image_for_station
+
+    db.add(Setting(key="imagesearch.provider", value="brave", is_encrypted=False))
+    db.add(Setting(key="imagesearch.api_key", value="test-key", is_encrypted=False))
+    db.commit()
+
+    station = make_station(db, prompts=[
+        {"label": "A", "text": "Please examine the anterior segment of both eyes.",
+         "seconds": 400, "rubric": [{"text": "Describes the findings", "marks": 20}]},
+    ])
+    _figure(db, station, "r", "slit_lamp", position=1,
+            verification_status="from_paper", caption="Slit lamp photograph")
+    db.commit()
+    db.refresh(station)
+
+    outcome = source_image_for_station(db, AIClient(db), station)
+
+    assert outcome["attached"] is False
+    assert "paper already holds" in outcome["reason"]
+    assert outcome["queries"] == [], "no query was written, so none was paid for"

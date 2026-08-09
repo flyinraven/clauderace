@@ -131,12 +131,17 @@ def source_image_for_station(
     # stations are that same purchase. There is nothing a search can find that
     # beats the picture the real candidates were shown.
     claimed = {i for p in (station.prompts or []) for i in bound_figure_ids(p)}
+    # Including the figure this call is about to fill. Excluding it meant the
+    # guard only caught a stock image sitting BESIDE the paper's own; when the
+    # paper's photograph was itself the lowest-positioned figure it was chosen
+    # as the one to fill and searched over - buying a stranger's picture to
+    # replace the examiners' own, which is the exact thing this prevents
+    # everywhere else.
     held = next(
         (
             f
             for f in station.figures
             if f.image_id
-            and f.id != figure.id
             and f.id not in claimed
             and f.verification_status == FROM_PAPER
             and (not expected or f.modality in expected)
