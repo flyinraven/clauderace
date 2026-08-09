@@ -32,7 +32,11 @@ from app.services.ai import AIClient
 from app.services.errors import log_error
 from app.services.jobs.runner import JobContext, JobHandlerError, register_handler
 from app.services.osce.station_images.constants import MIN_REPRESENTATIVE_CONFIDENCE
-from app.services.osce.station_images.verify import blind_disagreement, describe_blind
+from app.services.osce.station_images.verify import (
+    blind_disagreement,
+    describe_blind,
+    label_side,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +68,7 @@ def recaption_figure(db: Session, client: AIClient, figure_id: int) -> str:
         return "missing"
 
     blind = describe_blind(client, image.data, image.content_type or "image/jpeg")
-    caption = str(blind.get("caption") or "").strip()
+    caption = label_side(str(blind.get("caption") or ""), blind.get("side"))
     if not caption:
         return "no_caption"
 

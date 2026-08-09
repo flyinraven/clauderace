@@ -383,6 +383,18 @@ Report the laterality from the image alone. "one_eye" when a single eye is
 shown, or when several panels all show the same one eye. "both_eyes" when two
 different eyes appear. "unclear" when you cannot tell.
 
+Then say WHICH in `side`: "right", "left", "both", or "unclear". Work it out
+from the anatomy in front of you - the position of the disc relative to the
+macula, which side the caruncle and medial canthus are on, the set of the nose
+and brow, any laterality marking the printout itself carries. Put the landmark
+you used in `side_reason`, so a wrong call can be seen and not just inherited.
+
+Answer "unclear" when the image genuinely does not show enough to tell. Do not
+guess: a candidate marked for describing the wrong eye is worse off than one
+told nothing. But do not retreat to "unclear" out of caution when the landmark
+is there - a station's marks are usually written per eye, and an unlabelled
+photograph makes them unearnable.
+
 If an abnormality is visible in only one of two eyes shown, that is
 "one_eye_affected" in `affected`, however many eyes are pictured.
 
@@ -392,15 +404,22 @@ radiology say in `shows` whether it is CT or MRI, and which region.
 
 The caption is read by a candidate sitting the station, so write it as English,
 not as the field values above. Never put "one_eye", "both_eyes" or "unclear"
-in it. Say "the right eye", "both eyes", or leave laterality out when you
-cannot tell.
+in it, and never "one eye", "an eye" or "one macula" either: a candidate who
+cannot tell which eye they are looking at describes the wrong one and is
+marked wrong for it. Name the side, or leave laterality out of the sentence
+altogether and let `side` carry it.
 
 Good captions:
   "Fundus photograph of the left eye"
   "Slit lamp photograph of both eyes"
   "Nine positions of gaze"
   "Axial MRI of the head"
-  "Optical coherence tomography of one macula"
+  "Optical coherence tomography of the macula"
+
+Bad captions, and why:
+  "Slit lamp photograph of one eye"   - which one? this is the whole fault
+  "Optical coherence tomography of one macula"  - same
+  "External photograph of an eye"     - same
 
 It must NOT name a diagnosis and must not describe the abnormality - the
 candidate reads it before being asked to describe the image themselves.
@@ -409,11 +428,64 @@ Return ONLY a JSON object:
 {
   "modality": "<one of the values above>",
   "laterality": "one_eye" | "both_eyes" | "unclear",
+  "side": "right" | "left" | "both" | "unclear",
+  "side_reason": "the landmark you read it from, one short phrase",
   "affected": "one_eye_affected" | "both_eyes_affected" | "none_visible" | "unclear",
   "panels": <how many separate photographs are tiled together, 1 if a single image>,
   "shows": "what is visible, one sentence, no diagnosis",
   "caption": "a neutral caption naming modality, laterality and view only"
 }"""
+
+
+# "of one eye", "in an eye", "of one macula" - laterality that names no side.
+# The station marks per eye, so this tells the candidate nothing they can use.
+_VAGUE_SIDE_RE = re.compile(
+    r"\s*\b(?:of|in|from|showing)?\s*\b(?:one|an|a|the)\s+"
+    r"(eyes?|macula|eye'?s?|optic\s+disc|disc)\b",
+    re.IGNORECASE,
+)
+_SIDE_WORDS = {"right": "the right", "left": "the left", "both": "both"}
+
+
+def label_side(caption: str | None, side: str | None) -> str | None:
+    """Put the eye into the caption, or take the empty claim out of it.
+
+    The blind pass writes the caption with the station withheld, which is the
+    point of it - a caption that echoes what was expected hides the mismatch
+    the check exists to find. But its output was then shown to the candidate as
+    the label on the image, and "Slit lamp photograph of one eye" appeared 91
+    times in the bank.
+
+    Station 155 is what that costs. Its one usable photograph was captioned "of
+    one eye"; the candidate saw a corneal graft, said right eye, and it was the
+    left. The examiner's comment reads "the candidate incorrectly stated the
+    graft was in the right eye" - marked wrong for a fact the screen would not
+    tell them, and eight marks gone.
+
+    So the side is written in where it is known and the empty phrase is struck
+    out where it is not. Saying nothing is honest; "one eye" is a label that
+    looks like information and carries none.
+    """
+    text = (caption or "").strip()
+    if not text:
+        return None
+    named = _SIDE_WORDS.get((side or "").strip().lower())
+
+    def swap(match: re.Match[str]) -> str:
+        if not named:
+            return ""
+        # Keep the structure the caption named: an OCT is of a macula, not of
+        # an eye, and "of the left eye" reads as a different picture.
+        noun = match.group(1).lower().replace("eye's", "eye").rstrip("s")
+        if noun in {"eye"}:
+            noun = "eye" if named != "both" else "eyes"
+        elif named == "both":
+            noun = f"{noun}e" if noun.endswith("l") else f"{noun}s"
+        return f" of {named} {noun}"
+
+    fixed = _VAGUE_SIDE_RE.sub(swap, text, count=1).strip()
+    # Never let the substitution eat the whole caption.
+    return (fixed or text).rstrip(" ,;:") or None
 
 
 def describe_blind(client: AIClient, data: bytes, media_type: str) -> dict[str, Any]:

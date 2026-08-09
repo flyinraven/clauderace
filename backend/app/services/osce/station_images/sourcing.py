@@ -47,6 +47,7 @@ from app.services.osce.station_images.verify import (
     verbatim_findings_floor,
     blind_disagreement,
     describe_blind,
+    label_side,
     verify_image,
 )
 from app.services.osce.station_images.describe import (
@@ -351,10 +352,10 @@ def _attach(
     except Exception as exc:  # noqa: BLE001 - a caption is not worth losing the image over
         logger.warning("Blind description failed for figure %s: %s", figure.id, exc)
 
-    figure.caption = (
+    figure.caption = label_side(
         str(blind.get("caption") or "").strip()
-        or str(verdict.get("caption") or "").strip()
-        or None
+        or str(verdict.get("caption") or "").strip(),
+        blind.get("side"),
     )
     figure.modality = str(blind.get("modality") or verdict.get("modality") or "").strip() or None
     figure.verification_status = tier
