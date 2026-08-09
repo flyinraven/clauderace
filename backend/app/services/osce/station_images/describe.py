@@ -68,7 +68,8 @@ being marked - so no "congruous", "incongruous", "macular sparing", "consistent
 with", "suggestive of", "in keeping with", "typical of", "pathognomonic", and no
 naming of the diagnosis, syndrome, causative organism or underlying disease.
 
-Do not mention management, investigations, prognosis or history. Do not say that
+Do not mention management, ancillary tests, investigations, prognosis or
+history. Do not say that
 an image is missing or refer to a photograph.
 
 If neither the findings nor the diagnosis tells you what this patient shows,

@@ -59,6 +59,17 @@ sits in the sequence; the aims decide which questions exist at all. A station
 whose questions could be swapped with another station's has failed, because
 the aims are what make it this station and not a generic one.
 
+THE COLLEGE'S WORDS FOR TESTS. Two categories, and they are not the same:
+- ANCILLARY TESTS are done in the clinic, on the day: OCT, fluorescein
+  angiography, corneal topography, visual fields, biometry, specular
+  microscopy, B-scan ultrasound.
+- INVESTIGATIONS are done outside the clinic: bloods, serology, genetic
+  testing, CT, MRI, chest X-ray.
+Use whichever word is right for what you are asking about. "What ancillary
+tests would help?" and "What investigations would you order?" are different
+questions with different answers, and a candidate sitting this exam is marked
+by examiners who use the terms this way.
+
 WHAT MUST NOT BE GIVEN AWAY - and only this:
 - The DIAGNOSIS, before the examiner states it at step 5. Never name it, and
   never hint at it with a phrase only the diagnosis explains.
@@ -71,10 +82,10 @@ anomalous vessels?" are proper questions, not leaks.
 
 How a RANZCO station is actually built, from real examiner handouts. Use this
 arc for ORDER. Steps 1, 4 and 5 are in every station, and at least one of 6
-and 7; step 3 whenever the case turns on an investigation. Step 2 is the
-case's own examination or test question and is almost always present. Where a
-case carries more, add questions - four to seven is the normal range, and a
-station with five aims needs more questions than one with two:
+and 7; step 3 whenever the case turns on an ancillary test or an investigation.
+Step 2 is the case's own examination or test question and is almost always
+present. Where a case carries more, add questions - four to seven is the normal
+range, and a station with five aims needs more questions than one with two:
 
 1. THE STANDING INSTRUCTION. The first question is always what the candidate
    is told as they walk in: the region and the eye, nothing else. "Please
@@ -97,6 +108,7 @@ station with five aims needs more questions than one with two:
      "What would you look for on gonioscopy?"
      "How would you assess the integrity of that graft?"
      "How would you work up the systemic associations of that retinal finding?"
+     "What ancillary test would confirm that, and what would you expect?"
      "What would you do to confirm the site of the lesion?"
    Take it from the aims and the rubric - they name the test the examiners
    cared about. Where the candidate genuinely should propose the test
@@ -105,9 +117,9 @@ station with five aims needs more questions than one with two:
 3. READ THE ANCILLARY IMAGE. Having asked for it, they describe what it shows
    - correctly naming the sign, its extent, and what is absent. Ask it blind:
    "What does this show?" / "Describe the OCT."
-   Ask this step whenever the case genuinely turns on an investigation - the
-   examiners' report is the guide, and a report that says candidates misread
-   the MRI means the MRI was put in front of them. If the request below does
+   Ask this step whenever the case genuinely turns on an ancillary test or an
+   investigation - the examiners' report is the guide, and a report that says
+   candidates misread the MRI means the MRI was put in front of them. If the request below does
    not already list that image, ask the question anyway and describe the image
    it needs in "image_wanted": it will be sourced and verified before any
    candidate sees the station.

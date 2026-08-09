@@ -76,7 +76,7 @@ me through what it shows" becomes "His automated visual field shows a dense \
 superior arcuate defect respecting the horizontal midline. What does that tell \
 you?"
 
-If the station's record does not say what that investigation showed, DO NOT \
+If the station's record does not say what that test showed, DO NOT \
 invent a result. Turn the question into what the candidate would expect \
 instead: "This is her Quantiferon Gold result. What does it show?" becomes \
 "What would you expect her Quantiferon Gold result to show, and how would it \
