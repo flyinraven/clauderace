@@ -186,3 +186,49 @@ def test_a_caption_does_not_outlive_the_photograph_it_described(db):
 
     assert figure.caption is None
     assert figure.described_findings, "the words are what it has; they stay"
+
+
+def test_a_stock_photograph_beside_the_patients_own_is_removed(db):
+    """Station 210 opened on a stock anterior segment montage searched for iris
+    neovascularisation, in front of five slit lamp photographs the examiners
+    themselves printed.
+
+    Station 155 is what that costs: the candidate described a graft in the
+    wrong eye, off an image that was never this patient.
+    """
+    from app.services.osce.station_images import settle_station
+
+    station = make_station(db)
+    paper = _figure(db, station, "n", "slit_lamp", position=1,
+                    verification_status="from_paper", caption="Slit lamp photograph")
+    stock = _figure(db, station, "o", "slit_lamp", position=0,
+                    verification_status="representative", caption="A slit lamp photograph")
+    db.commit()
+    db.refresh(station)
+
+    outcome = settle_station(db, station)
+
+    assert outcome["removed"] == 1
+    assert db.query(type(stock)).filter_by(id=stock.id).one_or_none() is None
+    assert db.query(type(paper)).filter_by(id=paper.id).one_or_none() is not None
+
+
+def test_a_stock_photograph_of_a_view_the_paper_lacks_is_kept(db):
+    """149 of them answer views the report has no picture of at all.
+
+    Removing those would take the station's only image of that view with them,
+    which is the opposite of the repair.
+    """
+    from app.services.osce.station_images import settle_station
+
+    station = make_station(db)
+    _figure(db, station, "p", "slit_lamp", position=0,
+            verification_status="from_paper", caption="Slit lamp photograph")
+    stock = _figure(db, station, "q", "fundus", position=1,
+                    verification_status="representative", caption="Fundus photograph")
+    db.commit()
+    db.refresh(station)
+
+    settle_station(db, station)
+
+    assert db.query(type(stock)).filter_by(id=stock.id).one_or_none() is not None

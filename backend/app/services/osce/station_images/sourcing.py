@@ -122,6 +122,35 @@ def source_image_for_station(
     figure.described_findings_approved = False
 
     expected = expected_modalities_for(station, wanted)
+
+    # The examiners' own photograph of this view, already on the station. The
+    # settled check only ever looked at the lowest-positioned figure, so a
+    # request created beneath five of the paper's slit lamp photographs was
+    # answered by buying a stranger's - station 210 opens on a stock anterior
+    # segment montage in front of the real patient's, and 44 figures across 28
+    # stations are that same purchase. There is nothing a search can find that
+    # beats the picture the real candidates were shown.
+    claimed = {i for p in (station.prompts or []) for i in bound_figure_ids(p)}
+    held = next(
+        (
+            f
+            for f in station.figures
+            if f.image_id
+            and f.id != figure.id
+            and f.id not in claimed
+            and f.verification_status == FROM_PAPER
+            and (not expected or f.modality in expected)
+        ),
+        None,
+    )
+    if held is not None:
+        logger.info(
+            "Station %s already holds the examiners' own %s for this view; not searching",
+            station.id, held.modality or "image",
+        )
+        db.commit()
+        return {"attached": False, "queries": [], "reason": "the paper already holds this view"}
+
     queries = build_search_queries(db, client, station, wanted)
     per_query = store.get_int("imagesearch.results_per_query", 6)
     rejections: list[str] = []

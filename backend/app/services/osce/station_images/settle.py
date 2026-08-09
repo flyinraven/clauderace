@@ -17,7 +17,7 @@ from app.services.imagesearch.relevance import (
     unsourceable_reason,
 )
 from app.services.jobs.runner import JobContext, JobHandlerError, register_handler
-from app.services.osce.station_images.constants import JOB_SETTLE_STATIONS
+from app.services.osce.station_images.constants import FROM_PAPER, JOB_SETTLE_STATIONS
 from app.services.osce.sittability import answers_a_view
 from app.services.osce.station_images.verify import leaked_term, verbatim_findings_floor
 from app.services.osce.station_images.ingested import bound_figure_ids
@@ -164,6 +164,26 @@ def settle_station(db: Session, station: OsceStation) -> dict[str, int]:
             spare.remove(figure)
             bound += 1
             break
+
+    # A stranger's photograph standing next to the patient's own. Station 210
+    # opens on a stock "anterior segment photographs" searched for iris
+    # neovascularisation, in front of five slit lamp photographs the examiners
+    # themselves printed - and station 155 is what that costs: the candidate
+    # described a graft in the wrong eye off an image that was never this
+    # patient. Where the paper covers the modality, the search result is not a
+    # second opinion, it is noise.
+    #
+    # Only where the paper covers it. 149 representative images answer views
+    # the report has no picture of, and those are the best there is.
+    opening = [f for f in station.figures if f.image_id and f.id not in claimed]
+    covered = {
+        f.modality for f in opening if f.verification_status == FROM_PAPER and f.modality
+    }
+    for figure in list(opening):
+        if figure.verification_status == "representative" and figure.modality in covered:
+            db.delete(figure)
+            removed += 1
+    db.flush()
 
     # An investigation the station holds, and a question that discusses it, even
     # where that question never recorded a request. Ingest lifted these straight
