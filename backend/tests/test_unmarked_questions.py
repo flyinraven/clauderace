@@ -296,3 +296,65 @@ def test_rebalancing_makes_every_line_awardable_and_keeps_the_twenty():
     assert all(pt["marks"] > 0 for pt in lines)
     assert sum(pt["marks"] for pt in lines) == STATION_MARKS
     assert len(lines) == 5, "no point is dropped to make the sums work"
+
+
+# --- Built that way in the first place -------------------------------------
+# The repair passes above fix stations that already exist. These stop the next
+# ingest writing the same fault: a rule enforced only by a repair is a rule the
+# bank drifts away from between runs.
+
+
+def test_the_builder_refuses_a_rubric_line_worth_nothing():
+    """The check caught a question worth nothing and missed a line worth it."""
+    problems = _unmarked_questions([
+        {"label": "A", "rubric": [{"text": "Describes the opacity", "marks": 20}]},
+        {"label": "E", "rubric": [
+            {"text": "Names trauma", "marks": 0},
+            {"text": "Names vascular causes", "marks": 0.5},
+        ]},
+    ])
+    assert len(problems) == 1
+    assert "question E" in problems[0]
+    assert "worth nothing" in problems[0]
+
+
+def test_the_builder_refuses_a_question_that_cannot_pay_for_its_lines():
+    """"Name four causes", four lines, 1.5 marks between them.
+
+    Half a mark is the finest award, so the fourth line can never be given -
+    and it is not visibly zero, it just cannot be reached.
+    """
+    problems = _unmarked_questions([
+        {"label": "A", "rubric": [{"text": "x", "marks": 18.5}]},
+        {"label": "E", "rubric": [
+            {"text": "one", "marks": 0.5}, {"text": "two", "marks": 0.5},
+            {"text": "three", "marks": 0.25}, {"text": "four", "marks": 0.25},
+        ]},
+    ])
+    assert len(problems) == 1
+    assert "at least 2" in problems[0], "four lines cost two marks"
+
+
+def test_a_question_that_pays_for_every_line_raises_nothing():
+    assert _unmarked_questions([
+        {"label": "A", "rubric": [{"text": "x", "marks": 8}, {"text": "y", "marks": 8}]},
+        {"label": "B", "rubric": [{"text": "z", "marks": 4}]},
+    ]) == []
+
+
+def test_a_station_with_no_findings_is_still_queued_for_its_background(db):
+    """Requiring a findings block here left 24 stations opening on nothing.
+
+    Their acuity is in the case summary, the case summary is withheld whole
+    because it names the diagnosis, and the one pass that could lift the
+    numbers out of it was never queued for them.
+    """
+    import inspect
+
+    from app.services.ingest import pipeline
+
+    source = inspect.getsource(pipeline._queue_findings_split)
+    assert "findings.is_not(None)" not in source, (
+        "the split builds a background from the case record now, so a station "
+        "without a findings block has work for it to do"
+    )

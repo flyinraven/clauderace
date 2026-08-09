@@ -150,6 +150,13 @@ def _queue_findings_split(ctx: JobContext, station_ids: list[int]) -> None:
     with the demographic alone - no visual acuity, no intraocular pressure -
     which is not how a station is set up. Like the prompt build, every ingest
     has needed it.
+
+    Including the stations with no findings block at all. Requiring one here
+    was how 24 stations came to open on nothing: their acuity is recorded in
+    the case summary, the case summary is withheld whole because it names the
+    diagnosis, and the one pass that could have lifted the numbers out of it
+    was never queued for them. The split builds the background block from the
+    case record now, so it has work to do on exactly those stations.
     """
     from app.services.jobs.runner import create_job
     from app.services.osce.findings import JOB_SPLIT_OSCE_FINDINGS
@@ -159,7 +166,6 @@ def _queue_findings_split(ctx: JobContext, station_ids: list[int]) -> None:
         for s in ctx.db.execute(
             select(OsceStation).where(
                 OsceStation.id.in_(station_ids),
-                OsceStation.findings.is_not(None),
                 OsceStation.findings_split_status.in_(["none", "failed"]),
             )
         ).scalars().all()

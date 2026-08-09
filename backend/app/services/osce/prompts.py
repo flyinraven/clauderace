@@ -580,15 +580,41 @@ def _unmarked_questions(prompts: list[dict[str, Any]]) -> list[str]:
 
     A question worth nothing is not a question. Either it earns marks or it
     should not be asked.
+
+    The same fault hides one level down, and this only caught the top one. A
+    question carrying four rubric lines and 1.5 marks between them pays for
+    three of them: half a mark is the finest award an examiner can make, so the
+    fourth is worth nothing and cannot be earned however well it is answered.
+    Eleven stations were built that way. A question must be able to pay for
+    every line it holds - half a mark each, at least.
     """
     problems = []
     for index, prompt in enumerate(prompts):
+        label = prompt.get("label") or index
         rubric = prompt.get("rubric") or []
         marks = sum(pt.get("marks", 0) or 0 for pt in rubric)
         if marks <= 0:
             problems.append(
-                f"question {prompt.get('label') or index} carries no marks; every question "
+                f"question {label} carries no marks; every question "
                 f"must be worth at least 1 of the 20"
+            )
+            continue
+        dead = [
+            point.get("text") or f"line {i + 1}"
+            for i, point in enumerate(rubric)
+            if (point.get("marks") or 0) <= 0
+        ]
+        if dead:
+            problems.append(
+                f"question {label} has {len(dead)} rubric line(s) worth nothing "
+                f"({str(dead[0])[:48]!r}); a line nobody can be awarded is not a "
+                f"marking point"
+            )
+        elif marks < 0.5 * len(rubric):
+            problems.append(
+                f"question {label} is worth {marks:g} but carries {len(rubric)} "
+                f"lines; half a mark each is the least they can be paid, so it "
+                f"needs at least {0.5 * len(rubric):g} or fewer lines"
             )
     return problems
 
@@ -751,7 +777,11 @@ def _normalise(raw_prompts: list[Any]) -> tuple[list[dict[str, Any]], list[str]]
             )
             factor = STATION_MARKS / total_marks
             for point in all_points:
-                point["marks"] = round(point["marks"] * factor, 2)
+                # Never below half a mark. Scaling proportionally rounds a
+                # small line to 0.0 and writes a marking point nobody can ever
+                # be awarded - which is the fault the rescale above exists to
+                # avoid, reappearing in the path taken when it gives up.
+                point["marks"] = max(0.5, round(point["marks"] * factor, 2))
             absorb_mark_drift(all_points, STATION_MARKS)
     elif total_marks == 0:
         warnings.append("No rubric marks were produced for this station.")
