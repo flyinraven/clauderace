@@ -154,3 +154,78 @@ def test_a_diagnosis_carried_in_from_the_case_record_is_still_withheld(db):
     assert "keratoconus" in (station.findings_elicited or "").lower(), (
         "not discarded - it is a real finding the candidate must reach"
     )
+
+
+def test_an_acronym_in_the_diagnosis_is_a_giveaway_too(db):
+    """Station 26 opened with "He completed TB therapy in 2024".
+
+    The check read words of four letters or more, and "TB" is two - so the
+    background named the organism against a diagnosis of "TB-associated
+    panuveitis" and nothing noticed.
+    """
+    from app.services.osce.findings import withhold_diagnosis
+    from tests.test_api_osce import make_station
+
+    station = make_station(db)
+    station.diagnosis = "TB-associated panuveitis with retinal vasculitis."
+
+    kept, moved = withhold_diagnosis(
+        "He completed TB therapy in 2024. Vision: Right 6/9, Left 6/12.", station
+    )
+
+    assert "TB therapy" not in kept
+    assert "6/9" in kept, "the measurements are what the block is for"
+    assert moved
+
+
+def test_the_same_disease_under_another_name_is_still_the_diagnosis(db):
+    """"Uveitic glaucoma" against "panuveitis" shares no whole word.
+
+    Station 26 said both, and word equality let it through: the candidate was
+    told the disease in the sentence before being asked to find it.
+    """
+    from app.services.osce.findings import withhold_diagnosis
+    from tests.test_api_osce import make_station
+
+    station = make_station(db)
+    station.diagnosis = "TB-associated panuveitis with retinal vasculitis."
+
+    kept, moved = withhold_diagnosis("He has uveitic glaucoma. IOP 24 mmHg.", station)
+
+    assert "uveitic" not in kept
+    assert "24 mmHg" in kept
+    assert moved
+
+
+def test_the_anatomy_a_diagnosis_is_named_after_survives(db):
+    """The root match must not take the structure down with the disease.
+
+    "Iris" and "iritis" share four letters, and a background that cannot say
+    "iris" cannot describe half the anterior segment.
+    """
+    from app.services.osce.findings import withhold_diagnosis
+    from tests.test_api_osce import make_station
+
+    station = make_station(db)
+    station.diagnosis = "Acute anterior uveitis"
+
+    kept, _ = withhold_diagnosis("The iris is intact. Vision 6/6.", station)
+    assert "iris" in kept.lower()
+
+
+def test_the_measurements_are_kept_when_only_the_history_leaks(db):
+    """A block is not emptied for one bad sentence."""
+    from app.services.osce.findings import withhold_diagnosis
+    from tests.test_api_osce import make_station
+
+    station = make_station(db)
+    station.diagnosis = "Keratoconus"
+
+    kept, moved = withhold_diagnosis(
+        "32 year old woman. Known keratoconus since 2019. Vision 6/60 right, 6/7.5 left.",
+        station,
+    )
+
+    assert "32 year old woman" in kept
+    assert "6/60" in kept
+    assert len(moved) == 1

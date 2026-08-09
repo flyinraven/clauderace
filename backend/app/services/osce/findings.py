@@ -79,6 +79,10 @@ the case record: the case record is the examiners' own account and names the \
 answer throughout.
 - GIVEN may draw on both, but only for measurements and background of the kind \
 listed above. You are not summarising the case.
+- Put each measurement on its own line, never in the same sentence as a \
+history or a condition. A line naming the diagnosis is struck out whole, and \
+"Left 6/60 with a dense cataract" takes the acuity down with it - so write \
+"Left 6/60" and leave the rest for the candidate to find.
 - Name no diagnosis in GIVEN, ever, and no conclusion drawn from the findings. \
 "28 year old with keratoconus" becomes "28 year old". "Sequential vision loss, \
 eventually diagnosed with LHON" becomes "sequential loss of vision, left then \
@@ -110,6 +114,30 @@ _STEM_VOCABULARY = frozenset(
 )
 
 
+_ACRONYM_RE = re.compile(r"\b[A-Z]{2,6}\b")
+# Shortest run of letters that still names something clinical. "uveit" ties
+# "uveitic" to "panuveitis"; four would tie "iris" to "iritis" and withhold the
+# anatomy with it.
+_CLINICAL_ROOT = 5
+
+
+def _shares_a_root(word: str, terms: set[str]) -> bool:
+    """Whether this word is a form of one of `terms`.
+
+    Word equality was not enough. Station 26's background said "uveitic
+    glaucoma" against a diagnosis of "TB-associated panuveitis": no word in
+    common, the same disease, and the whole station handed over. Containment
+    either way catches the prefixes and suffixes clinical words are built from.
+    """
+    if len(word) < _CLINICAL_ROOT:
+        return word in terms
+    root = word[:_CLINICAL_ROOT]
+    return any(
+        root in term or (len(term) >= _CLINICAL_ROOT and term[:_CLINICAL_ROOT] in word)
+        for term in terms
+    )
+
+
 def withhold_diagnosis(given: str, station: OsceStation) -> tuple[str, list[str]]:
     """Move any sentence of GIVEN that names the diagnosis into what must be found.
 
@@ -127,8 +155,27 @@ def withhold_diagnosis(given: str, station: OsceStation) -> tuple[str, list[str]
     """
     from app.services.osce.station_images.verify import _GENERIC_WORDS, _words
 
-    distinctive = _words(station.diagnosis or "") - _GENERIC_WORDS - _STEM_VOCABULARY
-    if not distinctive or not given.strip():
+    innocuous = _GENERIC_WORDS | _STEM_VOCABULARY
+    distinctive = _words(station.diagnosis or "") - innocuous
+
+    # Acronyms never reached the check: it reads words of four letters or more
+    # and "TB" is two. Station 26 opened with "He completed TB therapy in 2024"
+    # against a diagnosis of "TB-associated panuveitis".
+    acronyms = {
+        a.lower()
+        for a in _ACRONYM_RE.findall(station.diagnosis or "")
+        if a.lower() not in innocuous
+    }
+
+    # Only the diagnosis is enforced. Widening this to every sign in the
+    # elicited half was tried and reverted against the live bank: it emptied 25
+    # backgrounds outright and stripped the acuity from 19 more, because one
+    # sentence carries both - "Left 6/60 with a dense cataract" is a
+    # measurement the candidate is owed and a sign they are meant to find, and
+    # a rule that can only keep or discard whole sentences cannot separate
+    # them. The same judgement `grounding_problem` already records rather than
+    # enforces, for the same reason.
+    if not (distinctive or acronyms) or not given.strip():
         return given, []
 
     kept: list[str] = []
@@ -136,10 +183,11 @@ def withhold_diagnosis(given: str, station: OsceStation) -> tuple[str, list[str]
     for sentence in _SENTENCE.split(given):
         if not sentence.strip():
             continue
-        if _words(sentence) & distinctive:
-            moved.append(sentence.strip())
-        else:
-            kept.append(sentence.strip())
+        words = _words(sentence)
+        leaks = any(_shares_a_root(w, distinctive) for w in words) or bool(
+            acronyms & {a.lower() for a in _ACRONYM_RE.findall(sentence)}
+        )
+        (moved if leaks else kept).append(sentence.strip())
     return (" ".join(kept), moved) if moved else (given, [])
 
 
