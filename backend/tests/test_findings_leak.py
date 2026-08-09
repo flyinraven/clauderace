@@ -61,3 +61,96 @@ def test_a_station_with_no_diagnosis_recorded_is_left_alone():
     station = OsceStation(diagnosis=None)
     text = "Visual acuity R 6/6. IOP 14 mmHg."
     assert withhold_diagnosis(text, station) == (text, [])
+
+
+# --- The background block --------------------------------------------------
+# A real station opens by handing over a background: who the patient is, what
+# brought them in, the acuity and the pressure. Ours handed over the findings
+# block or nothing, and a candidate asked "can I have the VA and IOP please?"
+# into a station with no way to answer.
+
+
+class _SplitClient:
+    def __init__(self, payload):
+        self.payload = payload
+        self.user = ""
+
+    def complete_json(self, **kwargs):
+        self.user = kwargs.get("user", "")
+        return self.payload
+
+
+def test_a_station_with_no_findings_still_gets_its_background(db):
+    """Station 123 records the acuity in its case summary and nowhere else.
+
+    Bailing on empty findings left 24 stations opening on nothing at all, while
+    the number the candidate needed sat in the record the whole time.
+    """
+    from app.services.osce.findings import split_findings
+    from tests.test_api_osce import make_station
+
+    station = make_station(db)
+    station.findings = None
+    station.case_summary = (
+        "A 32-year-old woman with bilateral keratoconus. Her visual acuity is "
+        "6/60 in the right eye and 6/7.5 in the left eye."
+    )
+    station.diagnosis = "Keratoconus with left penetrating keratoplasty"
+    db.commit()
+
+    client = _SplitClient({
+        "given": "32 year old woman. Visual acuity 6/60 right, 6/7.5 left.",
+        "elicited": "",
+    })
+    split_findings(db, client, station)
+
+    assert "6/60" in (station.findings_given or "")
+    assert station.findings_split_status == "complete"
+    assert "case summary" not in (station.findings_given or "").lower()
+
+
+def test_the_case_record_reaches_the_model_as_background_only(db):
+    """ELICITED must never draw on it: it is the examiners' own account and
+    names the answer throughout."""
+    from app.services.osce.findings import split_findings
+    from tests.test_api_osce import make_station
+
+    station = make_station(db)
+    station.findings = "Corneal scarring inferiorly."
+    station.case_summary = "A 32-year-old with keratoconus."
+    db.commit()
+
+    client = _SplitClient({"given": "32 year old.", "elicited": "Corneal scarring inferiorly."})
+    split_findings(db, client, station)
+
+    assert "CASE RECORD" in client.user
+    assert "never for ELICITED" in client.user
+
+
+def test_a_diagnosis_carried_in_from_the_case_record_is_still_withheld(db):
+    """The guard runs over the whole block, whichever source it came from.
+
+    Drawing on the case summary is new; the case summary names the diagnosis in
+    almost every station, so the deterministic check matters more than it did
+    when GIVEN could only be built from the findings.
+    """
+    from app.services.osce.findings import split_findings
+    from tests.test_api_osce import make_station
+
+    station = make_station(db)
+    station.findings = "Inferior corneal thinning."
+    station.case_summary = "A 32-year-old with keratoconus."
+    station.diagnosis = "Keratoconus"
+    db.commit()
+
+    client = _SplitClient({
+        "given": "32 year old. The patient has keratoconus.",
+        "elicited": "Inferior corneal thinning.",
+    })
+    split_findings(db, client, station)
+
+    assert "keratoconus" not in (station.findings_given or "").lower()
+    assert "32 year old" in (station.findings_given or "")
+    assert "keratoconus" in (station.findings_elicited or "").lower(), (
+        "not discarded - it is a real finding the candidate must reach"
+    )

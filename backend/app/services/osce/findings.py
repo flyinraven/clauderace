@@ -28,9 +28,24 @@ JOB_SPLIT_OSCE_FINDINGS = "split_osce_findings"
 
 SYSTEM_PROMPT = """\
 You are preparing a RANZCO RACE OSCE station. You are given the station's raw \
-examination findings as printed in the examiners' report.
+examination findings as printed in the examiners' report, and the case record \
+they were written from.
 
-Split them into two groups, exactly as a real OSCE works:
+A real station opens by handing the candidate a background block and then \
+asking them to examine. It reads like this:
+
+    Joshua Bullock 28 M
+    BCVA 6/15, with glasses 6/9 both eyes
+    Monitored 2023-2024 with no progression, discharged
+    Eye rubber, uses antihistamine drops
+    Kmax R 62, L 67
+
+    "THIS IS JOSHUA. PLEASE EXAMINE THE ANTERIOR SEGMENT OF BOTH EYES."
+
+Your job is to build that block, and to keep back what the candidate is there \
+to find.
+
+Split the FINDINGS into two groups, exactly as a real OSCE works:
 
 GIVEN - what the examiner states to the candidate at the start, because it was \
 measured before they walked in and cannot be obtained by looking:
@@ -47,10 +62,28 @@ disc appearance, motility deficits, lid position, proptosis, dystopia
   - the presence, character and position of any lesion
   - relative afferent pupillary defect and other bedside test results
 
+Then ADD to GIVEN, drawing on the CASE RECORD as well:
+  - the measured numbers an examiner reads out before the candidate starts: \
+visual acuity, intraocular pressure, refraction, keratometry, axial length
+  - the background a candidate is told on walking in: age and sex, what brought \
+the patient in and for how long, past ocular surgery and current treatment
+
+Real stations state all of this. Ours stated none of it, and a candidate asked \
+"can I have the VA and IOP please?" into a station that had no way to answer.
+
 Rules:
 - Copy the wording across; do not paraphrase away clinical detail or numbers.
 - Every piece of the original findings must land in exactly one group.
-- Use ONLY the raw findings given below. Nothing may appear in either group that is not in them. You are dividing a text, not writing one.
+- ELICITED comes ONLY from the raw findings. Never move anything into it from \
+the case record: the case record is the examiners' own account and names the \
+answer throughout.
+- GIVEN may draw on both, but only for measurements and background of the kind \
+listed above. You are not summarising the case.
+- Name no diagnosis in GIVEN, ever, and no conclusion drawn from the findings. \
+"28 year old with keratoconus" becomes "28 year old". "Sequential vision loss, \
+eventually diagnosed with LHON" becomes "sequential loss of vision, left then \
+right". Past surgery is stated as the operation performed, not as the condition \
+it was for.
 - GIVEN must NEVER contain the diagnosis, the name of the disease, or any conclusion drawn from the findings, however it is phrased. "The patient presents with bilateral Brown's syndrome" and "glaucomatous optic neuropathy is present" are diagnoses wearing the clothes of a handed-over result. Keep the measurement - "IOP 25 mmHg", "central field loss in the right eye" - and leave the name of the disease out. A candidate told the diagnosis has nothing left to work out, and every diagnostic mark on the station becomes free.
 - If a line is ambiguous, put it in ELICITED. Withholding something a candidate \
 would have been told is a small unfairness; revealing a sign they were supposed \
@@ -113,7 +146,15 @@ def withhold_diagnosis(given: str, station: OsceStation) -> tuple[str, list[str]
 def split_findings(
     db: Session, client: AIClient, station: OsceStation, job_id: int | None = None
 ) -> dict[str, Any]:
-    if not (station.findings or "").strip():
+    record = " ".join(
+        part for part in (station.case_summary, station.patient_history) if part
+    ).strip()
+    # Nothing to divide AND nothing to hand over. Bailing on empty findings
+    # alone left 24 stations showing the candidate no background at all, while
+    # their case record held the acuity all along - station 123 records "her
+    # visual acuity is 6/60 in the right eye and 6/7.5 in the left" and asked
+    # the candidate to examine an anterior segment knowing neither.
+    if not (station.findings or "").strip() and not record:
         station.findings_given = None
         station.findings_elicited = None
         station.findings_split_status = "complete"
@@ -121,9 +162,10 @@ def split_findings(
         return {"given": 0, "elicited": 0}
 
     user = (
-        f"SUBSPECIALTY: {station.subspecialty or 'unspecified'}\n"
-        f"CASE: {station.case_summary or '(none)'}\n\n"
-        f"RAW FINDINGS AS PRINTED:\n{station.findings}\n\n"
+        f"SUBSPECIALTY: {station.subspecialty or 'unspecified'}\n\n"
+        f"CASE RECORD - for the background block only, never for ELICITED:\n"
+        f"{record or '(none)'}\n\n"
+        f"RAW FINDINGS AS PRINTED:\n{station.findings or '(none recorded)'}\n\n"
         f"Split them now."
     )
     data = client.complete_json(
