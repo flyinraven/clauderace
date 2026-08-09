@@ -67,18 +67,147 @@ Return ONLY a JSON object mapping each named label to its points:
 {"C": ["...", "..."], "E": ["...", "...", "..."]}"""
 
 
+def _dead_lines(prompt: dict[str, Any]) -> list[int]:
+    """Rubric lines worth nothing, on a question that is worth something.
+
+    The same fault one level down, and it hides from the question-level check:
+    "Name four causes" carrying four lines and 1.5 marks pays for three of
+    them, and the fourth can never be awarded however well it is answered.
+    """
+    return [
+        index
+        for index, point in enumerate(prompt.get("rubric") or [])
+        if as_float(point.get("marks"), 0.0) <= 0
+    ]
+
+
 def stations_needing_marks(db: Session) -> list[int]:
-    """Stations with at least one question worth nothing."""
+    """Stations with a question - or a single line - worth nothing."""
     out = []
     for station_id, prompts in db.execute(
         select(OsceStation.id, OsceStation.prompts)
     ).all():
         for prompt in prompts or []:
             rubric = prompt.get("rubric") or []
-            if sum(as_float(pt.get("marks"), 0.0) for pt in rubric) <= 0:
+            if sum(as_float(pt.get("marks"), 0.0) for pt in rubric) <= 0 or _dead_lines(prompt):
                 out.append(station_id)
                 break
     return out
+
+
+def rebalance_marks(prompts: list[dict[str, Any]]) -> dict[str, float] | None:
+    """What each question should be worth when none of them is dead.
+
+    `plan_marks` is for reviving a question worth nothing, and pays for it out
+    of the others. This is the quieter case: every question carries marks, but
+    one of them carries fewer than its own rubric lines cost, so a line inside
+    it is worth nothing and cannot be awarded.
+
+    Each question is lifted to what its lines cost, and the lift is taken from
+    the questions furthest above their own floor - largest first, so the marks
+    come off where they are least felt. Returns None when the station's twenty
+    marks cannot cover what its rubric asks for, which is a refusal: the
+    question needs fewer lines, and that is not arithmetic.
+    """
+    if not prompts:
+        return None
+    floors = {str(p.get("label")): _floor_for(p) for p in prompts}
+    if sum(floors.values()) > STATION_MARKS + 0.001:
+        return None
+
+    targets = {str(p.get("label")): _question_marks(p) for p in prompts}
+    for label, floor in floors.items():
+        targets[label] = max(targets[label], floor)
+
+    # Give back whatever the lifting took, from those with most to spare.
+    drift = round(sum(targets.values()) - STATION_MARKS, 2)
+    while drift > 0.001:
+        spare = [l for l in targets if targets[l] - floors[l] >= 0.5]
+        if not spare:
+            return None
+        label = max(spare, key=lambda l: targets[l] - floors[l])
+        targets[label] -= 0.5
+        drift = round(drift - 0.5, 2)
+    while drift < -0.001:
+        label = max(targets, key=lambda l: targets[l])
+        targets[label] += 0.5
+        drift = round(drift + 0.5, 2)
+
+    if abs(sum(targets.values()) - STATION_MARKS) > 0.01:
+        return None
+    return targets
+
+
+def drop_lines_that_are_not_points(
+    station: OsceStation, prompts: list[dict[str, Any]]
+) -> int:
+    """Remove rubric lines that are the examiners' notes, not marking points.
+
+    Station 19 carries "Not mentioning lack of subretinal fluid" as a rubric
+    line worth nothing - word for word what its `common_mistakes` already says.
+    Ingest put the same sentence in both places, and a candidate cannot say a
+    thing they failed to mention: it is a note about the cohort, not a point
+    anybody can earn.
+
+    Matched against the station's own mistakes rather than by how the sentence
+    reads. A rule about wording would eventually meet a real point that starts
+    with "Not", and this needs no guessing: the sentence is already recorded
+    elsewhere as what it actually is.
+    """
+    mistakes = {
+        str(m).strip().rstrip(".").lower()
+        for m in (station.common_mistakes or [])
+        if str(m).strip()
+    }
+    if not mistakes:
+        return 0
+    dropped = 0
+    for prompt in prompts:
+        kept = [
+            point
+            for point in (prompt.get("rubric") or [])
+            if not (
+                as_float(point.get("marks"), 0.0) <= 0
+                and str(point.get("text") or "").strip().rstrip(".").lower() in mistakes
+            )
+        ]
+        dropped += len(prompt.get("rubric") or []) - len(kept)
+        prompt["rubric"] = kept
+    return dropped
+
+
+def rebalance_station(db: Session, station: OsceStation) -> dict[str, Any]:
+    """Make every line on a station awardable. No model call: this is arithmetic."""
+    prompts = [
+        dict(p, rubric=[dict(pt) for pt in (p.get("rubric") or [])])
+        for p in (station.prompts or [])
+    ]
+    if not prompts:
+        return {"skipped": 1}
+
+    dropped = drop_lines_that_are_not_points(station, prompts)
+    if not any(_dead_lines(p) for p in prompts) and not dropped:
+        return {"already_marked": 1}
+
+    targets = rebalance_marks(prompts)
+    if targets is None:
+        return {"rejected": 1, "reason": "twenty marks cannot cover the lines the rubric asks for"}
+
+    for prompt in prompts:
+        prompt["rubric"] = _spread(prompt["rubric"], targets[str(prompt.get("label"))])
+
+    total = _total(prompts)
+    still = [
+        f"{p.get('label')}[{i}]" for p in prompts for i in _dead_lines(p)
+    ]
+    if still or abs(total - STATION_MARKS) > 0.01:
+        return {"rejected": 1, "reason": f"totals {total:g}, unawardable lines: {still or 'none'}"}
+
+    station.prompts = prompts
+    flag_modified(station, "prompts")
+    station.total_marks = int(STATION_MARKS)
+    db.commit()
+    return {"rebalanced": 1, "lines_dropped": dropped}
 
 
 def _half(value: float) -> float:
@@ -290,7 +419,14 @@ def handle_remark_stations(ctx: JobContext) -> bool:
     station = ctx.db.get(OsceStation, station_ids[index])
     if station is not None:
         try:
-            outcome = remark_station(ctx.db, AIClient(ctx.db), station, job_id=ctx.job.id)
+            # A question worth nothing needs wording, and wording needs the
+            # model. A line worth nothing inside a question that has marks
+            # needs neither - the points are already written and only the
+            # arithmetic is wrong, so it is not paid for.
+            if any(_question_marks(p) <= 0 for p in (station.prompts or [])):
+                outcome = remark_station(ctx.db, AIClient(ctx.db), station, job_id=ctx.job.id)
+            else:
+                outcome = rebalance_station(ctx.db, station)
         except Exception as exc:  # noqa: BLE001 - one station must not stop the run
             ctx.db.rollback()
             logger.exception("Could not re-mark station %s", station.id)

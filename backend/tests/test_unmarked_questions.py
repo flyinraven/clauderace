@@ -189,3 +189,110 @@ def test_the_repair_leaves_no_rubric_line_worth_nothing():
     lines = [pt for p in station.prompts for pt in p["rubric"]]
     assert all(pt["marks"] > 0 for pt in lines), "every line has to be awardable"
     assert sum(pt["marks"] for pt in lines) == STATION_MARKS
+
+
+# --- A line worth nothing, on a question that is worth something ----------
+# The same fault one level down, and it hides from the question-level check.
+
+
+def test_a_question_that_cannot_pay_for_its_lines_is_lifted():
+    """Station 190: "Name four causes", four lines, 1.5 marks between them.
+
+    Three lines get half a mark and the fourth gets nothing, so a candidate
+    who names it is credited nothing for it. The question is lifted to what
+    its lines cost and the difference comes off a question with room.
+    """
+    from app.services.osce.remark import rebalance_marks
+
+    targets = rebalance_marks([
+        {"label": "A", "rubric": [{"marks": 18.5}]},
+        {"label": "E", "rubric": [{"marks": 0}, {"marks": 0.5},
+                                  {"marks": 0.5}, {"marks": 0.5}]},
+    ])
+    assert targets["E"] >= 2.0, "four lines cost two marks"
+    assert sum(targets.values()) == STATION_MARKS
+
+
+def test_a_rubric_the_twenty_marks_cannot_cover_is_refused():
+    """Forty-one lines cannot be paid in half marks out of twenty.
+
+    That is a question with too many lines, not an arithmetic problem, and
+    inventing a way to balance it would hide the thing that needs deciding.
+    """
+    from app.services.osce.remark import rebalance_marks
+
+    assert rebalance_marks([
+        {"label": "A", "rubric": [{"marks": 0.5}] * 41},
+    ]) is None
+
+
+def test_the_examiners_notes_are_not_marking_points():
+    """Station 19 carried its own common mistakes as rubric lines worth zero.
+
+    Ingest put the same sentence in both places. A candidate cannot say a
+    thing they failed to mention, so it is not a point anybody can earn - and
+    it is matched against the station's own recorded mistakes rather than by
+    how the sentence reads, which would eventually catch a real point.
+    """
+    from app.services.osce.remark import drop_lines_that_are_not_points
+
+    station = _Station([])
+    station.common_mistakes = ["Not mentioning lack of subretinal fluid"]
+    prompts = [{"label": "B", "rubric": [
+        {"text": "Discusses suspicious features", "marks": 4},
+        {"text": "Not mentioning lack of subretinal fluid.", "marks": 0},
+    ]}]
+
+    dropped = drop_lines_that_are_not_points(station, prompts)
+
+    assert dropped == 1
+    assert [pt["text"] for pt in prompts[0]["rubric"]] == ["Discusses suspicious features"]
+
+
+def test_a_note_that_is_carrying_marks_is_left_alone():
+    """Worth something means somebody decided it was a point. Not ours to drop."""
+    from app.services.osce.remark import drop_lines_that_are_not_points
+
+    station = _Station([])
+    station.common_mistakes = ["Not mentioning lack of subretinal fluid"]
+    prompts = [{"label": "B", "rubric": [
+        {"text": "Not mentioning lack of subretinal fluid.", "marks": 2},
+    ]}]
+
+    assert drop_lines_that_are_not_points(station, prompts) == 0
+
+
+def test_rebalancing_leaves_a_healthy_station_untouched():
+    """It states an end state, so a station already right must not move."""
+    from app.services.osce.remark import rebalance_station
+
+    station = _Station([
+        {"label": "A", "text": "x", "seconds": 300,
+         "rubric": [{"text": "a", "marks": 10}]},
+        {"label": "B", "text": "y", "seconds": 300,
+         "rubric": [{"text": "b", "marks": 10}]},
+    ])
+    before = [dict(p) for p in station.prompts]
+
+    assert rebalance_station(_db(), station) == {"already_marked": 1}
+    assert station.prompts == before
+
+
+def test_rebalancing_makes_every_line_awardable_and_keeps_the_twenty():
+    from app.services.osce.remark import rebalance_station
+
+    station = _Station([
+        {"label": "A", "text": "x", "seconds": 300,
+         "rubric": [{"text": "a", "marks": 18.5}]},
+        {"label": "E", "text": "Name four causes.", "seconds": 120,
+         "rubric": [{"text": "one", "marks": 0}, {"text": "two", "marks": 0.5},
+                    {"text": "three", "marks": 0.5}, {"text": "four", "marks": 0.5}]},
+    ])
+
+    outcome = rebalance_station(_db(), station)
+
+    assert outcome["rebalanced"] == 1
+    lines = [pt for p in station.prompts for pt in p["rubric"]]
+    assert all(pt["marks"] > 0 for pt in lines)
+    assert sum(pt["marks"] for pt in lines) == STATION_MARKS
+    assert len(lines) == 5, "no point is dropped to make the sums work"
