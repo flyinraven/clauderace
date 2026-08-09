@@ -38,7 +38,7 @@ from app.services.ai import AIClient
 from app.services.coerce import as_float
 from app.services.errors import log_error
 from app.services.jobs.runner import JobContext, JobHandlerError, register_handler
-from app.services.marking import absorb_mark_drift
+from app.services.marking import absorb_mark_drift, rescale_marks_to_awardable
 
 logger = logging.getLogger(__name__)
 
@@ -129,27 +129,75 @@ def plan_marks(prompts: list[dict[str, Any]]) -> dict[str, float] | None:
     held = sum(_question_marks(p) for p in alive)
     for prompt in alive:
         scaled = pool * _question_marks(prompt) / held if held else pool / len(alive)
-        targets[str(prompt.get("label"))] = max(1.0, _half(scaled))
+        # Never below what its own rubric lines cost. A question the examiners
+        # wrote four points for cannot be cut to one mark without one of those
+        # points being worth nothing, and they are not this pass's to discard.
+        targets[str(prompt.get("label"))] = max(_floor_for(prompt), _half(scaled))
 
     # Rounding leaves a remainder either way. It goes on the largest question,
-    # where half a mark is least visible.
+    # where half a mark is least visible - and comes off the largest question
+    # that can afford it, which is not always the same one.
+    floors = {str(p.get("label")): _floor_for(p) for p in alive}
     drift = STATION_MARKS - sum(targets.values())
     if abs(drift) > 0.001:
-        largest = max(targets, key=lambda k: targets[k])
-        targets[largest] = max(1.0, targets[largest] + drift)
+        payable = [
+            label for label in targets
+            if targets[label] + drift >= floors.get(label, 1.0)
+        ]
+        if not payable:
+            return None
+        largest = max(payable, key=lambda k: targets[k])
+        targets[largest] = targets[largest] + drift
     if abs(sum(targets.values()) - STATION_MARKS) > 0.01:
         return None
     return targets
 
 
+def _floor_for(prompt: dict[str, Any]) -> float:
+    """The least a question can be worth and still pay for the points it holds.
+
+    Half a mark is the finest award anyone can make, so a question carrying
+    four rubric lines cannot be worth one mark: something has to be awarded
+    nothing. This is what keeps the allocation from proposing a share the
+    question cannot spend.
+    """
+    return max(1.0, 0.5 * len(prompt.get("rubric") or []))
+
+
 def _spread(points: list[dict[str, Any]], marks: float) -> list[dict[str, Any]]:
-    """Share one question's marks across its points, evenly, absorbing drift."""
+    """Share one question's marks across its points, evenly, in awardable halves.
+
+    Every point had a floor of half a mark and the remainder was pushed onto
+    one of them, which cannot go below zero. A question worth 1 mark holding
+    four points therefore came out worth 1.5, and the half mark surfaced on the
+    station total: eleven stations were refused for totalling 20.5 with every
+    question marked, which reads as a fault in the allocation and was this.
+
+    `rescale_marks_to_awardable` is the apportionment that cannot drift - the
+    same one the written papers use - and it refuses outright when there are
+    more lines than half marks to pay them with. That refusal is the case
+    above, so the lines that cannot be awarded go rather than being awarded
+    nothing. Only a question whose points were written by the re-marking model
+    can reach that state; an examiner's own lines are paid for by the floor in
+    `plan_marks`.
+    """
     if not points:
         return points
-    each = _half(marks / len(points)) or 0.5
+    units = int(round(marks * 2))
+    if units <= 0:
+        return points
+    del points[units:]
+
+    # Seeded equal, so the apportionment shares them evenly - which is what
+    # this has always done. The rescale reads the marks already on a point as
+    # the ratio to preserve, and equal seeds mean equal shares.
     for point in points:
-        point["marks"] = each
-    absorb_mark_drift(points, marks)
+        point["marks"] = 1.0
+    if not rescale_marks_to_awardable(points, marks):
+        each = _half(marks / len(points)) or 0.5
+        for point in points:
+            point["marks"] = each
+        absorb_mark_drift(points, marks)
     return points
 
 

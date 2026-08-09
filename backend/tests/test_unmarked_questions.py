@@ -127,3 +127,65 @@ def test_a_question_the_model_wrote_no_points_for_is_refused():
     assert outcome["rejected"] == 1
     assert "B" in outcome["reason"]
     assert station.prompts[1]["rubric"] == [], "the station is left as it was"
+
+
+def test_a_question_worth_one_mark_does_not_come_back_worth_one_and_a_half():
+    """The 0.5 that refused eleven stations for totalling 20.5.
+
+    Every point had a floor of half a mark and the remainder was pushed onto
+    one of them, which cannot go below zero. Four points on a question worth
+    one mark therefore came to 1.5, and the half surfaced on the station total
+    - reported as an allocation that could not be made, when the allocation
+    was right and the sharing out was not.
+    """
+    from app.services.osce.remark import _spread
+
+    points = [{"text": f"point {i}"} for i in range(4)]
+    _spread(points, 1.0)
+
+    assert sum(pt["marks"] for pt in points) == 1.0
+    assert all(pt["marks"] > 0 for pt in points), "a point worth nothing is the same fault"
+
+
+def test_more_points_than_half_marks_loses_the_ones_that_cannot_be_paid():
+    """Half a mark is the finest award, so one mark buys two points at most."""
+    from app.services.osce.remark import _spread
+
+    points = [{"text": f"point {i}"} for i in range(6)]
+    _spread(points, 1.5)
+
+    assert len(points) == 3
+    assert sum(pt["marks"] for pt in points) == 1.5
+
+
+def test_an_examiners_own_points_are_never_cut_to_pay_for_a_revival():
+    """A question the examiners wrote four lines for cannot be worth one mark.
+
+    Trimming is for points this pass wrote itself. The station's own rubric is
+    not its to discard, so the allocation gives every question at least half a
+    mark per line it already holds.
+    """
+    targets = plan_marks([
+        {"label": "A", "seconds": 60,
+         "rubric": [{"marks": 1}, {"marks": 1}, {"marks": 1}, {"marks": 1}]},
+        {"label": "B", "seconds": 60, "rubric": [{"marks": 16}]},
+        {"label": "C", "seconds": 480, "rubric": []},
+    ])
+    assert targets["A"] >= 2.0, "four lines cost at least two marks"
+    assert sum(targets.values()) == STATION_MARKS
+
+
+def test_the_repair_leaves_no_rubric_line_worth_nothing():
+    """End to end: the station totals 20 and every line on it is awardable."""
+    station = _Station([
+        {"label": "A", "text": "Examine.", "seconds": 480,
+         "rubric": [{"text": "x", "marks": 19}]},
+        {"label": "B", "text": "What next?", "seconds": 30, "rubric": []},
+    ])
+    client = _Client({"B": ["One", "Two", "Three", "Four"]})
+    outcome = remark_station(_db(), client, station)
+
+    assert outcome["remarked"] == 1
+    lines = [pt for p in station.prompts for pt in p["rubric"]]
+    assert all(pt["marks"] > 0 for pt in lines), "every line has to be awardable"
+    assert sum(pt["marks"] for pt in lines) == STATION_MARKS
