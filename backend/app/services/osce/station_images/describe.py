@@ -216,6 +216,13 @@ def figures_needing_description(db: Session) -> list[int]:
     as well. The image stays: words beside a doubtful photograph beat both a
     blank screen and a confident wrong one.
 
+    A representative image is the same case by definition - a real photograph
+    of the right disease and the wrong patient. Attaching one states the signs
+    it misses, but only when the vision model listed them; where it named none,
+    nothing was written, and 111 of the bank's 128 representative images had no
+    words at all. Station 270 opens on a photograph the model says does not
+    show the eyes in different positions of gaze, and said nothing about it.
+
     Already-described figures are skipped, so the pass can be re-run after a
     sourcing round without paying twice for the same station.
     """
@@ -227,7 +234,10 @@ def figures_needing_description(db: Session) -> list[int]:
                     OsceFigure.image_id.is_(None),
                     and_(
                         OsceFigure.is_approved.is_(True),
-                        OsceFigure.match_confidence < SETTLED_MATCH_CONFIDENCE,
+                        or_(
+                            OsceFigure.match_confidence < SETTLED_MATCH_CONFIDENCE,
+                            OsceFigure.verification_status == "representative",
+                        ),
                     ),
                 )
             )
@@ -257,9 +267,14 @@ def handle_describe_station_figures(ctx: JobContext) -> bool:
 
     figure = ctx.db.get(OsceFigure, figure_ids[index])
     station = ctx.db.get(OsceStation, figure.station_id) if figure else None
-    doubtful = figure is not None and figure.image_id is not None and (
-        figure.match_confidence or 1.0
-    ) < SETTLED_MATCH_CONFIDENCE
+    doubtful = (
+        figure is not None
+        and figure.image_id is not None
+        and (
+            (figure.match_confidence or 1.0) < SETTLED_MATCH_CONFIDENCE
+            or figure.verification_status == "representative"
+        )
+    )
     if figure is not None and station is not None and (figure.image_id is None or doubtful):
         try:
             described, concern = describe_findings(

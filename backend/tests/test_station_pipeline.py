@@ -2070,3 +2070,37 @@ def test_the_papers_own_caption_never_says_one_eye(db):
     from app.services.osce.station_images.verify import label_side
 
     assert label_side("Fundus photograph of one eye", None) == "Fundus photograph"
+
+
+def test_a_representative_image_without_words_is_selected_to_get_them(db):
+    """A real photograph of the right disease and the wrong patient.
+
+    Attaching one states the signs it misses - but only when the vision model
+    listed them. Where it named none, nothing was written, and 111 of the
+    bank's 128 representative images had no words at all. Station 270 opens on
+    a photograph the model says does not show the eyes in different positions
+    of gaze, and said nothing about it.
+    """
+    from app.models import Image
+    from app.services.osce.station_images import figures_needing_description
+
+    station = make_station(db)
+    image = Image(sha256="d" * 63 + "1", content_type="image/jpeg", data=b"jpeg",
+                  size_bytes=4, origin="web")
+    db.add(image)
+    db.flush()
+    silent = _figure(db, station, image_id=image.id, position=0, is_approved=True,
+                     verification_status="representative", match_confidence=0.9)
+    spoken = _figure(db, station, image_id=image.id, position=1, is_approved=True,
+                     verification_status="representative", match_confidence=0.9,
+                     described_findings="The right eye does not elevate.",
+                     described_findings_approved=True)
+    faithful = _figure(db, station, image_id=image.id, position=2, is_approved=True,
+                       verification_status="faithful", match_confidence=0.95)
+    db.commit()
+
+    needing = figures_needing_description(db)
+
+    assert silent.id in needing
+    assert spoken.id not in needing, "it already says what the picture misses"
+    assert faithful.id not in needing, "a confident exact match needs no gloss"
