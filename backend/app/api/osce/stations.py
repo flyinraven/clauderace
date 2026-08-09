@@ -272,6 +272,32 @@ def remark_stations(admin: AdminUser, db: DbSession) -> dict[str, Any]:
     return {"job_id": job.id, "station_count": len(ids)}
 
 
+@router.post("/stations/model-answers", status_code=status.HTTP_202_ACCEPTED)
+def write_station_model_answers(admin: AdminUser, db: DbSession) -> dict[str, Any]:
+    """Write what a full-mark answer says, for every marking point.
+
+    A rubric point tells an examiner what to tick; it does not tell a candidate
+    reading their result what they should have said. One model call per
+    station, and points that already have an answer are skipped.
+    """
+    from app.services.osce.model_answers import (
+        JOB_MODEL_ANSWERS,
+        stations_needing_model_answers,
+    )
+
+    ids = stations_needing_model_answers(db)
+    if not ids:
+        raise HTTPException(
+            status_code=400, detail="Every marking point already has its model answer"
+        )
+    job = create_job(
+        db, JOB_MODEL_ANSWERS, payload={"station_ids": ids},
+        created_by_id=admin.id, total_steps=len(ids),
+        message=f"Writing model answers for {len(ids)} station(s)",
+    )
+    return {"job_id": job.id, "station_count": len(ids)}
+
+
 @router.post("/figures/recaption", status_code=status.HTTP_202_ACCEPTED)
 def recaption_figures(admin: AdminUser, db: DbSession) -> dict[str, Any]:
     """Describe every stored image again, with the station withheld.

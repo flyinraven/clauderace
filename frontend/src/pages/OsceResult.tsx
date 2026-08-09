@@ -11,6 +11,9 @@ interface BreakdownItem {
   awarded: number
   comment: string | null
   is_critical: boolean
+  // What a full-mark answer says. Written for the question, not for this
+  // sitting, so it is the same for everyone who meets the station.
+  model_answer: string | null
 }
 
 interface PromptResult {
@@ -299,6 +302,14 @@ export default function OsceResult() {
                       </p>
                       {item.comment && (
                         <p className="mt-0.5 text-xs italic text-slate-500">{item.comment}</p>
+                      )}
+                      {item.model_answer && (
+                        <p className="mt-1.5 rounded border-l-2 border-sky-300 bg-sky-50/60 py-1 pl-2 text-xs text-slate-700">
+                          <span className="font-semibold uppercase tracking-wide text-sky-800">
+                            Model answer
+                          </span>
+                          <span className="ml-1.5">{item.model_answer}</span>
+                        </p>
                       )}
                     </div>
                   </li>

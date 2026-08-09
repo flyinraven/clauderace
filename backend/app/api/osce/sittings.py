@@ -427,6 +427,38 @@ def grade_sitting(session_id: int, user: CurrentUser, db: DbSession) -> dict[str
     return {"job_id": job.id}
 
 
+def _with_model_answers(
+    breakdown: list[dict[str, Any]] | None, prompt: dict[str, Any]
+) -> list[dict[str, Any]] | None:
+    """The marking breakdown, each point carrying the answer that earns it.
+
+    Joined in from the station at read time rather than copied into the grade
+    when it was written. The model answer belongs to the question - what a
+    fundus shows does not depend on who was asked - so writing it once has to
+    reach the sittings that are already over, which is most of them. It also
+    means correcting an answer corrects every review of it.
+
+    The grade's own text and marks are left exactly as they were: those are the
+    key the candidate was actually marked against, and a rubric edited since
+    must not rewrite the record of what happened.
+    """
+    if not breakdown:
+        return breakdown
+    rubric = prompt.get("rubric") or []
+    out = []
+    for item in breakdown:
+        index = item.get("index")
+        answer = None
+        if isinstance(index, int) and 0 <= index < len(rubric):
+            # Only when it is still the same point. A rubric rewritten since
+            # the sitting would otherwise put one point's answer under another
+            # point's text.
+            if str(rubric[index].get("text") or "") == str(item.get("text") or ""):
+                answer = str(rubric[index].get("model_answer") or "").strip() or None
+        out.append({**item, "model_answer": answer})
+    return out
+
+
 @router.get("/sittings/{session_id}/result")
 def sitting_result(session_id: int, user: CurrentUser, db: DbSession) -> dict[str, Any]:
     sitting = _load_sitting(db, session_id, user)
@@ -478,7 +510,7 @@ def sitting_result(session_id: int, user: CurrentUser, db: DbSession) -> dict[st
                         "pass": g.examiner_pass,
                         "awarded": g.awarded_marks,
                         "feedback": g.feedback,
-                        "breakdown": g.breakdown,
+                        "breakdown": _with_model_answers(g.breakdown, prompt),
                     }
                     for g in grades
                 ],
