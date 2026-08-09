@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
 from app.db import session_scope
@@ -257,6 +257,12 @@ def _fail_chunk(job_id: int, exc: Exception) -> None:
     logger.error("Job %s chunk failed: %s", job_id, exc)
 
 
+# The job types a candidate is sitting in front of, waiting for. Named as
+# strings rather than imported: the modules that register these handlers
+# import the runner, so importing them back would close the circle.
+WAITED_ON_AT_THE_SCREEN = ("transcribe_response", "grade_osce_session")
+
+
 def _claim_next(db: Session) -> Job | None:
     """Mark the next runnable job RUNNING and return it.
 
@@ -319,6 +325,15 @@ def _take_next(db: Session) -> Job | None:
     #
     # A job is reclaimed only once its heartbeat has gone quiet for
     # STALE_AFTER_SECONDS, so this cannot steal one from a live worker.
+    # Except that a candidate sitting a station is waiting at the screen for
+    # theirs. A 461-figure re-captioning batch was running while a circuit was
+    # being sat, and all five of the sitting's transcriptions queued behind it:
+    # the station showed "Transcribing..." for twenty minutes and the answers
+    # were not there to mark. Batch work has nobody watching it and can wait a
+    # few seconds; this cannot.
+    #
+    # Only ahead of work not yet started. A chunked batch keeps its place among
+    # its own chunks, and nothing already running is interrupted.
     job = db.execute(
         select(Job)
         .where(
@@ -328,7 +343,9 @@ def _take_next(db: Session) -> Job | None:
                 & ((Job.heartbeat_at.is_(None)) | (Job.heartbeat_at < stale_before))
             )
         )
-        .order_by(Job.id)
+        .order_by(
+            case((Job.job_type.in_(WAITED_ON_AT_THE_SCREEN), 0), else_=1), Job.id
+        )
         .limit(1)
     ).scalar_one_or_none()
     return job
