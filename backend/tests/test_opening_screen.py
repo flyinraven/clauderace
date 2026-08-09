@@ -157,3 +157,32 @@ def test_a_photograph_of_the_patient_is_never_moved_onto_a_question(db):
 
     assert station.prompts[0].get("figure_id") is None
     assert _captions(station) == ["Slit lamp photograph"]
+
+
+def test_a_caption_does_not_outlive_the_photograph_it_described(db):
+    """Figure 35 read "Fundus photograph of one eye" for an image long gone.
+
+    Captions are left behind when an image is rejected or detached, and the
+    re-captioning pass cannot reach them: it looks at images, and there is
+    nothing here to look at.
+    """
+    from app.services.osce.station_images import settle_station
+
+    station = make_station(db, prompts=[
+        {"label": "A", "text": "Please examine the fundus of both eyes.", "seconds": 400,
+         "rubric": [{"text": "Describes the disc", "marks": 20}]},
+    ])
+    figure = _figure(db, station, None, None, position=0,
+                     wanted_description="left dragged macula - left eye",
+                     caption="Fundus photograph of one eye",
+                     described_findings="The left macula is dragged temporally.",
+                     described_findings_approved=True)
+    db.commit()
+    db.refresh(station)
+
+    settle_station(db, station)
+    db.expire_all()
+    figure = db.query(type(figure)).filter_by(id=figure.id).one()
+
+    assert figure.caption is None
+    assert figure.described_findings, "the words are what it has; they stay"

@@ -98,6 +98,17 @@ def settle_station(db: Session, station: OsceStation) -> dict[str, int]:
             removed += 1
             continue
 
+        # A caption describes a photograph, so a figure with none has no
+        # business keeping one. These are left behind when an image is rejected
+        # or detached, and the re-captioning pass cannot reach them: it looks at
+        # images, and there is nothing here to look at. Figure 35 still read
+        # "Fundus photograph of one eye" for a picture that had been gone for
+        # weeks.
+        if (figure.caption or figure.modality) is not None:
+            figure.caption = None
+            figure.modality = None
+            cleared += 1
+
         words = (figure.described_findings or "").strip()
         if words:
             borrowed = (
