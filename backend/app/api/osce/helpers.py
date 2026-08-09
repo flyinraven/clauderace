@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 from app.api.deps import DbSession, load_owned
 from app.models import OsceSession
+from app.services.imagesearch.relevance import is_investigation
 from app.services.osce.circuit import compute_station_clock
 
 
@@ -92,17 +93,34 @@ def figures_for_prompt(by_id: dict[int, Any], prompt: dict[str, Any]) -> list[di
 
 
 def opening_figures_payload(station) -> list[dict[str, Any]]:
-    """What is on screen from the start: the patient, and nothing a question owns.
+    """What is on screen from the start: the patient, and nothing more.
 
     An image belonging to a question is not shown with the patient - an MRI on
     screen from the beginning answers the question before it is asked.
+
+    Nor is an investigation that no question claimed. At a real station the
+    candidate sees the patient and asks for the rest: "How would you confirm
+    the diagnosis?" earns the Pentacam. Showing the printouts from the start
+    inverts that - it hands over the answer and buries the view the rubric was
+    actually written for. Station 155 opened on four corneal topography maps
+    and one slit lamp photograph captioned "of one eye", and its eight marks
+    for the graft and the apical scar could not be earned from any of them.
+
+    A station whose every image is an investigation would be left with a blank
+    screen, and blank is worse than early: those keep what they have, and the
+    audit reports them as having no view of the patient.
     """
     owned = {i for p in (station.prompts or []) for i in _bound_figure_ids(p)}
-    out = []
+    shown, held_back = [], []
     for figure in sorted(station.figures, key=lambda f: f.position):
         if figure.id in owned:
             continue
         payload = visible_figure(figure)
-        if payload:
-            out.append(payload)
-    return out
+        if not payload:
+            continue
+        # Words are the examiner speaking, never an investigation.
+        if figure.image_id and is_investigation(figure.modality):
+            held_back.append(payload)
+        else:
+            shown.append(payload)
+    return shown or held_back

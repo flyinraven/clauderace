@@ -11,7 +11,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 from app.models import OsceStation
 from app.services.errors import log_error
-from app.services.imagesearch.relevance import named_modality, unsourceable_reason
+from app.services.imagesearch.relevance import (
+    is_investigation,
+    named_modality,
+    unsourceable_reason,
+)
 from app.services.jobs.runner import JobContext, JobHandlerError, register_handler
 from app.services.osce.station_images.constants import JOB_SETTLE_STATIONS
 from app.services.osce.sittability import answers_a_view
@@ -144,6 +148,34 @@ def settle_station(db: Session, station: OsceStation) -> dict[str, int]:
             if figure.image_id is None:
                 continue  # nothing to read a modality from
             if (figure.modality or named_modality(figure.caption or "")) != asked:
+                continue
+            prompt["figure_id"] = figure.id
+            spare.remove(figure)
+            bound += 1
+            break
+
+    # An investigation the station holds, and a question that discusses it, even
+    # where that question never recorded a request. Ingest lifted these straight
+    # out of the examiners' report and left every one of them on the opening
+    # screen - 302 across 96 stations, 44% of everything a candidate met on
+    # walking in. The question that asks about the OCT is where the OCT belongs,
+    # and until it is bound there the candidate reads it before being asked.
+    #
+    # Investigations only. A photograph of the patient is what the station opens
+    # on, and moving it onto a question would empty the screen it belongs to.
+    for prompt in prompts:
+        if bound_figure_ids(prompt):
+            continue
+        discussed = named_modality(" ".join(
+            [str(prompt.get("text") or "")]
+            + [str(pt.get("text") or "") for pt in (prompt.get("rubric") or [])]
+        ))
+        if discussed is None or not is_investigation(discussed):
+            continue
+        for figure in list(spare):
+            if figure.image_id is None:
+                continue
+            if (figure.modality or named_modality(figure.caption or "")) != discussed:
                 continue
             prompt["figure_id"] = figure.id
             spare.remove(figure)

@@ -34,6 +34,29 @@ MODALITIES = (
 
 # What a region of the eye can actually be photographed with. A task naming a
 # region is answerable by any of these and by nothing else.
+# What the candidate can see by looking at the patient, with the instruments a
+# station puts in front of them. Everything else is an investigation: it was
+# ordered, performed and printed, and at a real station the examiner hands it
+# over when the candidate asks for it.
+#
+# The distinction is the whole shape of an OSCE. The mock station for Joshua
+# Bullock reads "How would you confirm the diagnosis? - ask for
+# Pentacam/Anterion. Anterion images supplied in powerpoint": the map is the
+# reward for asking. Ours opened station 155 on four topography maps and buried
+# the one slit lamp photograph its eight-mark rubric was written for, which
+# both gave away the answer and hid the question.
+#
+# "other" is unclassified rather than investigational - a diagram, a photograph
+# the vision model could not name - so it is left where it is.
+PATIENT_VIEW_MODALITIES = frozenset({"external", "slit_lamp", "fundus", "other"})
+
+
+def is_investigation(modality: str | None) -> bool:
+    """Whether this is something handed over on request, not seen by looking."""
+    name = (modality or "").strip().lower()
+    return bool(name) and name not in PATIENT_VIEW_MODALITIES
+
+
 _REGION_MODALITIES: dict[str, frozenset[str]] = {
     "anterior": frozenset({"external", "slit_lamp", "topography"}),
     "posterior": frozenset({"fundus", "angiogram", "oct", "ultrasound"}),
