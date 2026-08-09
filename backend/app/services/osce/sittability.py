@@ -183,6 +183,22 @@ def station_faults(station: OsceStation) -> list[Fault]:
         if not wanted or bound:
             continue
 
+        # A question the reconcile pass has already restated asks for nothing
+        # the candidate cannot answer without. Station 238 now reads "what
+        # would you expect a cerebral angiogram to show", and 213 states its
+        # Gram stain result in words - both stand on their own, and showing the
+        # picture would hand over the mark. The request survives only as a
+        # matching key, so the ingested binder can still give the question a
+        # figure the examiners' own report holds; it is no longer a promise to
+        # anybody. Reporting it as a missing image asked for work that would
+        # damage the station if it were ever done.
+        #
+        # Only while the wording keeps its side of that bargain. A question
+        # that says "this is the angiogram" is owed one however exhausted the
+        # search is, so it falls through to the fault below.
+        if prompt.get("image_search_exhausted") and not PRESENTS_INVESTIGATION_RE.search(text):
+            continue
+
         impossible = unsourceable_reason(wanted)
         if impossible:
             faults.append(Fault(

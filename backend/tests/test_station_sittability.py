@@ -247,3 +247,50 @@ def test_a_described_view_is_not_judged_as_a_photograph(db):
     db.refresh(station)
 
     assert _kinds(station) & {"not_approved", "low_confidence"} == set()
+
+
+RESTATED_QUESTION = {
+    "label": "C", "seconds": 120,
+    "text": "What would you expect a cerebral angiogram of this patient to show?",
+    "image_wanted": "Cerebral angiogram showing the fistula",
+    "image_search_exhausted": True,
+    "rubric": [{"text": "Predicts the finding", "marks": 5}],
+}
+
+
+def test_a_question_restated_to_need_no_image_is_not_owed_one(db):
+    """Stations 213 and 238: the question already stands without a picture.
+
+    Reconciliation rewrote both - one states its Gram stain result in words,
+    the other asks what the candidate would expect an angiogram to show. The
+    request survives only as a key the ingested binder can match, not as a
+    promise. Reporting it as a missing image asked for work that would hand
+    over the mark if anybody ever did it.
+    """
+    station = make_station(db, prompts=[
+        {"label": "A", "text": "Please examine the left eye.", "seconds": 300,
+         "rubric": [{"text": "Describes the findings", "marks": 15}]},
+        dict(RESTATED_QUESTION),
+    ])
+    _figure(db, station, _image(db, "j"), position=0, verification_status="faithful",
+            match_confidence=0.9, is_approved=True)
+    db.commit()
+    db.refresh(station)
+
+    assert station_faults(station) == []
+    assert is_sittable(station)
+
+
+def test_a_restated_question_that_still_presents_one_is_owed_it(db):
+    """The exemption holds only while the wording keeps its side of it."""
+    station = make_station(db, prompts=[
+        {"label": "A", "text": "Please examine the left eye.", "seconds": 300,
+         "rubric": [{"text": "Describes the findings", "marks": 15}]},
+        dict(RESTATED_QUESTION, text="This is the cerebral angiogram. What does it show?"),
+    ])
+    _figure(db, station, _image(db, "k"), position=0, verification_status="faithful",
+            match_confidence=0.9, is_approved=True)
+    db.commit()
+    db.refresh(station)
+
+    assert "missing_investigation" in _kinds(station)
