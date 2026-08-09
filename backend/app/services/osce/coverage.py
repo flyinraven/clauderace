@@ -81,7 +81,12 @@ _NON_VISUAL_RE = re.compile(
     # the candidate DOES is a mark for doing it - the signs to be shown are in
     # the lines that name signs.
     r"examines?\b|assesses?\b|checks?\b|tests?\b|inspects?\b|palpates?\b|"
-    r"measures?\b|compares?\b|screens?\b)",
+    # Working it out, which is the answer rather than the picture. "Diagnoses
+    # orbital apex or cavernous sinus pathology" opened a view of its own and
+    # sent a search after a photograph of a conclusion. The naming rule below
+    # needs "diagnosis" as a noun and never saw this, because here it is the
+    # verb.
+    r"measures?\b|compares?\b|screens?\b|diagnos\w+\b)",
     re.IGNORECASE,
 )
 
@@ -93,7 +98,14 @@ _NAMES_THE_DIAGNOSIS_RE = re.compile(
     r"\b(?:states?|state|gives?|provides?|offers?|reaches?|makes?|recognis\w+|"
     r"recogniz\w+|names?)\s+(?:a\s+|the\s+|their\s+)?(?:most\s+likely\s+|"
     r"correct\s+|final\s+|working\s+|differential\s+)*diagnos\w+\b|"
-    r"\bdifferential\s+diagnos\w+\b",
+    r"\bdifferential\s+diagnos\w+\b|"
+    # "Names aponeurotic ptosis as a differential" carries no noun "diagnosis"
+    # at all, and neither does "irregular astigmatism as a cause of visual
+    # symptoms". Both are the candidate reasoning about what they have already
+    # seen; neither is a second photograph. Station 116 asked for one of a
+    # differential being named, and was reported as owing an image for ever.
+    r"\bas\s+(?:an?\s+)?(?:possible\s+|likely\s+)?differential\b|"
+    r"\bas\s+(?:an?\s+|the\s+)?(?:possible\s+|likely\s+|underlying\s+)?cause\b",
     re.IGNORECASE,
 )
 

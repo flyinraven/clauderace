@@ -398,3 +398,60 @@ def test_a_sign_among_the_actions_still_earns_its_view() -> None:
     }
     views = required_views(task)
     assert views, "the abduction deficit is a sign, and needs showing"
+
+
+# --- Reasoning is not a second photograph ---------------------------------
+# Seven stations were reported as owing an image per eye. Most did not: their
+# rubric carried a line about working something out, and every such line opened
+# a view of its own and sent a search after a picture of a conclusion.
+
+
+def test_diagnosing_something_is_not_a_view(db):
+    """Station 242: "Diagnoses orbital apex or cavernous sinus pathology".
+
+    The naming rule needs "diagnosis" as a noun and never saw this, because
+    here it is the verb.
+    """
+    from app.services.osce.coverage import _NAMES_THE_DIAGNOSIS_RE, _NON_VISUAL_RE
+
+    text = "Diagnoses orbital apex or cavernous sinus pathology"
+    assert _NON_VISUAL_RE.match(text) or _NAMES_THE_DIAGNOSIS_RE.search(text)
+
+
+def test_naming_a_differential_is_not_a_view(db):
+    """Station 116 asked for a photograph of a differential being named."""
+    from app.services.osce.coverage import _NAMES_THE_DIAGNOSIS_RE
+
+    for text in (
+        "Names aponeurotic ptosis as a differential",
+        "Names myasthenia gravis as a possible differential",
+    ):
+        assert _NAMES_THE_DIAGNOSIS_RE.search(text), text
+
+
+def test_attributing_a_symptom_to_a_sign_is_not_a_view(db):
+    """Station 83: "irregular astigmatism as a cause of visual symptoms".
+
+    The sign is already on screen; this line marks the reasoning about it.
+    """
+    from app.services.osce.coverage import _NAMES_THE_DIAGNOSIS_RE
+
+    for text in (
+        "irregular astigmatism as a cause of visual symptoms",
+        "corneal scar as a cause of reduced vision",
+    ):
+        assert _NAMES_THE_DIAGNOSIS_RE.search(text), text
+
+
+def test_a_line_naming_a_sign_is_still_a_view(db):
+    """The filters must not swallow what the candidate is there to see."""
+    from app.services.osce.coverage import _NAMES_THE_DIAGNOSIS_RE, _NON_VISUAL_RE
+
+    for text in (
+        "Recognises the supero-temporal rim thinning in the right eye",
+        "Identifies bilateral temporal disc pallor",
+        "Recognise the steep cornea and apical scar in the right eye",
+        "Describes the corneal scar on the left cornea",
+    ):
+        assert not _NON_VISUAL_RE.match(text), text
+        assert not _NAMES_THE_DIAGNOSIS_RE.search(text), text
