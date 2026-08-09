@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 from app.models import OsceFigure, OsceStation
 from app.services.ai import AIClient, AIError
@@ -18,6 +18,7 @@ from app.services.jobs.runner import JobContext, JobHandlerError, register_handl
 from app.services.osce.station_images.constants import (
     JOB_DESCRIBE_STATION_FIGURES,
     JOB_SETTLE_STATIONS,
+    SETTLED_MATCH_CONFIDENCE,
 )
 from app.services.osce.station_images.verify import (
     grounding_problem,
@@ -202,13 +203,33 @@ def figures_needing_description(db: Session) -> list[int]:
     the marks behind it cannot be earned until the findings are stated in
     words, which is the protocol's last resort.
 
+    And a third way, which had no words because nobody thought to look: an
+    image that scraped past the gate. Station 32 shows a nine-positions-of-gaze
+    montage graded "faithful" at 0.75 confidence, against findings that read
+    "left adduction -3, downgaze -2" - numbers a stranger's montage cannot
+    show. A representative image gets its missing signs stated beside it; one
+    called faithful on a shaky score got silence, and the candidate describes
+    what is in front of them and is marked on what is not.
+
+    Below the settled bar the picture is doubtful, so the findings are stated
+    as well. The image stays: words beside a doubtful photograph beat both a
+    blank screen and a confident wrong one.
+
     Already-described figures are skipped, so the pass can be re-run after a
     sourcing round without paying twice for the same station.
     """
     return sorted(
         f.id
         for f in db.execute(
-            select(OsceFigure).where(OsceFigure.image_id.is_(None))
+            select(OsceFigure).where(
+                or_(
+                    OsceFigure.image_id.is_(None),
+                    and_(
+                        OsceFigure.is_approved.is_(True),
+                        OsceFigure.match_confidence < SETTLED_MATCH_CONFIDENCE,
+                    ),
+                )
+            )
         ).scalars()
         if not (f.described_findings or "").strip()
     )
@@ -235,7 +256,10 @@ def handle_describe_station_figures(ctx: JobContext) -> bool:
 
     figure = ctx.db.get(OsceFigure, figure_ids[index])
     station = ctx.db.get(OsceStation, figure.station_id) if figure else None
-    if figure is not None and station is not None and figure.image_id is None:
+    doubtful = figure is not None and figure.image_id is not None and (
+        figure.match_confidence or 1.0
+    ) < SETTLED_MATCH_CONFIDENCE
+    if figure is not None and station is not None and (figure.image_id is None or doubtful):
         try:
             described, concern = describe_findings(
                 AIClient(ctx.db), station, figure.wanted_description

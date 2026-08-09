@@ -2030,3 +2030,43 @@ def test_settling_keeps_a_view_the_rubric_still_needs(db):
     outcome = settle_station(db, station)
     assert outcome["removed"] == 0
     assert db.query(type(figure)).filter_by(id=figure.id).one_or_none() is not None
+
+
+def test_a_doubtful_image_gets_the_findings_stated_beside_it(db):
+    """Station 32: a stranger's gaze montage graded "faithful" at 0.75.
+
+    Its findings read "left adduction -3, downgaze -2" - numbers no stock
+    montage can show. A representative image has its missing signs stated
+    beside it; one called faithful on a shaky score got silence, so the
+    candidate described what was in front of them and was marked on what was
+    not. 49 images across the bank were in that state.
+    """
+    from app.models import Image
+    from app.services.osce.station_images import figures_needing_description
+
+    station = make_station(db)
+    image = Image(sha256="c" * 63 + "9", content_type="image/jpeg", data=b"jpeg",
+                  size_bytes=4, origin="web")
+    db.add(image)
+    db.flush()
+    doubtful = _figure(db, station, image_id=image.id, position=0, is_approved=True,
+                       verification_status="faithful", match_confidence=0.75)
+    settled = _figure(db, station, image_id=image.id, position=1, is_approved=True,
+                      verification_status="faithful", match_confidence=0.95)
+    db.commit()
+
+    needing = figures_needing_description(db)
+    assert doubtful.id in needing, "below the settled bar the picture is doubtful"
+    assert settled.id not in needing, "and a confident one is left alone"
+
+
+def test_the_papers_own_caption_never_says_one_eye(db):
+    """The graded pass has no notion of which eye it is looking at.
+
+    Restoring 97 of the examiners' photographs ran them through it, and four
+    came back captioned "of one eye" - the wording that cost station 155 eight
+    marks, reintroduced by the one path that had never learned the rule.
+    """
+    from app.services.osce.station_images.verify import label_side
+
+    assert label_side("Fundus photograph of one eye", None) == "Fundus photograph"

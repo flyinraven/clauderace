@@ -24,7 +24,7 @@ from app.services.osce.station_images.constants import (
     JOB_VERIFY_STATION_FIGURES,
     REVIEWABLE_STATUSES,
 )
-from app.services.osce.station_images.verify import leaked_term, verify_image
+from app.services.osce.station_images.verify import label_side, leaked_term, verify_image
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +89,12 @@ def verify_ingested_figures(
         figure.verification_notes = str(verdict.get("shows") or "").strip() or None
         if not figure.caption:
             figure.caption = str(verdict.get("caption") or "").strip() or None
+        # The graded pass has no notion of which eye it is looking at, so its
+        # caption reads "of one eye" - the wording that cost station 155 eight
+        # marks. It cannot name the side, but it must not pretend to: the empty
+        # phrase comes out, and the re-captioning pass fills the side in when it
+        # looks at the image blind.
+        figure.caption = label_side(figure.caption, None)
         described += 1
         db.commit()
 
