@@ -34,7 +34,7 @@ def settle_station(db: Session, station: OsceStation) -> dict[str, int]:
 
       * a figure nothing could ever fill is removed - a rubric line that names
         an action, a request for a serology titre, a view with nothing said
-        about what it wants;
+        about what it wants, or one nobody is asking for any more;
       * findings borrowed from the station's bedside examination to stand in
         for a scan are cleared, because they describe something else;
       * words that survive are published, since a station holding a description
@@ -44,10 +44,25 @@ def settle_station(db: Session, station: OsceStation) -> dict[str, int]:
 
     Costs nothing: no searching, no model calls, and safe to run repeatedly.
     """
-    from app.services.osce.coverage import _NON_VISUAL_RE
+    from app.services.osce.coverage import _NON_VISUAL_RE, station_views
 
     removed = cleared = published = bound = 0
     recorded = (station.findings_elicited or station.findings or "").strip()
+
+    # What the station is still asking for: the views its rubric needs, and the
+    # investigations its questions are still promising. A question the reconcile
+    # pass has restated is asking for nothing - it keeps its request only as a
+    # key the ingested binder can match - so it does not hold a figure open.
+    asked_for = {v.wanted_description.strip().lower() for v in station_views(station)}
+    asked_for |= {
+        str(p.get("image_wanted") or "").strip().lower()
+        for p in (station.prompts or [])
+        if p.get("image_wanted")
+        and not p.get("image_search_exhausted")
+        and not p.get("image_impossible")
+    }
+    asked_for.discard("")
+    claimed = {i for p in (station.prompts or []) for i in bound_figure_ids(p)}
 
     for figure in list(station.figures):
         if figure.image_id is not None:
@@ -57,6 +72,24 @@ def settle_station(db: Session, station: OsceStation) -> dict[str, int]:
         # Nothing will ever fill this. Leaving it in place spends a search on
         # every run and shows the user a card that cannot be actioned.
         if not wanted or _NON_VISUAL_RE.match(wanted) or unsourceable_reason(wanted):
+            db.delete(figure)
+            removed += 1
+            continue
+
+        # Nobody is waiting for this one. It holds no image and no words, no
+        # question shows it, and nothing on the station is still asking for what
+        # it wanted - station 183 wants an OCT for a question that now states
+        # the torsion in words, and station 164 wants a biometry printout no
+        # question ever reads. Kept, they are counted for ever as views the
+        # candidate met with nothing, which is what they are not.
+        #
+        # Words are what make the difference: a figure that states its findings
+        # IS what the candidate meets, however little else is true of it.
+        if (
+            figure.id not in claimed
+            and wanted.lower() not in asked_for
+            and not (figure.described_findings or "").strip()
+        ):
             db.delete(figure)
             removed += 1
             continue

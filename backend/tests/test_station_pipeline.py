@@ -1932,3 +1932,101 @@ def test_settling_leaves_unpublished_words_unbound(db):
     assert outcome["published"] == 1
     assert outcome["bound"] == 1
     assert station.prompts[0]["figure_id"] is not None
+
+
+def test_settling_removes_a_figure_nobody_is_asking_for(db):
+    """Station 183: an OCT for a question that now states the torsion itself.
+
+    Reconciliation restated the question, so nothing is waiting for the image.
+    The row survived every other rule - it names a real investigation - and was
+    counted for ever as a view the candidate met with nothing.
+    """
+    from app.services.osce.station_images import settle_station
+
+    wanted = "Bilateral en-face optic nerve head OCT showing excyclotorsion of the left eye"
+    station = make_station(db, prompts=[
+        {"label": "C", "seconds": 120,
+         "text": "The patient has left excyclotorsion of 5-7 degrees on double Maddox "
+                 "rod. What does that tell you?",
+         "image_wanted": wanted, "image_search_exhausted": True,
+         "rubric": [{"text": "Performs double Maddox rod correctly", "marks": 2}]},
+    ])
+    figure = _figure(db, station, image_id=None, position=3, wanted_description=wanted)
+
+    outcome = settle_station(db, station)
+    assert outcome["removed"] == 1
+    assert db.query(type(figure)).filter_by(id=figure.id).one_or_none() is None
+
+
+def test_settling_removes_a_request_no_question_ever_reads(db):
+    """Station 164 wanted a biometry printout nothing on the station asks for."""
+    from app.services.osce.station_images import settle_station
+
+    station = make_station(db, prompts=[
+        {"label": "C", "text": "This is the corneal topography. What does it show?",
+         "seconds": 120, "image_wanted": "Corneal topography of the right eye",
+         "figure_id": 999, "rubric": [{"text": "Reads it", "marks": 3}]},
+    ])
+    figure = _figure(db, station, image_id=None, position=9,
+                     wanted_description="A-scan biometry printout showing axial length")
+
+    outcome = settle_station(db, station)
+    assert outcome["removed"] == 1
+    assert db.query(type(figure)).filter_by(id=figure.id).one_or_none() is None
+
+
+def test_settling_keeps_a_figure_that_states_its_findings(db):
+    """Words are what the candidate meets. Station 8 is nothing else.
+
+    Its opening view has no image and no question bound to it, and the rubric
+    line it was created from is not the phrasing `station_views` produces - so
+    every test above it says remove. The description is the station.
+    """
+    from app.services.osce.station_images import settle_station
+
+    station = make_station(db)
+    figure = _figure(
+        db, station, image_id=None, position=0,
+        wanted_description="occlusive vasculitis; the appearance of the drainage devices",
+        described_findings="A tube drainage device is in place in each eye.",
+        described_findings_approved=True,
+    )
+
+    outcome = settle_station(db, station)
+    assert outcome["removed"] == 0
+    assert db.query(type(figure)).filter_by(id=figure.id).one_or_none() is not None
+
+
+def test_settling_keeps_a_figure_a_question_is_still_waiting_for(db):
+    """A live request holds its figure open, however empty it is today."""
+    from app.services.osce.station_images import settle_station
+
+    wanted = "MRI of the orbits showing the muscle bellies"
+    station = make_station(db, prompts=[
+        {"label": "C", "text": "What does this scan show?", "seconds": 120,
+         "image_wanted": wanted, "rubric": [{"text": "Reads it", "marks": 5}]},
+    ])
+    figure = _figure(db, station, image_id=None, position=2, wanted_description=wanted)
+
+    outcome = settle_station(db, station)
+    assert outcome["removed"] == 0
+    assert db.query(type(figure)).filter_by(id=figure.id).one_or_none() is not None
+
+
+def test_settling_keeps_a_view_the_rubric_still_needs(db):
+    """The opening view is asked for by the rubric, not by any question."""
+    from app.services.osce.station_images import settle_station
+    from app.services.osce.coverage import station_views
+
+    station = make_station(db, prompts=[
+        {"label": "A", "text": "Please examine the anterior segment of both eyes.",
+         "seconds": 400, "rubric": [{"text": "Describes the corneal opacity", "marks": 18}]},
+    ])
+    views = station_views(station)
+    assert views, "the rubric has to need a view for this test to mean anything"
+    figure = _figure(db, station, image_id=None, position=0,
+                     wanted_description=views[0].wanted_description)
+
+    outcome = settle_station(db, station)
+    assert outcome["removed"] == 0
+    assert db.query(type(figure)).filter_by(id=figure.id).one_or_none() is not None
