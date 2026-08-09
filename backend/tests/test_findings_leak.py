@@ -229,3 +229,57 @@ def test_the_measurements_are_kept_when_only_the_history_leaks(db):
     assert "32 year old woman" in kept
     assert "6/60" in kept
     assert len(moved) == 1
+
+
+def test_a_station_is_never_left_with_no_background_at_all(db):
+    """Being too strict makes the station unusable.
+
+    Four stations have a diagnosis written as a history - "Bilateral Myopic
+    LASIK", "Unilateral aphakia following corneal laceration repair" - so every
+    sentence of their record names it and striking them all left the candidate
+    opening on nothing.
+
+    A real station tells them this much: Joshua Bullock's opens "monitored
+    2023-2024 with no progression and discharged". Past surgery and injury are
+    background, and the marks are for what the candidate finds on examining.
+    """
+    from app.services.osce.findings import split_findings
+    from tests.test_api_osce import make_station
+
+    station = make_station(db)
+    station.findings = "The right eye is aphakic with an irregular pupil."
+    station.case_summary = (
+        "A 2-year-old girl one week after primary repair of a full thickness "
+        "corneal laceration."
+    )
+    station.diagnosis = "Unilateral aphakia following corneal laceration repair"
+    db.commit()
+
+    client = _SplitClient({
+        "given": "2 year old girl, one week after repair of a corneal laceration.",
+        "elicited": "The right eye is aphakic with an irregular pupil.",
+    })
+    split_findings(db, client, station)
+
+    assert station.findings_given, "a station with nothing to open on is worse"
+    assert "2 year old girl" in station.findings_given
+
+
+def test_a_block_with_something_safe_still_loses_the_line_that_leaks(db):
+    """The rule only relaxes when striking would leave nothing behind."""
+    from app.services.osce.findings import split_findings
+    from tests.test_api_osce import make_station
+
+    station = make_station(db)
+    station.findings = "Corneal scarring."
+    station.diagnosis = "Keratoconus"
+    db.commit()
+
+    client = _SplitClient({
+        "given": "32 year old woman. She has keratoconus. Vision 6/60 right.",
+        "elicited": "Corneal scarring.",
+    })
+    split_findings(db, client, station)
+
+    assert "keratoconus" not in (station.findings_given or "").lower()
+    assert "6/60" in station.findings_given

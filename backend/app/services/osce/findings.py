@@ -225,8 +225,29 @@ def split_findings(
     given = str(data.get("given") or "").strip()
     elicited = str(data.get("elicited") or "").strip()
 
-    given, withheld = withhold_diagnosis(given, station)
-    if withheld:
+    kept, withheld = withhold_diagnosis(given, station)
+    if withheld and not kept.strip():
+        # Striking every line leaves the candidate with no background at all,
+        # and a station with nothing to open on is worse than one that leans on
+        # its history. Four stations landed here, and each has a diagnosis
+        # written as a history - "Bilateral Myopic LASIK", "Unilateral aphakia
+        # following corneal laceration repair" - so every sentence of the
+        # record names it and there is nothing left to keep.
+        #
+        # A real station tells the candidate this much. Joshua Bullock's opens
+        # "monitored 2023-2024 with no progression and discharged"; Lisa
+        # Cooke's, "developed sequential progressive loss of vision, left then
+        # right". Past surgery and injury are background, and the marks are for
+        # what the candidate finds on examining, not for being kept in the
+        # dark.
+        logger.warning(
+            "Station %s: the whole background names the diagnosis, so it is "
+            "kept rather than leaving the station with nothing to open on",
+            station.id,
+        )
+    else:
+        given = kept
+    if withheld and given != str(data.get("given") or "").strip():
         # Not discarded: it is a real finding, just one the candidate is meant
         # to reach rather than be handed. Elicited is never shown before the
         # result, so this is where it belongs.
