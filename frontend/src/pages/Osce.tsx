@@ -4,7 +4,7 @@ import { ApiError, api } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import { useJob } from '../hooks/useJob'
 import { useImage } from '../hooks/useImage'
-import { Alert, Badge, Button, Card, EmptyState, Input, Loading, Pagination, ProgressBar, Select } from '../components/ui'
+import { Alert, Badge, Button, Card, EmptyState, Input, Loading, Pagination, ProgressBar, Select, Tabs } from '../components/ui'
 
 interface Station {
   id: number
@@ -115,6 +115,10 @@ export default function Osce() {
   // Circuits worth revisiting are the ones already sat, so the list cannot be
   // capped at the most recent few - what you want to review is behind them.
   const [allCircuits, setAllCircuits] = useState(false)
+  // The two lists were stacked on one page and the circuits were lost under
+  // 219 stations. They are separate things: one is what you have sat, the
+  // other is what there is to sit.
+  const [tab, setTab] = useState<'stations' | 'circuits'>('stations')
   const [preview, setPreview] = useState<StationPreview | null>(null)
   const [search, setSearch] = useState('')
   const [fSubspecialty, setFSubspecialty] = useState('')
@@ -491,7 +495,22 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
         </Alert>
       )}
 
-      {circuits.length > 0 && (
+      <Tabs
+        value={tab}
+        onChange={setTab}
+        tabs={[
+          { value: 'stations', label: 'All stations', count: stations.length },
+          { value: 'circuits', label: 'Completed circuits', count: circuits.length },
+        ]}
+      />
+
+      {tab === 'circuits' && circuits.length === 0 && (
+        <EmptyState title="You have not sat a circuit yet">
+          Start one above; everything you sit is kept here with its marks and feedback.
+        </EmptyState>
+      )}
+
+      {tab === 'circuits' && circuits.length > 0 && (
         <Card
           title="Your circuits"
           description="Everything you have sat. Open one to see its marks, your answers and the examiner's feedback."
@@ -550,6 +569,7 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
         </Card>
       )}
 
+      {tab === 'stations' && (
       <Card
         title="All stations"
         description={`${visible.length} of ${stations.length} shown · ${visibleReady} ready${visibleNotReady ? `, ${visibleNotReady} awaiting preparation` : ''}`}
@@ -794,6 +814,7 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
           </>
         )}
       </Card>
+      )}
     </div>
   )
 }

@@ -303,3 +303,39 @@ export function ProgressBar({ value, label }: { value: number; label?: ReactNode
     </div>
   )
 }
+
+/** A row of tabs, for a page holding two things that were crowding each other. */
+export function Tabs<T extends string>({
+  value,
+  onChange,
+  tabs,
+}: {
+  value: T
+  onChange: (value: T) => void
+  tabs: { value: T; label: string; count?: number }[]
+}) {
+  return (
+    <div className="flex gap-1 border-b border-slate-200" role="tablist">
+      {tabs.map((tab) => (
+        <button
+          key={tab.value}
+          type="button"
+          role="tab"
+          aria-selected={value === tab.value}
+          onClick={() => onChange(tab.value)}
+          className={cx(
+            'rounded-t-lg px-4 py-2 text-sm font-medium transition',
+            value === tab.value
+              ? 'border-b-2 border-clinical-600 text-clinical-700'
+              : 'border-b-2 border-transparent text-slate-500 hover:text-slate-700',
+          )}
+        >
+          {tab.label}
+          {tab.count != null && (
+            <span className="ml-2 text-xs text-slate-400">{tab.count}</span>
+          )}
+        </button>
+      ))}
+    </div>
+  )
+}

@@ -519,8 +519,16 @@ def sitting_result(session_id: int, user: CurrentUser, db: DbSession) -> dict[st
 
     return {
         "id": sitting.id,
+        # Which circuit this was sat in, so the review can offer the way back to
+        # it. Without this the only route out was the browser's back button.
+        "circuit_id": sitting.circuit_id,
         "station": {
             "id": station.id,
+            # How the paper itself names it - "1A", "13" - so a station being
+            # discussed can be found in the report it came from.
+            "station_number": station.station_number,
+            "station_label": station.station_label,
+            "exam_period": station.exam_period,
             "subspecialty": station.subspecialty,
             "title": station.title,
             "diagnosis": station.diagnosis,

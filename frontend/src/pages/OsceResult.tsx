@@ -31,8 +31,12 @@ interface PromptResult {
 
 interface Payload {
   id: number
+  circuit_id: number | null
   station: {
     id: number
+    station_number: number | null
+    station_label: string | null
+    exam_period: string | null
     subspecialty: string | null
     title: string | null
     diagnosis: string | null
@@ -87,6 +91,12 @@ export default function OsceResult() {
 
   const marking = !['complete', 'failed', 'partial'].includes(data.grading_status)
   const result = data.result
+  // How the paper names it, so a station can be found in the report it came
+  // from - "2024 Semester 1 station 13" rather than "Neuro-ophthalmology".
+  const printed = data.station.station_label ?? data.station.station_number
+  const stationName = printed
+    ? `${data.station.exam_period ? `${data.station.exam_period} ` : ''}station ${printed}`
+    : null
 
   const regrade = async () => {
     setRegrading(true)
@@ -102,10 +112,14 @@ export default function OsceResult() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <Link to="/osce" className="text-sm text-clinical-700 hover:underline">
-            ← Back to OSCE practice
+          <Link
+            to={data.circuit_id ? `/osce/circuits/${data.circuit_id}/result` : '/osce'}
+            className="text-sm text-clinical-700 hover:underline"
+          >
+            {data.circuit_id ? '← Back to this circuit' : '← Back to OSCE practice'}
           </Link>
           <h1 className="mt-1 text-xl font-semibold text-slate-900">
+            {stationName && <span className="text-slate-500">{stationName} · </span>}
             {data.station.title ?? data.station.subspecialty ?? 'OSCE station'}
           </h1>
           <p className="text-sm text-slate-500">{data.station.subspecialty}</p>
