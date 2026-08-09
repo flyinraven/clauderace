@@ -7,6 +7,10 @@ from app.services.osce.circuit import (
     handle_grade_osce_session,
     summarise_osce_session,
 )
+from app.services.osce.diagnosis import (
+    JOB_RECOVER_DIAGNOSES,
+    stations_missing_a_diagnosis,
+)
 from app.services.osce.findings import (
     JOB_SPLIT_OSCE_FINDINGS,
     handle_split_osce_findings,
@@ -35,6 +39,8 @@ from app.services.osce.transcribe_job import (
 )
 
 __all__ = [
+    "JOB_RECOVER_DIAGNOSES",
+    "stations_missing_a_diagnosis",
     "JOB_BUILD_OSCE_PROMPTS",
     "JOB_GRADE_OSCE",
     "JOB_SOURCE_STATION_IMAGES",
