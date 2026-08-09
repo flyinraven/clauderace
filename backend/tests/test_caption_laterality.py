@@ -82,3 +82,45 @@ def test_the_blind_pass_is_asked_which_side_and_why():
     assert "of one macula" not in BLIND_SYSTEM.split("Bad captions")[0], (
         "and no longer offered as a good one"
     )
+
+
+# --- The view it stands in for --------------------------------------------
+# Most slit lamp photographs do not show which eye they are, and the blind pass
+# is right to say so. But the figure was searched for a named view, and it is
+# standing in for that eye whatever a stranger's photograph happens to be.
+
+
+@pytest.mark.parametrize(
+    ("wanted", "expected"),
+    [
+        ("the signs of a DALK - left eye", "left"),
+        ("the steep cornea and apical scar - right eye", "right"),
+        ("external photograph of both eyes in nine positions of gaze", "both"),
+        ("bilateral inferior oblique overaction", "both"),
+        # Naming both separately is the same as naming both.
+        ("compare the right eye with the left eye", "both"),
+        ("slit lamp photograph of the anterior segment", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_the_request_says_which_eye_was_wanted(wanted, expected):
+    from app.services.osce.station_images.verify import side_from_request
+
+    assert side_from_request(wanted) == expected
+
+
+def test_what_the_image_shows_beats_what_was_asked_for():
+    """A caption contradicting the picture is worse than one that says less.
+
+    The fallback only fills a gap: if the blind pass could read the side off
+    the anatomy, that is the eye in the photograph, whatever was searched for.
+    """
+    import inspect
+
+    from app.services.osce.station_images import recaption
+
+    body = inspect.getsource(recaption.recaption_figure)
+    assert 'if side not in {"right", "left", "both"}' in body, (
+        "the request is consulted only when the image could not be read"
+    )

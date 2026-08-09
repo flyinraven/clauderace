@@ -488,6 +488,30 @@ def label_side(caption: str | None, side: str | None) -> str | None:
     return (fixed or text).rstrip(" ,;:") or None
 
 
+_REQUEST_SIDE_RE = re.compile(r"\bboth\b|\bbilateral\b|\bright\b|\bleft\b", re.IGNORECASE)
+
+
+def side_from_request(wanted: str | None) -> str | None:
+    """The eye this figure was gone looking for, if its request named one.
+
+    The blind pass reads the image and is right to answer "unclear" when the
+    anatomy does not show which eye it is - most slit lamp photographs do not.
+    But the figure was searched for "the signs of a DALK - left eye", and it is
+    standing in for the left eye whatever a stranger's photograph happens to
+    be: that is the view the candidate is being asked to read.
+
+    Only ever a fallback. What the image actually shows wins, because a caption
+    that contradicts the picture is worse than one that says less.
+    """
+    found = _REQUEST_SIDE_RE.findall(wanted or "")
+    if not found:
+        return None
+    names = {f.lower() for f in found}
+    if names & {"both", "bilateral"} or {"right", "left"} <= names:
+        return "both"
+    return "right" if "right" in names else "left"
+
+
 def describe_blind(client: AIClient, data: bytes, media_type: str) -> dict[str, Any]:
     """Ask what the image shows without telling the model what to expect.
 
