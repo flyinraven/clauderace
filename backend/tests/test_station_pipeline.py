@@ -2057,7 +2057,10 @@ def test_a_doubtful_image_gets_the_findings_stated_beside_it(db):
 
     needing = figures_needing_description(db)
     assert doubtful.id in needing, "below the settled bar the picture is doubtful"
-    assert settled.id not in needing, "and a confident one is left alone"
+    # A confident one is selected too, and compared against the station before
+    # anything is written: station 166's montage was graded faithful at 1.0 and
+    # shows a third nerve palsy where five nerves are marked.
+    assert settled.id in needing
 
 
 def test_the_papers_own_caption_never_says_one_eye(db):
@@ -2103,4 +2106,67 @@ def test_a_representative_image_without_words_is_selected_to_get_them(db):
 
     assert silent.id in needing
     assert spoken.id not in needing, "it already says what the picture misses"
-    assert faithful.id not in needing, "a confident exact match needs no gloss"
+    assert faithful.id in needing, "compared first; described only if signs are left over"
+
+
+def test_signs_the_image_does_not_account_for_are_found(db):
+    """Station 166: five cranial nerves marked, a third nerve palsy shown.
+
+    Its montage was graded `faithful` at confidence 1.0. The grader is shown
+    the expected signs and asked whether the image matches, which is the
+    question that invites agreement; this comparison is made between two texts
+    that already exist, without the station in hand.
+    """
+    from app.services.osce.station_images.describe import unshown_signs
+
+    station = make_station(db)
+    station.findings_elicited = (
+        "Left third, fourth, fifth and sixth nerve palsies with lid aberrancy "
+        "and reduced corneal sensation."
+    )
+    db.commit()
+
+    class _Client:
+        def complete_json(self, **kwargs):
+            self.user = kwargs.get("user", "")
+            return {"unshown": "fifth nerve sensory loss; sixth nerve palsy"}
+
+    client = _Client()
+    missing = unshown_signs(
+        client, station,
+        "Left ptosis, limited abduction, adduction, elevation and depression.",
+    )
+
+    assert "sixth nerve" in missing
+    assert "Left ptosis" in client.user, "the image's own description is what is compared"
+
+
+def test_an_image_that_covers_the_station_is_left_alone(db):
+    """No words beside a photograph that already shows what is marked."""
+    from app.services.osce.station_images.describe import unshown_signs
+
+    station = make_station(db)
+    station.findings_elicited = "Left ptosis."
+    db.commit()
+
+    class _Client:
+        def complete_json(self, **kwargs):
+            return {"unshown": ""}
+
+    assert unshown_signs(_Client(), station, "There is a left ptosis.") is None
+
+
+def test_nothing_to_compare_means_no_call(db):
+    """A figure with no description of its own cannot be compared."""
+    from app.services.osce.station_images.describe import unshown_signs
+
+    station = make_station(db)
+    station.findings_elicited = "Left ptosis."
+    db.commit()
+
+    class _Client:
+        def complete_json(self, **kwargs):
+            raise AssertionError("should not be asked")
+
+    assert unshown_signs(_Client(), station, None) is None
+    assert unshown_signs(_Client(), station, "   ") is None

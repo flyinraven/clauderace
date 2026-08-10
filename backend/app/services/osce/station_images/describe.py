@@ -232,13 +232,11 @@ def figures_needing_description(db: Session) -> list[int]:
             select(OsceFigure).where(
                 or_(
                     OsceFigure.image_id.is_(None),
-                    and_(
-                        OsceFigure.is_approved.is_(True),
-                        or_(
-                            OsceFigure.match_confidence < SETTLED_MATCH_CONFIDENCE,
-                            OsceFigure.verification_status == "representative",
-                        ),
-                    ),
+                    # Any approved image with no words yet. A doubtful or
+                    # representative one is described outright; a confident one
+                    # is compared against the station first, and described only
+                    # where signs are left over.
+                    OsceFigure.is_approved.is_(True),
                 )
             )
         ).scalars()
@@ -275,6 +273,31 @@ def handle_describe_station_figures(ctx: JobContext) -> bool:
             or figure.verification_status == "representative"
         )
     )
+    # An image the checks were happy with can still miss most of the station.
+    # Station 166 marks five cranial nerves and its montage - graded faithful at
+    # 1.0 - shows a third nerve palsy. Asked without the station in hand, which
+    # of these signs the image accounts for, the answer is decisive; asked with
+    # it, the grader agrees with what it was told to expect. So a confident
+    # image is compared, and where signs are left over they are stated.
+    wants_checking = (
+        figure is not None
+        and station is not None
+        and figure.image_id is not None
+        and not doubtful
+        and bool((figure.verification_notes or "").strip())
+    )
+    if wants_checking:
+        try:
+            missing = unshown_signs(
+                AIClient(ctx.db), station, figure.verification_notes
+            )
+        except Exception as exc:  # noqa: BLE001 - a check is not worth the job
+            logger.warning("Could not compare figure %s with its station: %s", figure.id, exc)
+            missing = None
+        if missing:
+            logger.info("Figure %s does not show: %s", figure.id, missing[:120])
+            doubtful = True
+
     if figure is not None and station is not None and (figure.image_id is None or doubtful):
         try:
             described, concern = describe_findings(
@@ -372,3 +395,62 @@ def _queue_settle(ctx: JobContext, station_ids: list[int]) -> None:
         message=f"Settling {len(station_ids)} station(s)",
     )
     logger.info("Queued settle job %s for %d station(s)", job.id, len(station_ids))
+
+
+UNSHOWN_SYSTEM = """You are checking whether one photograph covers what a station marks.
+
+You are given a description of the image, written by someone who was not told
+what the station is about, and the signs the station's candidate is expected to
+find.
+
+List the signs the description does not account for. Judge only what the
+description says: if it reports "left ptosis and limited ductions" and the
+station also expects corneal anaesthesia and a sixth nerve palsy, those two are
+unaccounted for.
+
+A sign is accounted for when the description reports it, or reports something
+that would include it. Do not list a sign merely because the wording differs.
+
+Return ONLY a JSON object: {"unshown": "the signs it does not show, or an empty
+string when it covers them all"}"""
+
+
+def unshown_signs(client: AIClient, station: OsceStation, shows: str | None) -> str | None:
+    """The station's signs this image does not account for, or None.
+
+    Station 166 marks a left third, fourth, fifth and sixth nerve palsy from a
+    cavernous sinus meningioma. Its montage was graded `faithful` at confidence
+    1.0, and the grader's own note reads "left ptosis, limited abduction,
+    adduction, elevation, and depression, along with lid retraction on
+    downgaze" - a complete third nerve palsy and nothing else. The candidate
+    describes what is in front of them and is marked against five nerves.
+
+    The grader cannot catch this: it is shown the expected signs and asked
+    whether the image matches, which is the question that invites agreement.
+    `blind_disagreement` will not either - it compares laterality and modality
+    only, deliberately, because comparing signs by word overlap produced 146
+    false disagreements in one sweep.
+
+    So the comparison is made by judgement, between two texts that already
+    exist: what the image was said to show, written without the station in
+    hand, and what the station expects. No vision call.
+    """
+    described = (shows or "").strip()
+    expected = (station.findings_elicited or station.findings or "").strip()
+    if not described or not expected:
+        return None
+    data = client.complete_json(
+        task="utility",
+        system=UNSHOWN_SYSTEM,
+        user=(
+            f"WHAT THE IMAGE SHOWS:\n{described}\n\n"
+            f"WHAT THE STATION EXPECTS:\n{expected}\n\n"
+            f"Which of the station's signs does the description not account for?"
+        ),
+        max_tokens=250,
+        temperature=0.0,
+    )
+    text = str((data or {}).get("unshown") or "").strip()
+    if not text or text.lower() in {"none", "null", "n/a"}:
+        return None
+    return text
