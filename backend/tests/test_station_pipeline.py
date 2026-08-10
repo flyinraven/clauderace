@@ -2455,3 +2455,42 @@ def test_a_paper_that_never_failed_is_left_alone(db):
 
     assert source.status == "completed"
     assert "Failed" not in source.status_detail
+
+
+def test_a_station_with_no_printed_task_still_tells_the_candidate_what_to_do():
+    """Six stations of 2019 Semester 2 arrived with no task at all.
+
+    That report never prints the instruction - it records the diagnosis, the
+    aims and how the cohort went. A station with no task is nine minutes of
+    nothing.
+    """
+    from app.services.ingest.segment import Block
+    from app.services.ingest.structure import normalise_osce
+
+    block = Block(kind="OSCE", number=4, text="Station 4: Ocular Inflammation")
+    out = normalise_osce(
+        {"title": "Birdshot", "aims": ["Diagnosis and management of birdshot "
+                                       "chorioretinopathy."], "tasks": []},
+        block,
+    )
+
+    assert len(out["tasks"]) == 2
+    joined = " ".join(t["prompt"] for t in out["tasks"]).lower()
+    assert "describe your findings" in joined
+    assert "birdshot" not in joined, (
+        "a task written from the aims would print the answer in the instruction"
+    )
+
+
+def test_a_printed_task_is_never_replaced():
+    from app.services.ingest.segment import Block
+    from app.services.ingest.structure import normalise_osce
+
+    block = Block(kind="OSCE", number=4, text="Station 4")
+    out = normalise_osce(
+        {"tasks": [{"prompt": "Examine this patient's ocular motility.", "minutes": 4}]},
+        block,
+    )
+
+    assert len(out["tasks"]) == 1
+    assert out["tasks"][0]["prompt"] == "Examine this patient's ocular motility."

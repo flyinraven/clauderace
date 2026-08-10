@@ -283,3 +283,60 @@ def test_a_block_with_something_safe_still_loses_the_line_that_leaks(db):
 
     assert "keratoconus" not in (station.findings_given or "").lower()
     assert "6/60" in station.findings_given
+
+
+def test_a_picture_to_open_on_beats_printing_the_diagnosis(db):
+    """2019 Semester 2 station 4 opened with the words "Birdshot Chorioretinopathy".
+
+    That report is examiner feedback rather than a case record: the whole
+    source block is a one-line summary, the aims and the common mistakes, with
+    no history, no acuity and no pressures anywhere in the file. Its clinical
+    content is in the slides.
+
+    So "never leave the station with nothing to open on" - which protects a
+    station whose history is safe to show - was preserving the answer itself.
+    Where there is a figure, the figure is the stem, and the station works the
+    way a real one does: look at these images and say what you see.
+    """
+    from app.models import OsceFigure
+    from app.services.osce.findings import split_findings
+    from tests.test_api_osce import make_station
+
+    station = make_station(db)
+    station.findings = None
+    station.case_summary = "Birdshot Chorioretinopathy"
+    station.diagnosis = "Birdshot Chorioretinopathy"
+    db.add(OsceFigure(station_id=station.id, position=0,
+                      wanted_description="fundus", verification_status="from_paper"))
+    db.commit()
+
+    client = _SplitClient({"given": "Birdshot Chorioretinopathy", "elicited": ""})
+    split_findings(db, client, station)
+
+    assert not station.findings_given, "the diagnosis must not be the opening screen"
+    assert "Birdshot" in (station.findings_elicited or ""), (
+        "it is still a real finding - one the candidate reaches, not is handed"
+    )
+
+
+def test_with_no_picture_the_background_is_still_kept(db):
+    """The older rule survives where it was right.
+
+    A station with neither a figure nor a background has nothing at all to
+    open on, and that was the failure that made the never-empty rule
+    necessary. Only the presence of a picture changes the answer.
+    """
+    from app.services.osce.findings import split_findings
+    from tests.test_api_osce import make_station
+
+    station = make_station(db)
+    station.figures.clear()
+    station.findings = None
+    station.case_summary = "Bilateral Myopic LASIK"
+    station.diagnosis = "Bilateral Myopic LASIK"
+    db.commit()
+
+    client = _SplitClient({"given": "Bilateral Myopic LASIK", "elicited": ""})
+    split_findings(db, client, station)
+
+    assert station.findings_given, "with no picture, a bare station is the worse failure"

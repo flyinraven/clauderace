@@ -346,6 +346,26 @@ def normalise_osce(data: dict[str, Any], block: Block) -> dict[str, Any]:
         elif isinstance(raw, str) and raw.strip():
             tasks.append({"prompt": raw.strip(), "minutes": None})
 
+    if not tasks:
+        # A station with no task is nine minutes of nothing: the candidate is
+        # shown a screen and never told what to do with it. Six stations of
+        # 2019 Semester 2 arrived this way, because that report never prints
+        # the instruction - it records the diagnosis, the aims and how the
+        # cohort went, and the task was on the door of the room.
+        #
+        # Deliberately generic, and deliberately not built from the aims: the
+        # aims name the disease ("Diagnosis and management of birdshot
+        # chorioretinopathy"), so a task written from them would print the
+        # answer in the instruction. This is the standard shape of an
+        # image-led RACE station and gives away nothing.
+        tasks = [
+            {"prompt": "Examine the images provided and describe your findings.",
+             "minutes": None},
+            {"prompt": "Discuss your differential diagnosis and management.",
+             "minutes": None},
+        ]
+        warnings.append("No task was printed; the standard image-led pair was used.")
+
     subspecialty = normalise_subspecialty(data.get("subspecialty")) or normalise_subspecialty(
         data.get("title")
     )

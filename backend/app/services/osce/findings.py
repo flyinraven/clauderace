@@ -226,7 +226,25 @@ def split_findings(
     elicited = str(data.get("elicited") or "").strip()
 
     kept, withheld = withhold_diagnosis(given, station)
-    if withheld and not kept.strip():
+    if withheld and not kept.strip() and station.figures:
+        # The whole background is the diagnosis AND there is a picture to open
+        # on. Keeping it hands the candidate the answer at the opening screen;
+        # emptying it costs nothing, because the figure is the stem.
+        #
+        # Twelve stations of 2019 Semester 2 land here. That report is examiner
+        # feedback rather than a case record - station 4's entire source block
+        # is "SUMMARY OF CASE - Birdshot Chorioretinopathy" plus the aims and
+        # the common mistakes, with no history, no acuity and no pressures
+        # anywhere in the file. Its clinical content is in the slides. So the
+        # station works exactly as a real one does - look at these images, say
+        # what you see - and only if the diagnosis is not printed above them.
+        given = ""
+        logger.warning(
+            "Station %s: the whole background named the diagnosis and the "
+            "station has %d figure(s) to open on, so it opens on those",
+            station.id, len(station.figures),
+        )
+    elif withheld and not kept.strip():
         # Striking every line leaves the candidate with no background at all,
         # and a station with nothing to open on is worse than one that leans on
         # its history. Four stations landed here, and each has a diagnosis
