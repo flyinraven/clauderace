@@ -176,6 +176,26 @@ def settle_station(db: Session, station: OsceStation) -> dict[str, int]:
     # Only where the paper covers it. 149 representative images answer views
     # the report has no picture of, and those are the best there is.
     opening = [f for f in station.figures if f.image_id and f.id not in claimed]
+
+    # The same photograph twice. Searching a second view of the same case finds
+    # the picture the station already shows, and it was attached again under a
+    # new caption: station 28 held one gaze montage as both figure 0 and figure
+    # 2, so the candidate met it twice and the second view was never covered.
+    # The paper's own copy is the one kept.
+    seen: dict[int, OsceFigure] = {}
+    for figure in sorted(
+        opening, key=lambda f: (f.verification_status != FROM_PAPER, f.position)
+    ):
+        first = seen.get(figure.image_id)
+        if first is None:
+            seen[figure.image_id] = figure
+            continue
+        db.delete(figure)
+        removed += 1
+    if removed:
+        db.flush()
+        opening = [f for f in opening if f in seen.values()]
+
     covered = {
         f.modality for f in opening if f.verification_status == FROM_PAPER and f.modality
     }

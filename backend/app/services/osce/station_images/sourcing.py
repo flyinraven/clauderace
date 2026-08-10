@@ -7,13 +7,14 @@ about something the opening view cannot show.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 
 from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
-from app.models import OsceFigure, OsceStation
+from app.models import Image, OsceFigure, OsceStation
 from app.services.ai import AIClient
 from app.services.coerce import as_float
 from app.services.errors import log_error
@@ -164,6 +165,16 @@ def source_image_for_station(
 
     # Never offer back an image the user has already turned down.
     already_rejected = set(figure.rejected_urls or [])
+    # Nor one this station is already showing, under any figure.
+    held_digests = {
+        image.sha256
+        for image in (
+            db.get(Image, f.image_id)
+            for f in station.figures
+            if f.image_id and f.id != figure.id
+        )
+        if image is not None
+    }
     auto_approve = store.get_bool("imagesearch.auto_approve", True)
 
     # Two sweeps at most. The first works specific -> broad and stops at the
@@ -211,6 +222,18 @@ def source_image_for_station(
                     rejections.append(
                         f"{candidate.source or 'source'}: not usable (too small, wrong "
                         "format, or would not download)"
+                    )
+                    continue
+
+                # A picture this station already shows. Searching a second view
+                # of the same case finds the same photograph, and it was
+                # attached again under a new caption: station 28 held one gaze
+                # montage as both figure 0 and figure 2, so the candidate met
+                # the same image twice and the second view was never covered.
+                # Rejecting it here also stops the vision call being paid for.
+                if hashlib.sha256(downloaded[0]).hexdigest() in held_digests:
+                    rejections.append(
+                        f"{candidate.source or 'source'}: the station already shows this image"
                     )
                     continue
                 blob, content_type, _width, _height = downloaded

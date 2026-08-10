@@ -265,3 +265,44 @@ def test_sourcing_does_not_buy_what_the_paper_already_holds(db, ai):
     assert outcome["attached"] is False
     assert "paper already holds" in outcome["reason"]
     assert outcome["queries"] == [], "no query was written, so none was paid for"
+
+
+def test_the_same_photograph_is_not_shown_twice(db):
+    """Station 28 held one gaze montage as both figure 0 and figure 2.
+
+    Searching a second view of the same case finds the picture the station
+    already shows. It was attached again under a new caption, so the candidate
+    met it twice and the second view was never covered at all.
+    """
+    from app.services.osce.station_images import settle_station
+
+    station = make_station(db)
+    image = _image(db, "s")
+    first = _figure(db, station, None, "external", position=0,
+                    verification_status="from_paper", caption="Nine positions of gaze")
+    first.image_id = image.id
+    second = _figure(db, station, None, "external", position=2,
+                     verification_status="faithful", caption="Various positions of gaze")
+    second.image_id = image.id
+    db.commit()
+    db.refresh(station)
+
+    outcome = settle_station(db, station)
+
+    assert outcome["removed"] == 1
+    assert db.query(type(first)).filter_by(id=first.id).one_or_none() is not None, (
+        "the examiners' own copy is the one kept"
+    )
+    assert db.query(type(second)).filter_by(id=second.id).one_or_none() is None
+
+
+def test_two_different_photographs_both_stay(db):
+    from app.services.osce.station_images import settle_station
+
+    station = make_station(db)
+    _figure(db, station, "t", "external", position=0, verification_status="from_paper")
+    _figure(db, station, "u", "external", position=1, verification_status="faithful")
+    db.commit()
+    db.refresh(station)
+
+    assert settle_station(db, station)["removed"] == 0
