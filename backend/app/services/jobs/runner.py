@@ -41,6 +41,13 @@ logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 3
 IDLE_SLEEP_SECONDS = 2.0
+# Breath between chunks. The worker is a thread inside the process that
+# serves the site, on one free-tier core with 512 MB: a 461-chunk batch
+# looping straight from one chunk into the next starves the health check,
+# Render times that out after five seconds, and answers by killing the
+# instance. Five kills in ten minutes read from the outside as a server
+# that will not wake up.
+BUSY_YIELD_SECONDS = 0.25
 # A job whose heartbeat is older than this was interrupted (process restart)
 # and is safe to reclaim.
 STALE_AFTER_SECONDS = 300
@@ -170,6 +177,10 @@ class JobWorker:
             if not did_work:
                 self._wake.wait(IDLE_SLEEP_SECONDS)
                 self._wake.clear()
+            else:
+                # Costs two minutes across a 461-chunk batch nobody is watching,
+                # and keeps the site answering while it runs.
+                time.sleep(BUSY_YIELD_SECONDS)
 
     def _run_one_chunk(self) -> bool:
         with session_scope() as db:
