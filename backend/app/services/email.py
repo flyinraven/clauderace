@@ -3,7 +3,8 @@
 Two routes, chosen by `email.provider`:
 
 * `resend` posts to an HTTPS API. This is the one that works in production -
-  Render's free tier blocks outbound traffic to SMTP ports 25, 465 and 587, so
+  hosts block outbound SMTP to stop spam being sent from them. Render's free
+  tier blocks ports 25, 465 and 587, and Railway blocks 465 too, so
   a mailbox connection there can only ever time out.
 * `smtp` talks to a mailbox directly. Fine locally, or on a paid Render
   instance, and kept so the choice is a dropdown rather than a rewrite.
@@ -142,7 +143,7 @@ def _send_via_resend(
 ) -> None:
     """Post the message to Resend's HTTPS API.
 
-    Port 443, so it is unaffected by the SMTP block on Render's free tier.
+    Port 443, so no host's outbound SMTP block touches it.
     """
     payload: dict[str, object] = {
         "from": formataddr((config.from_name, config.sender))
@@ -209,9 +210,12 @@ def _send_via_smtp(
         raise EmailError(f"{config.host} refused the message: {exc}") from exc
     except (OSError, ssl.SSLError) as exc:
         raise EmailError(
-            f"Could not reach {config.host}:{config.port} - {exc}. On Render's free "
-            f"tier this is expected: outbound SMTP ports are blocked, so use the "
-            f"Resend provider instead."
+            f"Could not reach {config.host}:{config.port} - {exc}. Most hosts "
+            f"block outbound SMTP to stop spam being sent from them: Render's "
+            f"free tier blocks 25, 465 and 587, and Railway blocks 465 as well. "
+            f"Try port 587 with SSL off before giving up - it is blocked less "
+            f"often than 465 - and otherwise use the Resend provider, which "
+            f"posts over HTTPS and is unaffected."
         ) from exc
 
 
