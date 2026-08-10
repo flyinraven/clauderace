@@ -2259,3 +2259,54 @@ def test_words_beside_a_photograph_do_not_erase_its_tier(db, admin, run_jobs, ai
     assert figure.verification_status == "representative", (
         "it is still a stock photograph, and the audit has to keep seeing that"
     )
+
+
+def test_a_station_that_comes_back_unparseable_is_asked_again(db):
+    """Station 6A of 2020 Semester 1 was dropped for one malformed reply.
+
+    The only trace was "Created 17 item(s). Failed: OSCE 6A." in a field nobody
+    reads, and recovering it means re-ingesting the document - paying for the
+    other seventeen stations a second time.
+    """
+    from app.services.ingest.segment import Block
+    from app.services.ingest.structure import structure_osce_block
+
+    block = Block(kind="OSCE", number=6, suffix="A",
+                  text="Station 6A: Glaucoma SUMMARY OF CASE a 22-year-old with raised pressure")
+
+    class _Client:
+        def __init__(self):
+            self.calls = 0
+
+        def complete_json(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return "not an object at all"
+            return {"title": "Juvenile glaucoma", "subspecialty": "Glaucoma"}
+
+    client = _Client()
+    out = structure_osce_block(client, block)
+
+    assert client.calls == 2, "asked once more before giving up"
+    assert out["title"] == "Juvenile glaucoma"
+
+
+def test_a_station_unparseable_twice_still_fails(db):
+    """One retry, not a loop. Twice is a statement about the extract."""
+    from app.services.ingest.segment import Block
+    from app.services.ingest.structure import structure_osce_block
+
+    block = Block(kind="OSCE", number=6, suffix="A", text="Station 6A: Glaucoma")
+
+    class _Client:
+        def __init__(self):
+            self.calls = 0
+
+        def complete_json(self, **kwargs):
+            self.calls += 1
+            return ["still not an object"]
+
+    client = _Client()
+    with pytest.raises(ValueError, match="twice"):
+        structure_osce_block(client, block)
+    assert client.calls == 2

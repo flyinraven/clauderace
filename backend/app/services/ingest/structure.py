@@ -129,16 +129,38 @@ def structure_written_block(client: AIClient, block: Block, job_id: int | None =
 
 
 def structure_osce_block(client: AIClient, block: Block, job_id: int | None = None) -> dict[str, Any]:
+    """Turn one station's pages into the station record.
+
+    Asked twice when the first reply is not an object. A malformed or truncated
+    completion is a one-off, not a statement about the extract: station 6A of
+    2020 Semester 1 came back unparseable, the whole station was dropped, and
+    the only trace was "Created 17 item(s). Failed: OSCE 6A." in a field nobody
+    reads. Recovering it means re-ingesting the document, which pays for the
+    other seventeen stations a second time.
+    """
     user = (
         f"Transcribe OSCE station {block.number} from the examiners' report.\n\n"
         f"--- BEGIN REPORT EXTRACT ---\n{block.text}\n--- END REPORT EXTRACT ---"
     )
-    data = _unwrap(
-        client.complete_json(task="structuring", system=OSCE_SYSTEM, user=user, job_id=job_id)
+    last: Any = None
+    for attempt in (1, 2):
+        last = _unwrap(
+            client.complete_json(
+                task="structuring", system=OSCE_SYSTEM, user=user, job_id=job_id
+            )
+        )
+        if isinstance(last, dict):
+            return normalise_osce(last, block)
+        logger.warning(
+            "Station %s came back as %s, not an object%s",
+            block.printed_number or block.number,
+            type(last).__name__,
+            "; asking once more" if attempt == 1 else "",
+        )
+    raise ValueError(
+        f"Expected a JSON object for station {block.number}, got "
+        f"{type(last).__name__} twice"
     )
-    if not isinstance(data, dict):
-        raise ValueError(f"Expected a JSON object for station {block.number}")
-    return normalise_osce(data, block)
 
 
 def _unwrap(data: Any) -> Any:
