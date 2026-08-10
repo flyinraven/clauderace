@@ -105,7 +105,7 @@ def handle_ingest_document(ctx: JobContext) -> bool:
     except Exception as exc:  # noqa: BLE001 - one bad block must not kill the run
         logger.exception("Failed to structure %s", block.label)
         log_error(
-            ctx.db,
+            db,
             source="ingest",
             message=f"{block.label}: {exc}",
             context={"document_id": document_id, "block": block.label},
@@ -136,14 +136,28 @@ def _finalise(ctx: JobContext, source: SourceDocument, kind: str) -> bool:
     _BLOCK_CACHE.pop(source.id, None)
 
     if kind == "osce" and result.get("station_ids"):
-        _queue_findings_split(ctx, result["station_ids"])
-        _queue_prompt_build(ctx, result["station_ids"])
-        _queue_figure_check(ctx, result["station_ids"])
-        _queue_image_sourcing(ctx, result["station_ids"])
+        queue_after_ingest(ctx.db, result["station_ids"], ctx.job.created_by_id)
     return True
 
 
-def _queue_findings_split(ctx: JobContext, station_ids: list[int]) -> None:
+def queue_after_ingest(
+    db: Session, station_ids: list[int], created_by_id: int | None = None
+) -> None:
+    """Everything a newly written station needs before anyone can sit it.
+
+    Split out of `_finalise` so a station recovered on its own - one that the
+    paper's ingest dropped, where re-ingesting the document would clear the
+    seventeen siblings that have since been furnished with images - goes
+    through the same four steps in the same order as one that arrived normally.
+    A recovered station assembled by hand is a station assembled differently.
+    """
+    _queue_findings_split(db, station_ids, created_by_id)
+    _queue_prompt_build(db, station_ids, created_by_id)
+    _queue_figure_check(db, station_ids, created_by_id)
+    _queue_image_sourcing(db, station_ids, created_by_id)
+
+
+def _queue_findings_split(db: Session, station_ids: list[int], created_by_id: int | None) -> None:
     """Separate the numbers the examiner reads out from the signs to be found.
 
     Until this runs a station has no `findings_given`, so the sitting opens
@@ -163,7 +177,7 @@ def _queue_findings_split(ctx: JobContext, station_ids: list[int]) -> None:
 
     pending = [
         s.id
-        for s in ctx.db.execute(
+        for s in db.execute(
             select(OsceStation).where(
                 OsceStation.id.in_(station_ids),
                 OsceStation.findings_split_status.in_(["none", "failed"]),
@@ -173,17 +187,17 @@ def _queue_findings_split(ctx: JobContext, station_ids: list[int]) -> None:
     if not pending:
         return
     job = create_job(
-        ctx.db,
+        db,
         JOB_SPLIT_OSCE_FINDINGS,
         payload={"station_ids": pending},
-        created_by_id=ctx.job.created_by_id,
+        created_by_id=created_by_id,
         total_steps=len(pending),
         message=f"Splitting findings for {len(pending)} station(s)",
     )
     logger.info("Queued findings split job %s for %d station(s)", job.id, len(pending))
 
 
-def _queue_figure_check(ctx: JobContext, station_ids: list[int]) -> None:
+def _queue_figure_check(db: Session, station_ids: list[int], created_by_id: int | None) -> None:
     """Grade the photographs taken out of the report before anyone is shown them.
 
     They arrive unapproved, so without this a freshly ingested station has
@@ -196,7 +210,7 @@ def _queue_figure_check(ctx: JobContext, station_ids: list[int]) -> None:
 
     pending = [
         s.id
-        for s in ctx.db.execute(
+        for s in db.execute(
             select(OsceStation).where(OsceStation.id.in_(station_ids))
         ).scalars().all()
         if any(f.image_id for f in s.figures)
@@ -204,17 +218,17 @@ def _queue_figure_check(ctx: JobContext, station_ids: list[int]) -> None:
     if not pending:
         return
     job = create_job(
-        ctx.db,
+        db,
         JOB_VERIFY_STATION_FIGURES,
         payload={"station_ids": pending},
-        created_by_id=ctx.job.created_by_id,
+        created_by_id=created_by_id,
         total_steps=len(pending),
         message=f"Checking the figures of {len(pending)} station(s)",
     )
     logger.info("Queued figure check job %s for %d station(s)", job.id, len(pending))
 
 
-def _queue_image_sourcing(ctx: JobContext, station_ids: list[int]) -> None:
+def _queue_image_sourcing(db: Session, station_ids: list[int], created_by_id: int | None) -> None:
     """Find what each task asks the candidate to look at, for the ones without it.
 
     This is the last link in the chain and the one that was missing. A paper
@@ -240,17 +254,17 @@ def _queue_image_sourcing(ctx: JobContext, station_ids: list[int]) -> None:
     if not station_ids:
         return
     job = create_job(
-        ctx.db,
+        db,
         JOB_SOURCE_STATION_IMAGES,
         payload={"station_ids": sorted(station_ids), "only_missing": True},
-        created_by_id=ctx.job.created_by_id,
+        created_by_id=created_by_id,
         total_steps=len(station_ids),
         message=f"Sourcing images for {len(station_ids)} station(s)",
     )
     logger.info("Queued image sourcing job %s for %d station(s)", job.id, len(station_ids))
 
 
-def _queue_prompt_build(ctx: JobContext, station_ids: list[int]) -> None:
+def _queue_prompt_build(db: Session, station_ids: list[int], created_by_id: int | None) -> None:
     """Chain the prompt build onto the ingest.
 
     An ingested station arrives flat - tasks and a rubric, but none of the
@@ -263,7 +277,7 @@ def _queue_prompt_build(ctx: JobContext, station_ids: list[int]) -> None:
 
     pending = [
         s.id
-        for s in ctx.db.execute(
+        for s in db.execute(
             select(OsceStation).where(
                 OsceStation.id.in_(station_ids),
                 OsceStation.prompts_status.in_(["none", "failed"]),
@@ -273,10 +287,10 @@ def _queue_prompt_build(ctx: JobContext, station_ids: list[int]) -> None:
     if not pending:
         return
     job = create_job(
-        ctx.db,
+        db,
         JOB_BUILD_OSCE_PROMPTS,
         payload={"station_ids": pending},
-        created_by_id=ctx.job.created_by_id,
+        created_by_id=created_by_id,
         total_steps=len(pending),
         message=f"Preparing {len(pending)} station(s)",
     )
@@ -531,4 +545,74 @@ def _attach_station_figures(
         )
 
 
-__all__ = ["JOB_INGEST_DOCUMENT", "handle_ingest_document"]
+JOB_RECOVER_DROPPED_STATION = "recover_dropped_station"
+
+
+@register_handler(JOB_RECOVER_DROPPED_STATION)
+def handle_recover_dropped_station(ctx: JobContext) -> bool:
+    """Write back one station its own paper's ingest dropped.
+
+    Re-ingesting the document is the obvious recovery and the destructive one:
+    the ingest clears everything it previously created, so the seventeen
+    siblings that have since been graded, furnished with images and described
+    would all be discarded and paid for again. This structures the single
+    missing block and persists it beside them.
+
+    A job rather than a script because the provider keys live encrypted in the
+    settings table and are only readable by the server that holds
+    SETTINGS_ENCRYPTION_KEY. Structuring from a laptop cannot reach a model.
+    """
+    document_id = ctx.payload.get("document_id")
+    label = ctx.payload.get("block_label")
+    if not document_id or not label:
+        raise JobHandlerError("Recovery job needs document_id and block_label")
+
+    source = ctx.db.get(SourceDocument, document_id)
+    if source is None:
+        raise JobHandlerError(f"Source document {document_id} no longer exists")
+
+    _, kind, blocks = _load_blocks(ctx.db, source)
+    if kind != "osce":
+        raise JobHandlerError(f"Document {document_id} is a {kind} paper, not an OSCE")
+
+    wanted = [b for b in blocks if b.label == label]
+    if not wanted:
+        raise JobHandlerError(f"No block labelled {label!r} in this document")
+    block = wanted[0]
+
+    printed = block.printed_number or str(block.number)
+    already = {
+        (s.station_label or str(s.station_number))
+        for s in ctx.db.execute(
+            select(OsceStation).where(OsceStation.source_document_id == source.id)
+        ).scalars()
+    }
+    if printed in already:
+        # Writing it twice is worse than leaving it out: the candidate meets
+        # one station under two numbers and neither of them is wrong.
+        ctx.set_result(skipped=printed)
+        ctx.set_message(f"Station {printed} is already in the bank")
+        return True
+
+    structured = structure_osce_block(AIClient(ctx.db), block, job_id=ctx.job.id)
+    station_id = _persist_station(ctx.db, source, block, structured)
+    ctx.db.commit()
+
+    # The same four steps in the same order a normal ingest would run. A
+    # recovered station assembled differently is a station that reads
+    # differently, and the bank only works if the candidate cannot tell which
+    # ones were awkward.
+    queue_after_ingest(ctx.db, [station_id], ctx.job.created_by_id)
+    ctx.set_result(station_id=station_id, title=structured.get("title"))
+    ctx.set_message(f"Recovered station {printed}: {structured.get('title')}")
+    _BLOCK_CACHE.pop(source.id, None)
+    return True
+
+
+__all__ = [
+    "JOB_INGEST_DOCUMENT",
+    "JOB_RECOVER_DROPPED_STATION",
+    "handle_ingest_document",
+    "handle_recover_dropped_station",
+    "queue_after_ingest",
+]

@@ -7,9 +7,17 @@ call. Instead each job advances in small chunks, persisting a `cursor` after
 every chunk. If the process is killed mid-job, the next tick resumes from the
 last committed cursor rather than starting over.
 
-A single daemon thread drains the queue while the process is alive. That is
-safe because the free tier runs exactly one instance; if this is ever scaled
-out, claiming needs a `SELECT ... FOR UPDATE SKIP LOCKED`.
+A daemon thread drains the queue while the process is alive. Claiming takes a
+`SELECT ... FOR UPDATE SKIP LOCKED` on the row, so two of them may drain the
+same queue without both taking the same job.
+
+That used to read "safe because there is exactly one instance", and for a while
+it was. Then the API was moved from one host to another and the old one was
+left running for an afternoon against the same database: two workers, no lock,
+both claiming the same chunks and both paying the model for them. Correctness
+that depends on remembering to shut something down is not correctness, and the
+next overlap is a deploy that starts the new container before the old one
+stops - which is every deploy.
 """
 
 from __future__ import annotations
@@ -358,6 +366,16 @@ def _take_next(db: Session) -> Job | None:
             case((Job.job_type.in_(WAITED_ON_AT_THE_SCREEN), 0), else_=1), Job.id
         )
         .limit(1)
+        # Two workers reaching here together must not leave with the same job.
+        # The lock is held until this session commits, which happens a few
+        # lines later once the row says RUNNING - so a second worker arriving
+        # meanwhile steps over the locked row and takes the next job instead of
+        # blocking on it. Locked rows are skipped as the scan runs, so the
+        # LIMIT still returns the first row nobody else holds rather than
+        # nothing at all.
+        # SQLite has no row locks and its dialect renders neither clause, which
+        # is correct there: the tests run one worker.
+        .with_for_update(skip_locked=True)
     ).scalar_one_or_none()
     return job
 

@@ -18,7 +18,7 @@ from app.constants import (
     VSAQ_TOTAL_MARKS,
     normalise_subspecialty,
 )
-from app.services.ai import AIClient
+from app.services.ai import AIClient, AIConfigError, AIError
 from app.services.ingest.segment import Block
 
 logger = logging.getLogger(__name__)
@@ -144,11 +144,31 @@ def structure_osce_block(client: AIClient, block: Block, job_id: int | None = No
     )
     last: Any = None
     for attempt in (1, 2):
-        last = _unwrap(
-            client.complete_json(
-                task="structuring", system=OSCE_SYSTEM, user=user, job_id=job_id
+        try:
+            last = _unwrap(
+                client.complete_json(
+                    task="structuring", system=OSCE_SYSTEM, user=user, job_id=job_id
+                )
             )
-        )
+        except AIConfigError:
+            # No key, no route: the second ask fails identically. Let it out.
+            raise
+        except AIError as exc:
+            # The commoner half of this failure, and the half the first version
+            # of this retry missed. A reply cut off mid-string never parses, so
+            # it never reaches the isinstance check below - it raises out of the
+            # whole station. Every "Model did not return valid JSON. First 500
+            # chars: {\n  \"description\":" in the error log is one of these.
+            if attempt == 2:
+                raise ValueError(
+                    f"Station {block.number} came back unreadable twice: {exc}"
+                ) from exc
+            logger.warning(
+                "Station %s came back unreadable (%s); asking once more",
+                block.printed_number or block.number,
+                exc,
+            )
+            continue
         if isinstance(last, dict):
             return normalise_osce(last, block)
         logger.warning(

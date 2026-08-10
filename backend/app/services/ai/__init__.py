@@ -1,5 +1,6 @@
 from app.services.ai.client import (
     AIClient,
+    AIConfigError,
     AIError,
     AIResponse,
     ImagePart,
@@ -9,6 +10,7 @@ from app.services.ai.client import (
 
 __all__ = [
     "AIClient",
+    "AIConfigError",
     "AIError",
     "AIResponse",
     "ImagePart",

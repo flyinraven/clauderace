@@ -1228,7 +1228,7 @@ def test_an_upload_sources_its_own_missing_images(db, admin):
     db.add(ingest)
     db.commit()
 
-    _queue_image_sourcing(JobContext(db=db, job=ingest), [12, 9, 30])
+    _queue_image_sourcing(db, [12, 9, 30], admin.id)
     db.commit()
 
     sourcing = db.query(Job).filter_by(job_type=JOB_SOURCE_STATION_IMAGES).one()
@@ -1248,7 +1248,7 @@ def test_an_upload_with_no_stations_queues_no_sourcing(db, admin):
                  payload={"document_id": 1}, cursor={}, created_by_id=admin.id)
     db.add(ingest)
     db.commit()
-    _queue_image_sourcing(JobContext(db=db, job=ingest), [])
+    _queue_image_sourcing(db, [], admin.id)
     db.commit()
     assert db.query(Job).filter_by(job_type=JOB_SOURCE_STATION_IMAGES).count() == 0
 
@@ -2310,3 +2310,79 @@ def test_a_station_unparseable_twice_still_fails(db):
     with pytest.raises(ValueError, match="twice"):
         structure_osce_block(client, block)
     assert client.calls == 2
+
+
+def test_a_reply_cut_off_mid_sentence_is_asked_again_too(db):
+    """The commoner half, and the half the first retry missed.
+
+    A truncated completion never parses, so it raises out of `complete_json`
+    rather than returning something that fails the isinstance check - and the
+    retry, which only watched for the second, never engaged. The error log is
+    full of these: `{\\n  "description":` and nothing after it.
+    """
+    from app.services.ai import AIError
+    from app.services.ingest.segment import Block
+    from app.services.ingest.structure import structure_osce_block
+
+    block = Block(kind="OSCE", number=6, suffix="A",
+                  text="Station 6A: Glaucoma SUMMARY OF CASE a 22-year-old")
+
+    class _Client:
+        def __init__(self):
+            self.calls = 0
+
+        def complete_json(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise AIError('Model did not return valid JSON. First 500 '
+                              'chars: {\n  "title":')
+            return {"title": "Juvenile glaucoma", "subspecialty": "Glaucoma"}
+
+    client = _Client()
+    out = structure_osce_block(client, block)
+
+    assert client.calls == 2
+    assert out["title"] == "Juvenile glaucoma"
+
+
+def test_a_reply_cut_off_twice_gives_up_and_says_why(db):
+    from app.services.ai import AIError
+    from app.services.ingest.segment import Block
+    from app.services.ingest.structure import structure_osce_block
+
+    block = Block(kind="OSCE", number=6, suffix="A", text="Station 6A: Glaucoma")
+
+    class _Client:
+        def __init__(self):
+            self.calls = 0
+
+        def complete_json(self, **kwargs):
+            self.calls += 1
+            raise AIError("Model did not return valid JSON.")
+
+    client = _Client()
+    with pytest.raises(ValueError, match="unreadable twice"):
+        structure_osce_block(client, block)
+    assert client.calls == 2
+
+
+def test_a_missing_api_key_is_not_asked_twice(db):
+    """Retrying a bad reply is worth a call. Retrying a bad route never is."""
+    from app.services.ai import AIConfigError
+    from app.services.ingest.segment import Block
+    from app.services.ingest.structure import structure_osce_block
+
+    block = Block(kind="OSCE", number=6, suffix="A", text="Station 6A: Glaucoma")
+
+    class _Client:
+        def __init__(self):
+            self.calls = 0
+
+        def complete_json(self, **kwargs):
+            self.calls += 1
+            raise AIConfigError("no API key set")
+
+    client = _Client()
+    with pytest.raises(AIConfigError):
+        structure_osce_block(client, block)
+    assert client.calls == 1, "the second ask would fail identically"

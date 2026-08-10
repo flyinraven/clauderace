@@ -61,6 +61,16 @@ class AIError(RuntimeError):
         self.retry_after = retry_after
 
 
+class AIConfigError(AIError):
+    """Raised before any request goes out: nothing is configured to send it.
+
+    Separated from `AIError` so callers that retry a bad reply do not also
+    retry this one. A truncated completion is worth asking again; a task routed
+    at a provider with no key will answer the same way for ever, and asking
+    twice just doubles the wait before the real reason is reported.
+    """
+
+
 @dataclass
 class TextPart:
     text: str
@@ -271,7 +281,7 @@ class AIClient:
         # another task's provider and model without being logged under it.
         config = self.provider_for(routing_task or task)
         if not config.is_configured:
-            raise AIError(
+            raise AIConfigError(
                 f"Task '{routing_task or task}' is routed to the {config.slot} "
                 f"provider ({config.kind}), which has no API key set. Configure it "
                 f"in Admin > Settings, or point the task at the other provider."
