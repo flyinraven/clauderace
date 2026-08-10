@@ -398,3 +398,67 @@ def test_a_station_about_nothing_moving_keeps_its_own_queries() -> None:
     assert _gaze_first(["slit lamp photograph of a hypermature cataract"], "dense white lens", station) == [
         "slit lamp photograph of a hypermature cataract"
     ]
+
+
+def test_the_stations_findings_are_not_written_under_a_photograph(db):
+    """Station 1A of 2020 Semester 2 carried "Histology revealed melanoma in
+    situ" beneath all five of its figures - the external photograph, the
+    ultrasound, and a blank image included.
+
+    The verbatim floor states the WHOLE station. That is right when the
+    examiner is standing in for an image nobody could find, and wrong under a
+    picture: it is not a description of that picture, and on an opening figure
+    it is the answer.
+
+    Those words pass the leak guard honestly, because the paper records the
+    histology as a finding, so every word of it is grounded in the findings.
+    The guard is not the thing that should have stopped it.
+    """
+    from app.models import Image, OsceFigure
+    from app.services.osce.station_images.describe import (
+        JOB_DESCRIBE_STATION_FIGURES,
+        handle_describe_station_figures,
+    )
+    from app.services.jobs.runner import JobContext
+    from app.models import Job
+    from app.models.ops import JOB_PENDING
+    from tests.test_api_osce import make_station
+
+    station = make_station(db)
+    station.figures.clear()
+    station.diagnosis = "Conjunctival Melanoma (pT1b)"
+    station.findings = (
+        "Histology revealed melanoma in situ with atypical epithelioid cells."
+    )
+    station.findings_elicited = station.findings
+    image = Image(sha256="e" * 64, size_bytes=5, content_type="image/jpeg",
+                  data=b"x", origin="pdf")
+    db.add(image)
+    db.commit()
+    figure = OsceFigure(station_id=station.id, position=0, image_id=image.id,
+                        verification_status="from_paper", is_approved=True,
+                        match_confidence=0.9, verification_notes="an eye")
+    db.add(figure)
+    db.commit()
+
+    job = Job(job_type=JOB_DESCRIBE_STATION_FIGURES, status=JOB_PENDING,
+              payload={"figure_ids": [figure.id]}, cursor={}, total_steps=1)
+    db.add(job)
+    db.commit()
+
+    class _Silent:
+        """The model declines to describe, which is what sends it to the floor."""
+
+    import app.services.osce.station_images.describe as mod
+    original = mod.describe_findings
+    mod.describe_findings = lambda *a, **k: (None, None)
+    try:
+        handle_describe_station_figures(JobContext(db=db, job=job))
+    finally:
+        mod.describe_findings = original
+
+    db.refresh(figure)
+    assert not (figure.described_findings or "").strip(), (
+        "a picture with no words beats the station's answer written under it"
+    )
+    assert figure.verification_status == "from_paper", "and the tier is untouched"

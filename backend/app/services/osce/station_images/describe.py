@@ -309,7 +309,7 @@ def handle_describe_station_figures(ctx: JobContext) -> bool:
             described, concern = describe_findings(
                 AIClient(ctx.db), station, unshown or figure.wanted_description
             )
-            if not described:
+            if not described and figure.image_id is None:
                 # Almost every figure that reaches this job has no
                 # `wanted_description`: it was written by ingest, or the view it
                 # names was cleared. The rubric section of the prompt then reads
@@ -321,6 +321,20 @@ def handle_describe_station_figures(ctx: JobContext) -> bool:
                 # printed, so stating them verbatim is not an invention and is
                 # always available. Same floor the sourcing path already falls
                 # back to, and the leak guard still applies.
+                #
+                # Only where there is no picture. The floor states the WHOLE
+                # station, which is the right thing to say when the examiner is
+                # standing in for a missing image and the wrong thing to write
+                # under a photograph: station 1A of 2020 Semester 2 put
+                # "Histology revealed melanoma in situ" beneath all five of its
+                # figures - the external photograph, the ultrasound and a blank
+                # image included - so the answer was on screen before the
+                # candidate had looked at anything. Those words also slip the
+                # leak guard honestly, because the paper records the histology
+                # as a finding, so every word of it is grounded.
+                #
+                # A picture with no words is visible in the admin page and says
+                # nothing untrue. That is the better failure.
                 described, concern = verbatim_findings_floor(
                     station, figure.wanted_description
                 )
