@@ -302,7 +302,10 @@ def test_a_model_that_gets_the_arithmetic_wrong_is_rescaled(client, db, admin, a
     assert sum(p["seconds"] for p in station.prompts) == 540
     assert abs(sum(pt["marks"] for p in station.prompts for pt in p["rubric"]) - 20) < 0.01
 
-    job = client.get("/api/admin/jobs", headers=auth(admin)).json()[0]
+    # Not simply the newest job: finishing a prompt build now queues the figure
+    # re-bind behind it, and that one is newer.
+    jobs = client.get("/api/admin/jobs", headers=auth(admin)).json()
+    job = next(j for j in jobs if j["job_type"] == "build_osce_prompts")
     assert any("rescaled" in w for w in job["result"]["warnings"]), (
         "a rescale is a quiet correction and must be reported"
     )
@@ -2494,3 +2497,27 @@ def test_a_printed_task_is_never_replaced():
 
     assert len(out["tasks"]) == 1
     assert out["tasks"][0]["prompt"] == "Examine this patient's ocular motility."
+
+
+def test_rebuilding_prompts_reattaches_the_papers_figures(db, admin):
+    """A prompt carries the id of the figure it shows, so a rebuild drops it.
+
+    Seven stations of 2019 Semester 2 read as "question C has no image for its
+    investigation" while the OCT the report printed sat unclaimed two rows
+    away. They had not lost an image; they had lost a binding.
+    """
+    from app.models import Job
+    from app.models.ops import JOB_PENDING
+    from app.services.jobs.runner import JobContext
+    from app.services.osce.prompts import _rebind_figures
+    from app.services.osce.station_images.constants import JOB_BIND_STATION_FIGURES
+
+    build = Job(job_type="build_osce_prompts", status=JOB_PENDING, payload={},
+                cursor={}, created_by_id=admin.id)
+    db.add(build)
+    db.commit()
+
+    _rebind_figures(JobContext(db=db, job=build), [7, 3, 9])
+
+    queued = db.query(Job).filter(Job.job_type == JOB_BIND_STATION_FIGURES).one()
+    assert queued.payload["station_ids"] == [3, 7, 9]

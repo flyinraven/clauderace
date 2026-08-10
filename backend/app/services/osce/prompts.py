@@ -844,7 +844,38 @@ def handle_build_osce_prompts(ctx: JobContext) -> bool:
 
     ctx.cursor_set(index=index + 1)
     ctx.advance(1, f"Stations prepared: {index + 1} of {len(station_ids)}")
-    return index + 1 >= len(station_ids)
+    finished = index + 1 >= len(station_ids)
+    if finished:
+        _rebind_figures(ctx, station_ids)
+    return finished
+
+
+def _rebind_figures(ctx: JobContext, station_ids: list[int]) -> None:
+    """Re-attach the paper's figures to the questions that were just rewritten.
+
+    A prompt carries the id of the figure it shows. Rebuilding prompts writes
+    new ones, so every binding the figure check had made is gone - and the
+    station is left asking "what would this ancillary test show?" beside a
+    blank screen, while the OCT the report printed sits unclaimed two rows
+    away. Seven stations of 2019 Semester 2 looked like missing images and were
+    nothing of the kind.
+
+    Free: the binder makes no model calls. It compares the modality a question
+    named against the modality a figure was recorded as, and refuses anything
+    short of an exact match.
+    """
+    from app.services.jobs.runner import create_job
+    from app.services.osce.station_images.constants import JOB_BIND_STATION_FIGURES
+
+    job = create_job(
+        ctx.db,
+        JOB_BIND_STATION_FIGURES,
+        payload={"station_ids": sorted(station_ids)},
+        created_by_id=ctx.job.created_by_id,
+        total_steps=len(station_ids),
+        message=f"Re-attaching figures for {len(station_ids)} station(s)",
+    )
+    logger.info("Queued figure re-bind job %s after a prompt rebuild", job.id)
 
 
 def stations_needing_prompts(db: Session) -> list[int]:
