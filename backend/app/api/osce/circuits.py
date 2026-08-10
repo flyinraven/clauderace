@@ -189,6 +189,13 @@ def circuit_results(circuit_id: int, user: CurrentUser, db: DbSession) -> dict[s
                 else None
             ),
             "subspecialty": station.subspecialty if station else None,
+            # How the paper names it. The row used to carry only the database
+            # id, which says nothing about where to look the station up in the
+            # examiners' report you are reviewing it against.
+            "exam_period": station.exam_period if station else None,
+            "printed_number": (
+                station.station_label or station.station_number if station else None
+            ),
             "submitted": bool(sitting and sitting.submitted_at),
             # "queued" and "running" both mean the marking has not landed yet;
             # the summary says so rather than showing a zero.

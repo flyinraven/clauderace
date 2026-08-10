@@ -2386,3 +2386,72 @@ def test_a_missing_api_key_is_not_asked_twice(db):
     with pytest.raises(AIConfigError):
         structure_osce_block(client, block)
     assert client.calls == 1, "the second ask would fail identically"
+
+
+def test_recovering_a_station_clears_the_papers_failure_notice(db):
+    """The Documents page kept flagging 6A after 6A was back in the bank.
+
+    An amber "Failed: OSCE 6A." beside a paper that no longer has that problem
+    is worse than the original fault: it sends you looking for something that
+    has been fixed.
+    """
+    from app.models import OsceStation, SourceDocument
+    from app.services.ingest.pipeline import _forget_the_failure
+
+    source = SourceDocument(
+        filename="2020 Semester 1.pdf", content_type="application/pdf",
+        data=b"%PDF-", sha256="a" * 64, size_bytes=5, document_kind="osce",
+        status="completed_with_errors",
+        status_detail="Created 17 item(s). Failed: OSCE 6A.",
+    )
+    db.add(source)
+    db.commit()
+    for number in range(1, 19):
+        db.add(OsceStation(station_number=number, source="ingested",
+                           source_document_id=source.id))
+    db.commit()
+
+    _forget_the_failure(db, source, "OSCE 6A")
+
+    assert source.status == "completed"
+    assert source.status_detail == "Created 18 item(s)."
+
+
+def test_a_paper_with_two_failures_keeps_the_one_still_missing(db):
+    from app.models import OsceStation, SourceDocument
+    from app.services.ingest.pipeline import _forget_the_failure
+
+    source = SourceDocument(
+        filename="paper.pdf", content_type="application/pdf", data=b"%PDF-",
+        sha256="b" * 64, size_bytes=5, document_kind="osce", status="completed_with_errors",
+        status_detail="Created 16 item(s). Failed: OSCE 4, OSCE 13.",
+    )
+    db.add(source)
+    db.commit()
+    db.add(OsceStation(station_number=4, source="ingested",
+                       source_document_id=source.id))
+    db.commit()
+
+    _forget_the_failure(db, source, "OSCE 4")
+
+    assert source.status == "completed_with_errors"
+    assert "OSCE 13" in source.status_detail
+    assert "OSCE 4" not in source.status_detail
+
+
+def test_a_paper_that_never_failed_is_left_alone(db):
+    from app.models import SourceDocument
+    from app.services.ingest.pipeline import _forget_the_failure
+
+    source = SourceDocument(
+        filename="paper.pdf", content_type="application/pdf", data=b"%PDF-",
+        sha256="c" * 64, size_bytes=5, document_kind="osce", status="completed",
+        status_detail="Created 17 item(s).",
+    )
+    db.add(source)
+    db.commit()
+
+    _forget_the_failure(db, source, "OSCE 6B")
+
+    assert source.status == "completed"
+    assert "Failed" not in source.status_detail

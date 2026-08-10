@@ -8,6 +8,8 @@ interface CircuitStation {
   sitting_id: number | null
   title: string | null
   subspecialty: string | null
+  exam_period: string | null
+  printed_number: string | number | null
   submitted: boolean
   grading_status: string
   awarded: number | null
@@ -104,6 +106,10 @@ export default function OsceCircuitResult() {
                 </p>
                 <p className="text-xs text-slate-500">
                   {station.subspecialty ?? 'Unclassified'}
+                  {/* Where to find it in the report: the paper and the number
+                      printed on the station, ahead of our own row id. */}
+                  {station.exam_period && ` · ${station.exam_period}`}
+                  {station.printed_number != null && ` · station ${station.printed_number}`}
                   <span className="ml-1 font-mono text-slate-400">#{station.station_id}</span>
                 </p>
               </div>

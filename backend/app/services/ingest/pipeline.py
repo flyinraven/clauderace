@@ -7,6 +7,7 @@ cursor records how many blocks are done, and the next tick picks up there.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from sqlalchemy import select
@@ -548,6 +549,34 @@ def _attach_station_figures(
 JOB_RECOVER_DROPPED_STATION = "recover_dropped_station"
 
 
+def _forget_the_failure(db: Session, source: SourceDocument, label: str) -> None:
+    """Take the recovered block off the document's list of failures.
+
+    Without this the Documents page keeps saying "Created 17 item(s). Failed:
+    OSCE 6A." in amber next to a paper whose 6A is now sitting in the bank -
+    which is worse than the original fault, because it sends you looking for a
+    problem that has been fixed. The count and the status are both recomputed
+    from what is actually there rather than edited in place.
+    """
+    stations = db.execute(
+        select(OsceStation.id).where(OsceStation.source_document_id == source.id)
+    ).scalars().all()
+
+    detail = source.status_detail or ""
+    failed = [
+        name.strip()
+        for name in re.sub(r"^.*Failed:\s*", "", detail, flags=re.S).rstrip(".").split(",")
+        if "Failed:" in detail and name.strip()
+    ]
+    failed = [name for name in failed if name != label]
+
+    source.status = "completed" if not failed else "completed_with_errors"
+    source.status_detail = (
+        f"Created {len(stations)} item(s)."
+        + (f" Failed: {', '.join(failed)}." if failed else "")
+    )
+
+
 @register_handler(JOB_RECOVER_DROPPED_STATION)
 def handle_recover_dropped_station(ctx: JobContext) -> bool:
     """Write back one station its own paper's ingest dropped.
@@ -596,6 +625,7 @@ def handle_recover_dropped_station(ctx: JobContext) -> bool:
 
     structured = structure_osce_block(AIClient(ctx.db), block, job_id=ctx.job.id)
     station_id = _persist_station(ctx.db, source, block, structured)
+    _forget_the_failure(ctx.db, source, label)
     ctx.db.commit()
 
     # The same four steps in the same order a normal ingest would run. A

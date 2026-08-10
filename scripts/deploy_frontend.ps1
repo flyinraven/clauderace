@@ -2,10 +2,11 @@
 #
 # -ApiUrl is baked into the bundle, and a wrong one deploys a site that loads
 # and can do nothing: every request 404s against a host that does not exist.
-# It is https://clauderace.onrender.com - the Render service is named
-# `clauderace`, not the `race-exam-api` that render.yaml proposes.
+# It is https://race-exam-api-production.up.railway.app - the API moved off
+# Render, whose 512 MB tier was being OOM-killed mid-ingest. The old Render
+# URL is left here only so nobody pastes it back in from memory.
 #
-#   .\scripts\deploy_frontend.ps1 -ApiUrl https://clauderace.onrender.com `
+#   .\scripts\deploy_frontend.ps1 -ApiUrl https://race-exam-api-production.up.railway.app `
 #                                 -SshHost example.siteground.biz `
 #                                 -SshUser u1234-abcdef -SshPort 18765
 #
