@@ -2170,3 +2170,92 @@ def test_nothing_to_compare_means_no_call(db):
 
     assert unshown_signs(_Client(), station, None) is None
     assert unshown_signs(_Client(), station, "   ") is None
+
+
+def test_the_words_describe_what_the_picture_misses_not_the_station(db, admin, run_jobs, ai):
+    """The whole point of comparing: state the gap, not the examination.
+
+    Setting the figure as doubtful and then describing its `wanted_description`
+    puts the station's whole findings beside a photograph that already shows
+    most of them - the blunt option, not this one.
+    """
+    from app.models import Image, OsceFigure
+    from app.services.jobs.runner import create_job
+    from app.services.osce.station_images import JOB_DESCRIBE_STATION_FIGURES
+
+    station = make_station(db)
+    station.findings_elicited = "Left ptosis, limited abduction, reduced corneal sensation."
+    image = Image(sha256="e" * 63 + "2", content_type="image/jpeg", data=b"jpeg",
+                  size_bytes=4, origin="web")
+    db.add(image)
+    db.flush()
+    figure = OsceFigure(station_id=station.id, position=0, image_id=image.id,
+                        is_approved=True, verification_status="faithful",
+                        match_confidence=1.0,
+                        wanted_description="external photograph of the orbits",
+                        verification_notes="There is a left ptosis.")
+    db.add(figure)
+    db.commit()
+
+    seen = []
+
+    def responder(body, n):
+        content = body["messages"][-1]["content"]
+        seen.append(
+            content
+            if isinstance(content, str)
+            else " ".join(p.get("text", "") for p in content)
+        )
+        if n == 1:
+            return json.dumps({"unshown": "reduced corneal sensation"})
+        return json.dumps({"description": "The left cornea is insensate to a wisp of cotton."})
+
+    ai.responder = responder
+    create_job(db, JOB_DESCRIBE_STATION_FIGURES, payload={"figure_ids": [figure.id]},
+               created_by_id=admin.id, total_steps=1)
+    run_jobs()
+
+    db.refresh(figure)
+    assert figure.described_findings, "the gap is stated beside the picture"
+    assert "corneal sensation" in seen[1], (
+        "the description was asked for the missing sign, not the whole examination"
+    )
+    assert "external photograph of the orbits" not in seen[1]
+
+
+def test_words_beside_a_photograph_do_not_erase_its_tier(db, admin, run_jobs, ai):
+    """"described" says the figure IS words, which is only true without a picture.
+
+    Setting it on a figure that has an image overwrote faithful/representative,
+    and the audit reads that field - so writing a gloss beside a stock
+    photograph quietly stopped it being reported as a stock photograph.
+    """
+    from app.models import Image, OsceFigure
+    from app.services.jobs.runner import create_job
+    from app.services.osce.station_images import JOB_DESCRIBE_STATION_FIGURES
+
+    station = make_station(db)
+    station.findings_elicited = "Left ptosis and reduced corneal sensation."
+    image = Image(sha256="f" * 63 + "3", content_type="image/jpeg", data=b"jpeg",
+                  size_bytes=4, origin="web")
+    db.add(image)
+    db.flush()
+    figure = OsceFigure(station_id=station.id, position=0, image_id=image.id,
+                        is_approved=True, verification_status="representative",
+                        match_confidence=0.9, wanted_description="external photograph")
+    db.add(figure)
+    db.commit()
+
+    # A representative figure is described outright, with no comparison first.
+    ai.responder = lambda body, n: json.dumps(
+        {"description": "The left cornea is insensate.", "unshown": "corneal sensation"}
+    )
+    create_job(db, JOB_DESCRIBE_STATION_FIGURES, payload={"figure_ids": [figure.id]},
+               created_by_id=admin.id, total_steps=1)
+    run_jobs()
+
+    db.refresh(figure)
+    assert figure.described_findings
+    assert figure.verification_status == "representative", (
+        "it is still a stock photograph, and the audit has to keep seeing that"
+    )

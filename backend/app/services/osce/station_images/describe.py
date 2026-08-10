@@ -279,6 +279,7 @@ def handle_describe_station_figures(ctx: JobContext) -> bool:
     # of these signs the image accounts for, the answer is decisive; asked with
     # it, the grader agrees with what it was told to expect. So a confident
     # image is compared, and where signs are left over they are stated.
+    unshown: str | None = None
     wants_checking = (
         figure is not None
         and station is not None
@@ -297,11 +298,16 @@ def handle_describe_station_figures(ctx: JobContext) -> bool:
         if missing:
             logger.info("Figure %s does not show: %s", figure.id, missing[:120])
             doubtful = True
+            # What the picture misses, not the station at large. Describing
+            # `wanted_description` here states the whole examination beside a
+            # photograph that already shows most of it - the blunt option, not
+            # this one.
+            unshown = missing
 
     if figure is not None and station is not None and (figure.image_id is None or doubtful):
         try:
             described, concern = describe_findings(
-                AIClient(ctx.db), station, figure.wanted_description
+                AIClient(ctx.db), station, unshown or figure.wanted_description
             )
             if not described:
                 # Almost every figure that reaches this job has no
@@ -320,7 +326,14 @@ def handle_describe_station_figures(ctx: JobContext) -> bool:
                 )
             if described:
                 figure.described_findings = described
-                figure.verification_status = "described"
+                # "described" says this figure IS words, which is only true of
+                # one with no picture. Setting it on a figure that has an image
+                # overwrote the tier - faithful, representative - and the audit
+                # reads that field, so writing a gloss beside a stock photograph
+                # quietly stopped it being reported as a stock photograph. The
+                # words are a second thing the figure carries, not what it is.
+                if figure.image_id is None:
+                    figure.verification_status = "described"
                 # The leak guard inside describe_findings is the check that
                 # matters and it is a hard reject: nothing reaching here names
                 # the diagnosis. `grounding_problem` is advisory by design - it
@@ -346,18 +359,29 @@ def handle_describe_station_figures(ctx: JobContext) -> bool:
                 ctx.set_result(no_words=empty)
             ctx.db.commit()
         except DescriptionUnavailable as exc:
-            # Every figure will hit the same wall - a bad model id, a provider
-            # that serves none of them, an exhausted key - so failing the job
-            # is the honest report. Finishing 47 times and calling it "no
-            # words" is what hid this for an evening.
+            # A bad model id, a provider that serves none of them, an exhausted
+            # key - every figure hits that same wall, so failing the job is the
+            # honest report. Finishing 47 times and calling it "no words" is
+            # what hid it for an evening.
+            #
+            # But one truncated reply is not a wall, and treating it as one
+            # stopped a 765-figure run at 219 with 546 still to go. The job
+            # fails only once nothing at all has succeeded; after that a single
+            # bad completion is recorded against its figure and the run goes on.
             ctx.db.rollback()
             log_error(ctx.db, source="osce_images", message=str(exc),
                       context={"figure_id": figure.id, "station_id": station.id})
-            raise JobHandlerError(
-                f"Could not write any findings: {exc}. Nothing was described - "
-                f"check Admin > Settings that the model id is one your provider "
-                f"serves."
-            ) from exc
+            got_words = (ctx.job.result or {}).get("described") or []
+            if not got_words:
+                raise JobHandlerError(
+                    f"Could not write any findings: {exc}. Nothing was described - "
+                    f"check Admin > Settings that the model id is one your provider "
+                    f"serves."
+                ) from exc
+            logger.warning("Figure %s could not be described: %s", figure.id, exc)
+            failed = list((ctx.job.result or {}).get("failed", []))
+            failed.append(figure.id)
+            ctx.set_result(failed=failed)
         except Exception as exc:  # noqa: BLE001 - one figure must not stop the pass
             ctx.db.rollback()
             logger.exception("Could not describe figure %s", figure.id)
