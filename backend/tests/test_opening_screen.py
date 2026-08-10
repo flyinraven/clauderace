@@ -306,3 +306,42 @@ def test_two_different_photographs_both_stay(db):
     db.refresh(station)
 
     assert settle_station(db, station)["removed"] == 0
+
+
+def test_the_last_picture_stays_on_the_opening_screen(db):
+    """Station 7 of 2019 Semester 2 had one slit lamp photograph and a question
+    asking the candidate to read a slit lamp photograph.
+
+    Binding it to the question emptied the opening screen: a figure a question
+    owns appears when that question does. That swapped a missing investigation
+    for a missing station, and the standing instruction is marked more heavily
+    than any single question.
+    """
+    from app.models import Image, OsceFigure
+    from app.services.osce.station_images.ingested import (
+        bind_ingested_figures_to_questions,
+    )
+    from tests.test_api_osce import make_station
+
+    station = make_station(db)
+    station.figures.clear()
+    db.commit()
+
+    image = Image(sha256="d" * 64, size_bytes=5, content_type="image/jpeg",
+                  data=b"x", origin="pdf")
+    db.add(image)
+    db.commit()
+    db.add(OsceFigure(station_id=station.id, position=0, image_id=image.id,
+                      modality="slit_lamp", verification_status="from_paper",
+                      is_approved=True))
+    station.prompts = [
+        {"label": "A", "text": "Please examine the anterior segment.", "seconds": 300,
+         "rubric": []},
+        {"label": "C", "text": "What does this show?", "seconds": 240, "rubric": [],
+         "image_wanted": "Slit lamp photograph of the left eye."},
+    ]
+    db.commit()
+
+    out = bind_ingested_figures_to_questions(db, None, station)
+
+    assert out["bound"] == 0, "the only picture belongs to the opening instruction"

@@ -133,8 +133,19 @@ def bind_ingested_figures_to_questions(
     if not spare:
         return {"bound": 0}
 
+    # A figure a question owns appears when that question does, so binding the
+    # last unclaimed one leaves the candidate walking into an empty screen.
+    # Station 7 of 2019 Semester 2 had exactly one slit lamp photograph and a
+    # question C asking to read a slit lamp photograph: binding it swapped a
+    # missing investigation for a missing station, which is the worse of the
+    # two. The opening instruction is marked more heavily than any single
+    # question, so it keeps the picture.
+    reserve_opening = station.rubric and len(spare) == 1
+
     bound = 0
     for prompt in prompts:
+        if reserve_opening and len(spare) == 1:
+            break
         wanted = str(prompt.get("image_wanted") or "").strip()
         if not wanted or bound_figure_ids(prompt) or prompt.get("image_impossible"):
             continue
