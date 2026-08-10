@@ -213,3 +213,66 @@ def test_a_stored_unknown_does_not_outlive_the_reason_for_it() -> None:
     kind, blocks = segment(_deck(pages), "unknown")
     assert kind == "osce"
     assert len(blocks) == 18
+
+
+# --- Two stations two pages apart -----------------------------------------
+# 2020 Semester 1 puts station 7A's case on page 85 and 7B's on page 87, and
+# 8A's on 92 with 8B's on 94. The rule that joins an opening spilling across a
+# slide boundary swallowed both, the paper lost 7B and 8B, and nothing reported
+# it: the deck said 18 stations and 16 were built.
+
+
+def _page(number: int, text: str):
+    from app.services.ingest.extract import ExtractedPage
+
+    return ExtractedPage(number=number, text=text, images=[])
+
+
+def _doc(pages):
+    from app.services.ingest.extract import ExtractedDocument
+
+    return ExtractedDocument(pages=pages, page_count=len(pages))
+
+
+def test_a_second_station_two_pages_later_is_not_swallowed():
+    from app.services.ingest.segment import segment_osce
+
+    blocks = segment_osce(_doc([
+        _page(1, "Station 7A: Ocular Motility SUMMARY OF CASE a 10-year-old with Duane's"),
+        _page(2, "Station 7A: Ocular Motility REQUIRED FOR SATISFACTORY GRADE identify it"),
+        _page(3, "Station 7B: Ocular Motility SUMMARY OF CASE a 21-year-old with esotropia"),
+        _page(4, "Station 7B: Ocular Motility AIMS OF STATION identify the esotropia"),
+    ]))
+
+    assert [b.printed_number for b in blocks] == ["7A", "7B"]
+
+
+def test_one_opening_across_two_slides_is_still_one_station():
+    """The rule earns its keep: a summary and its aim on consecutive pages."""
+    from app.services.ingest.segment import segment_osce
+
+    blocks = segment_osce(_doc([
+        _page(1, "Station 3A: Cataract SUMMARY OF CASE a 59-year-old male"),
+        _page(2, "Station 3A: Cataract AIM OF THE STATION assess the lens"),
+        _page(3, "Station 3A: Cataract findings and marking"),
+        _page(4, "Station 3B: Cataract SUMMARY OF CASE a 60-year-old female"),
+    ]))
+
+    assert [b.printed_number for b in blocks] == ["3A", "3B"]
+
+
+def test_an_unlabelled_second_opening_is_still_joined():
+    """With no heading to tell them apart, closeness is all there is to go on.
+
+    Straight at the case splitter: with no station headings anywhere,
+    `segment_osce` prefers the other strategy entirely.
+    """
+    from app.services.ingest.segment import _segment_osce_by_case
+
+    blocks = _segment_osce_by_case(_doc([
+        _page(1, "SUMMARY OF CASE a patient with a corneal graft"),
+        _page(2, "AIM OF THE STATION assess the graft"),
+        _page(3, "findings"),
+    ]))
+
+    assert len(blocks) == 1

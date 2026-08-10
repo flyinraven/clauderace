@@ -37,7 +37,12 @@ STATION_RE = re.compile(r"\bstation\s*0*(\d{1,2})([A-Za-z])?\b", re.IGNORECASE)
 CASE_START_RE = re.compile(r"aim\s+of\s+the\s+station|summary\s+of\s+case", re.IGNORECASE)
 
 # A station's opening runs over two slides often enough that its summary and its
-# aim can land on different pages. Starts this close together are one station.
+# aim can land on different pages. Starts this close together are one station -
+# unless the second one says otherwise. 2020 Semester 1 puts station 7A's case
+# on page 85 and 7B's on page 87, and 8A's on 92 with 8B's on 94: two pages
+# apart and unmistakably different stations, both swallowed by this rule. The
+# paper lost 7B and 8B, and nothing reported it - the deck said 18 stations and
+# 16 were built.
 CASE_START_MIN_GAP = 2
 
 # Page furniture to drop before handing text to the model.
@@ -236,12 +241,26 @@ def _numbering_is_trustworthy(blocks: list[Block]) -> bool:
 
 def _segment_osce_by_case(doc: ExtractedDocument) -> list[Block]:
     """One block per station, cut at each station's opening slide."""
+    def named_station(text: str) -> str | None:
+        """The station this page says it belongs to, e.g. "7B"."""
+        match = STATION_RE.search(text)
+        if not match:
+            return None
+        return f"{int(match.group(1))}{(match.group(2) or '').upper()}"
+
+    by_number = {page.number: page for page in doc.pages}
     starts: list[int] = []
     for page in doc.pages:
         if not CASE_START_RE.search(page.text):
             continue
         if starts and page.number - starts[-1] <= CASE_START_MIN_GAP:
-            continue
+            here = named_station(page.text)
+            there = named_station(by_number[starts[-1]].text)
+            # Two openings close together are one station spilling over a slide
+            # boundary - unless they name different stations, and then they are
+            # exactly what they say they are.
+            if not (here and there and here != there):
+                continue
         starts.append(page.number)
 
     blocks: list[Block] = []
