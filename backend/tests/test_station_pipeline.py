@@ -2521,3 +2521,30 @@ def test_rebuilding_prompts_reattaches_the_papers_figures(db, admin):
 
     queued = db.query(Job).filter(Job.job_type == JOB_BIND_STATION_FIGURES).one()
     assert queued.payload["station_ids"] == [3, 7, 9]
+
+
+def test_an_ingest_writes_the_model_answers_too(db, admin):
+    """Fifty-seven stations reached the bank with none.
+
+    The review after a sitting then shows the mark and the examiner's comment
+    but not what should have been said, which is the part worth reading. The
+    older stations have answers because the job was run by hand once, and
+    nobody noticed it had never been chained.
+    """
+    from app.models import Job
+    from app.services.ingest.pipeline import queue_after_ingest
+    from app.services.osce.model_answers import JOB_MODEL_ANSWERS
+    from tests.test_api_osce import make_station
+
+    first, second = make_station(db), make_station(db)
+    first.prompts_status = second.prompts_status = "none"
+    db.commit()
+
+    queue_after_ingest(db, [second.id, first.id], admin.id)
+
+    job = db.query(Job).filter(Job.job_type == JOB_MODEL_ANSWERS).one()
+    assert job.payload["station_ids"] == sorted([first.id, second.id])
+
+    # And after the prompt build, because the points it answers live there.
+    order = [j.job_type for j in db.query(Job).order_by(Job.id).all()]
+    assert order.index("build_osce_prompts") < order.index(JOB_MODEL_ANSWERS)

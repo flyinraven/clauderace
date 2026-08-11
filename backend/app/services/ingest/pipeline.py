@@ -154,8 +154,39 @@ def queue_after_ingest(
     """
     _queue_findings_split(db, station_ids, created_by_id)
     _queue_prompt_build(db, station_ids, created_by_id)
+    _queue_model_answers(db, station_ids, created_by_id)
     _queue_figure_check(db, station_ids, created_by_id)
     _queue_image_sourcing(db, station_ids, created_by_id)
+
+
+def _queue_model_answers(
+    db: Session, station_ids: list[int], created_by_id: int | None
+) -> None:
+    """Write the answer that earns each marking point.
+
+    Without this the review after a sitting shows the mark and the examiner's
+    comment but not what should have been said, which is the part worth
+    reading. Fifty-seven stations - every paper ingested since the chain was
+    built - reached the bank with none, and it only showed when a circuit drew
+    one: the older stations have them because the job was run by hand once,
+    and nobody noticed it had never been chained.
+
+    After the prompt build, because the points it answers are written there.
+    """
+    from app.services.jobs.runner import create_job
+    from app.services.osce.model_answers import JOB_MODEL_ANSWERS
+
+    if not station_ids:
+        return
+    job = create_job(
+        db,
+        JOB_MODEL_ANSWERS,
+        payload={"station_ids": sorted(station_ids)},
+        created_by_id=created_by_id,
+        total_steps=len(station_ids),
+        message=f"Writing model answers for {len(station_ids)} station(s)",
+    )
+    logger.info("Queued model answer job %s for %d station(s)", job.id, len(station_ids))
 
 
 def _queue_findings_split(db: Session, station_ids: list[int], created_by_id: int | None) -> None:
