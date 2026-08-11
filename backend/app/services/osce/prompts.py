@@ -81,11 +81,24 @@ would you measure that proptosis?" and "What is the significance of the
 anomalous vessels?" are proper questions, not leaks.
 
 How a RANZCO station is actually built, from real examiner handouts. Use this
-arc for ORDER. Steps 1, 4 and 5 are in every station, and at least one of 6
-and 7; step 3 whenever the case turns on an ancillary test or an investigation.
-Step 2 is the case's own examination or test question and is almost always
-present. Where a case carries more, add questions - four to seven is the normal
-range, and a station with five aims needs more questions than one with two:
+arc for ORDER, NOT as a form to fill in.
+
+Only two steps belong in every station: step 1, because a station has to open
+with an instruction, and step 5, because stating the diagnosis midway is what
+lets a candidate who has not got there still earn the later marks. Every other
+step has to be earned by THIS report. Include a step when the aims and the
+rubric show it is that kind of case, and leave it out when they do not.
+
+A step included because the arc has a slot for it produces a question nobody
+can answer. Station 3B of 2020 Semester 2 asks a 32-year-old attending an
+immigration medical - no symptoms, no complaint - to "give me three
+differential diagnoses for the patient's current presentation", because step 4
+was mandatory. The candidate is left guessing what the examiner wants. Four
+good questions beat six with two of them invented, and a report that supports
+three questions is a three-question station.
+
+Where a case genuinely carries more, add questions - a station with five aims
+needs more than one with two:
 
 1. THE STANDING INSTRUCTION. The first question is always what the candidate
    is told as they walk in: the region and the eye, nothing else. "Please
@@ -131,8 +144,25 @@ range, and a station with five aims needs more questions than one with two:
    Never present a result you have not either been given or asked for this
    way. "This is her A-scan biometry" for a scan that does not exist leaves
    the candidate reading a blank screen.
-4. SUMMARISE AND DIFFERENTIATE, with a stated number: "Can you summarise your
-   findings and give 5 differential diagnoses?"
+4. SUMMARISE AND DIFFERENTIATE, with a stated number - AND SAY WHAT THE
+   DIFFERENTIAL IS FOR. "Give me three differential diagnoses for the
+   patient's current presentation" is unanswerable when the patient has no
+   presentation: station 3B of 2020 Semester 2 sends a 32-year-old in for an
+   immigration medical with no complaint, shows a dislocated lens, and then
+   marks the candidate for saying "UGH syndrome". Nothing in the question says
+   what it is a differential OF, so it cannot be answered as intended.
+   Name the thing: "You have described a dislocated lens - what is your
+   differential for the cause of that in this eye?" / "What is your
+   differential for this optic neuropathy?" The subject must be a finding the
+   candidate has already been given or asked to describe.
+   Where the picture settles the diagnosis, a differential OF the diagnosis is
+   not a question. Ask for the differential of its CAUSE, or for what
+   threatens the eye next - and ask in those words rather than dressing it up
+   as a differential.
+   Whatever is marked here must not be marked again later. In that same
+   station UGH syndrome was worth 0.5 as a "differential" at step 4 and 2.0 as
+   a complication at step 5: the same sentence, paid for twice, and the
+   candidate cannot tell which of the two the examiner wants first.
 5. THE EXAMINER GIVES THE DIAGNOSIS AND ASKS FOR MANAGEMENT. This is ONE
    question, and the pair is the point of it: state the diagnosis plainly -
    "The presumed diagnosis is amelanotic iris melanoma" - and in the same
@@ -416,7 +446,53 @@ _OPENING_GIVEAWAYS = (
     "paying attention",
 )
 
-_REQUIRED_STEPS = (1, 2, 4, 5)
+# The two steps every station has, whatever the report contains: an
+# instruction to begin on, and the reveal that stops later marks depending on
+# earlier ones.
+_ALWAYS = (1, 5)
+
+# What each optional step needs the report to be about before it is demanded.
+# Asking for a differential because the arc has a slot for one is how station
+# 3B of 2020 Semester 2 came to ask a woman at an immigration medical for
+# "three differential diagnoses for the patient's current presentation".
+_STEP_EVIDENCE = {
+    2: (
+        "examin", "measur", "assess", "test", "gonioscop", "retinoscop",
+        "refract", "technique", "perform", "check", "look",
+    ),
+    4: (
+        "differential", "diagnos", "distinguish", "differentiat", "cause",
+        "aetiolog", "etiolog", "recognis", "recogniz",
+    ),
+    6: ("progress", "follow", "monitor", "recur", "complicat", "if ", "later"),
+    7: (
+        "inherit", "genetic", "criteria", "classif", "mechanism", "pharmacolog",
+        "association", "syndrome", "knowledge",
+    ),
+}
+
+
+def steps_the_case_supports(aims: list[str] | None, rubric_text: str = "") -> set[int]:
+    """Which arc steps this station's own report actually calls for.
+
+    The arc was a mould: steps 1, 2, 4 and 5 were demanded of every station,
+    plus 3 wherever an image existed and one of 6 or 7 always. A report that
+    supports four questions was therefore made to yield six, and the two it
+    could not support came out as filler the candidate has to guess at - a
+    differential of nothing, a hypothetical about a case that does not evolve.
+
+    A station is now allowed to be the shape its report is. Step 1 stays,
+    because a station has to open with an instruction, and step 5 stays,
+    because stating the diagnosis midway is what keeps the later marks earnable
+    by a candidate who has not got there. Everything else has to be earned by
+    the aims and the rubric saying it is that kind of case.
+    """
+    haystack = " ".join([*(aims or []), rubric_text]).lower()
+    supported = set(_ALWAYS)
+    for step, evidence in _STEP_EVIDENCE.items():
+        if any(word in haystack for word in evidence):
+            supported.add(step)
+    return supported
 
 # Investigations a candidate is marked on READING, as opposed to merely naming.
 # A rubric point about describing MRI findings is proof the scan was put in
@@ -495,6 +571,61 @@ _PRESENTS_A_RESULT = re.compile(
 )
 
 
+# What a rubric line says about being a rubric line, rather than about the
+# case. Left in, "discuss ... risk" alone would match half the station.
+_RUBRIC_VERBS = {
+    "identify", "propose", "discuss", "describe", "comment", "recognise",
+    "recognize", "state", "mention", "explain", "outline", "summarise",
+    "summarize", "consider", "assess", "potential", "risk", "risks",
+    "differential", "differentials", "diagnosis", "diagnoses", "complication",
+    "complications", "management", "least", "candidate", "patient",
+}
+
+
+def _points_marked_twice(prompts: list[dict[str, Any]]) -> list[str]:
+    """The same thing paid for at two questions.
+
+    Station 3B of 2020 Semester 2 marks "UGH syndrome" 0.5 as a differential at
+    step 4 and 2.0 as a complication at step 5. The candidate cannot tell which
+    question wants it, saying it at the first loses the second, and twenty
+    marks are supposed to cover twenty different things.
+
+    Matched on the distinctive words a point is about, so "Propose UGH syndrome
+    as a differential" and "Discuss the risk of Uveitis-Glaucoma-Hyphema (UGH)
+    syndrome as a potential complication" are recognised as one point. Common
+    rubric verbs are stripped first or every "discuss" would collide.
+    """
+    problems: list[str] = []
+    seen: dict[frozenset[str], str] = {}
+    for prompt in prompts:
+        label = prompt.get("label") or "?"
+        for point in prompt.get("rubric") or []:
+            text = str(point.get("text") or "")
+            # Acronyms carry the whole meaning of a point and `_content_words`
+            # cannot see them: "UGH" is three letters and its floor is four.
+            # Without this, "Propose UGH syndrome as a differential" reduces to
+            # {syndrome} and matches nothing.
+            words = (_content_words(text) - _RUBRIC_VERBS) | {
+                a.lower() for a in re.findall(r"\b[A-Z]{2,6}\b", text)
+            }
+            if len(words) < 2:
+                continue
+            key = frozenset(words)
+            for earlier, where in seen.items():
+                shared = earlier & key
+                # Two-thirds of the smaller point, so a longer restatement of
+                # the same thing still counts as the same thing.
+                if len(shared) >= max(2, int(min(len(earlier), len(key)) * 0.67)):
+                    problems.append(
+                        f"question {label} marks {str(point.get('text'))[:50]!r}, which "
+                        f"question {where} already marks - one thing, paid for twice"
+                    )
+                    break
+            else:
+                seen[key] = label
+    return problems
+
+
 def _generic_problems(
     prompts: list[dict[str, Any]],
     vocabulary: set[str] | None,
@@ -511,18 +642,32 @@ def _generic_problems(
     if not vocabulary:
         return problems
 
-    # Steps 1 and 4 are formulaic in the real exam too: "Please examine the
-    # posterior segment of both eyes" is exactly what is said. The middle and
-    # late questions are where a station has to be itself.
+    # Step 1 is formulaic in the real exam too: "Please examine the posterior
+    # segment of both eyes" is exactly what is said, and naming a structure
+    # there would tell the candidate where to look. Every other step, step 4
+    # included, has to be about this case.
+    #
+    # Step 4 was exempt here, on the same reasoning, and it is the reason
+    # station 3B of 2020 Semester 2 asks for "three differential diagnoses for
+    # the patient's current presentation" of a woman attending an immigration
+    # medical with no complaint. A differential has to say what it is a
+    # differential OF, and the only way to say that is in this case's words.
     for prompt in prompts:
-        if prompt.get("step") in (1, 4) or not prompt.get("step"):
+        if prompt.get("step") == 1 or not prompt.get("step"):
             continue
         if not (_content_words(prompt["text"]) & vocabulary):
-            problems.append(
-                f"question {prompt['label']} ({prompt['text'][:60]!r}...) says nothing "
-                "specific to this case - it would fit any station; ask what this case's "
-                "aims and rubric actually turn on"
-            )
+            if prompt.get("step") == 4:
+                problems.append(
+                    f"question {prompt['label']} ({prompt['text'][:60]!r}...) asks for a "
+                    "differential without saying what it is a differential of - name the "
+                    "finding the candidate has been shown or asked to describe"
+                )
+            else:
+                problems.append(
+                    f"question {prompt['label']} ({prompt['text'][:60]!r}...) says nothing "
+                    "specific to this case - it would fit any station; ask what this case's "
+                    "aims and rubric actually turn on"
+                )
 
     asked = _content_words(" ".join(p["text"] for p in prompts))
     for aim in aims or []:
@@ -644,6 +789,7 @@ def _arc_problems(
     problems.extend(_generic_problems(prompts, vocabulary, aims))
     problems.extend(_unshowable_questions(prompts))
     problems.extend(_unmarked_questions(prompts))
+    problems.extend(_points_marked_twice(prompts))
 
     index = needs_differential_first(prompts)
     if index is not None:
@@ -653,20 +799,31 @@ def _arc_problems(
             f"before being asked to reason towards it"
         )
 
-    # Step 3 reads an ancillary image. The station need not already have one -
-    # a question that asks for it says what it needs and the image is sourced -
-    # so it is required when there is one to read, or when the rubric marks the
+    # What this particular report supports, not a fixed shape. Step 3 reads an
+    # ancillary image: the station need not already have one - a question that
+    # asks for it says what it needs and the image is sourced - so it is
+    # required when there is one to read, or when the rubric marks the
     # candidate on reading one.
-    required = (
-        (*_REQUIRED_STEPS, 3) if has_image or needs_investigation else _REQUIRED_STEPS
+    rubric_text = " ".join(
+        str(point.get("text") or "")
+        for prompt in prompts
+        for point in prompt.get("rubric") or []
     )
+    required = steps_the_case_supports(aims, rubric_text)
+    if has_image or needs_investigation:
+        required.add(3)
     for step in sorted(required):
         if steps.count(step) != 1:
             problems.append(
                 f"arc step {step} appears {steps.count(step)} times; it must appear exactly once"
             )
-    if not any(s in (6, 7) for s in steps):
-        problems.append("neither a hypothetical (step 6) nor a knowledge question (step 7) is present")
+    # A step the report says nothing about may be absent, but must not be
+    # present twice if it is there at all.
+    for step in sorted({s for s in steps if isinstance(s, int)} - required):
+        if steps.count(step) > 1:
+            problems.append(
+                f"arc step {step} appears {steps.count(step)} times; it must appear at most once"
+            )
 
     ordered = [s for s in steps if isinstance(s, int)]
     if ordered != sorted(ordered):

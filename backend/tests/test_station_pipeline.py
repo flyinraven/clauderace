@@ -97,14 +97,34 @@ def test_an_opening_that_gives_the_findings_away_is_rejected():
     assert any("standing instruction" in p for p in _arc_problems(prompts))
 
 
-def test_a_station_missing_steps_of_the_arc_is_rejected():
+def test_a_station_missing_steps_its_own_report_calls_for_is_rejected():
+    """Steps 2 and 4 are owed by THIS case, because its aims ask for them."""
     from app.services.osce.prompts import _arc_problems, _normalise
 
     raw = [item for item in full_arc() if item["step"] not in (2, 4)]
     prompts, _ = _normalise(raw)
-    problems = _arc_problems(prompts)
+    problems = _arc_problems(
+        prompts,
+        aims=["Examine the anterior segment and measure the angle.",
+              "Give a differential for the cause of the dislocation."],
+    )
     assert any("arc step 2" in p for p in problems)
     assert any("arc step 4" in p for p in problems)
+
+
+def test_a_case_that_calls_for_no_differential_is_not_made_to_ask_for_one():
+    """The mould is what produced "three differential diagnoses for the
+    patient's current presentation" at an immigration medical."""
+    from app.services.osce.prompts import _arc_problems, _normalise
+
+    raw = [item for item in full_arc() if item["step"] != 4]
+    prompts, _ = _normalise(raw)
+
+    problems = _arc_problems(
+        prompts, aims=["Communicate the management plan to the patient."]
+    )
+
+    assert not any("arc step 4" in p for p in problems), problems
 
 
 def test_a_stub_answer_costs_a_retry_not_the_station(client, db, admin, ai, run_jobs):
@@ -266,7 +286,9 @@ def test_the_model_is_asked_again_when_the_arc_is_wrong(client, db, admin, ai, r
     def responder(body, n):
         user = json.dumps(body["messages"][-1]["content"])
         attempts.append(user)
-        broken = [item for item in full_arc() if item["step"] != 4]
+        # Step 1 is owed by every station, so dropping it is rejected whatever
+        # the report says.
+        broken = [item for item in full_arc() if item["step"] != 1]
         return json.dumps({"prompts": full_arc() if "rejected" in user else broken})
 
     ai.responder = responder
@@ -274,7 +296,7 @@ def test_the_model_is_asked_again_when_the_arc_is_wrong(client, db, admin, ai, r
     run_jobs()
 
     assert len(attempts) == 2
-    assert "arc step 4" in attempts[1]
+    assert "arc step 1" in attempts[1]
     station = db.query(OsceStation).one()
     db.expire_all()
     assert station.prompts_status == "complete"
@@ -2548,3 +2570,75 @@ def test_an_ingest_writes_the_model_answers_too(db, admin):
     # And after the prompt build, because the points it answers live there.
     order = [j.job_type for j in db.query(Job).order_by(Job.id).all()]
     assert order.index("build_osce_prompts") < order.index(JOB_MODEL_ANSWERS)
+
+
+def test_a_differential_must_say_what_it_is_a_differential_of():
+    """Station 3B of 2020 Semester 2 asks for "three differential diagnoses for
+    the patient's current presentation" - of a 32-year-old attending an
+    immigration medical with no complaint.
+
+    Nothing in the question says what it is a differential OF, so it cannot be
+    answered as intended. Step 4 was exempt from the says-nothing-specific
+    check on the grounds that it is formulaic in the real exam, and that
+    exemption is what let this through.
+    """
+    from app.services.osce.prompts import _arc_problems
+
+    prompts = [
+        {"label": "A", "step": 1, "text": "Please examine the anterior segment "
+         "of the right eye and describe your findings.", "rubric": []},
+        {"label": "D", "step": 4, "text": "Summarise your findings and give me "
+         "three differential diagnoses for the patient's current presentation.",
+         "rubric": []},
+    ]
+
+    problems = _arc_problems(prompts, vocabulary={"dislocated", "haptic", "iol"})
+
+    assert any("differential of" in p for p in problems), problems
+
+
+def test_a_differential_that_names_its_subject_is_accepted():
+    from app.services.osce.prompts import _arc_problems
+
+    prompts = [
+        {"label": "D", "step": 4, "text": "You have described a dislocated lens. "
+         "What is your differential for the cause of that in this eye?",
+         "rubric": []},
+    ]
+
+    problems = _arc_problems(prompts, vocabulary={"dislocated", "lens", "cause"})
+
+    assert not any("differential of" in p for p in problems), problems
+
+
+def test_the_same_point_is_not_marked_at_two_questions():
+    """UGH syndrome was worth 0.5 as a differential and 2.0 as a complication."""
+    from app.services.osce.prompts import _points_marked_twice
+
+    prompts = [
+        {"label": "D", "rubric": [
+            {"text": "Propose UGH syndrome as a differential.", "marks": 0.5}]},
+        {"label": "E", "rubric": [
+            {"text": "Discuss the risk of Uveitis-Glaucoma-Hyphema (UGH) syndrome "
+             "as a potential complication.", "marks": 2}]},
+    ]
+
+    problems = _points_marked_twice(prompts)
+
+    assert len(problems) == 1
+    assert "paid for twice" in problems[0]
+
+
+def test_two_genuinely_different_points_are_left_alone():
+    from app.services.osce.prompts import _points_marked_twice
+
+    prompts = [
+        {"label": "A", "rubric": [
+            {"text": "Identify the dislocated single-piece PMMA IOL.", "marks": 3}]},
+        {"label": "A", "rubric": [
+            {"text": "Identify Soemmering's ring or capsular remnant.", "marks": 2}]},
+        {"label": "E", "rubric": [
+            {"text": "Discuss the risk of cystoid macular oedema.", "marks": 1.5}]},
+    ]
+
+    assert _points_marked_twice(prompts) == []
