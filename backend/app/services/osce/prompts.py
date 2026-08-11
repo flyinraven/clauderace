@@ -1004,7 +1004,31 @@ def handle_build_osce_prompts(ctx: JobContext) -> bool:
     finished = index + 1 >= len(station_ids)
     if finished:
         _rebind_figures(ctx, station_ids)
+        _rewrite_model_answers(ctx, station_ids)
     return finished
+
+
+def _rewrite_model_answers(ctx: JobContext, station_ids: list[int]) -> None:
+    """The answers belong to the marking points, and the points were just rewritten.
+
+    Same orphaning as the figure bindings, one field over: a model answer is
+    stored on its rubric point, and the review joins it back by matching the
+    point's text. Rebuilding prompts writes new points, so the answers stop
+    matching and the review shows a mark and a comment with no answer beside
+    it - which is the part worth reading.
+    """
+    from app.services.jobs.runner import create_job
+    from app.services.osce.model_answers import JOB_MODEL_ANSWERS
+
+    job = create_job(
+        ctx.db,
+        JOB_MODEL_ANSWERS,
+        payload={"station_ids": sorted(station_ids)},
+        created_by_id=ctx.job.created_by_id,
+        total_steps=len(station_ids),
+        message=f"Rewriting model answers for {len(station_ids)} station(s)",
+    )
+    logger.info("Queued model answer job %s after a prompt rebuild", job.id)
 
 
 def _rebind_figures(ctx: JobContext, station_ids: list[int]) -> None:

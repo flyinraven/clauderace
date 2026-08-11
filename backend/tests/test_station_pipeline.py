@@ -295,8 +295,11 @@ def test_the_model_is_asked_again_when_the_arc_is_wrong(client, db, admin, ai, r
     client.post("/api/osce/stations/build-prompts", headers=auth(admin))
     run_jobs()
 
-    assert len(attempts) == 2
-    assert "arc step 1" in attempts[1]
+    # The model answer job now chains behind a prompt build, so its call lands
+    # in the same run - count only the attempts at the prompts themselves.
+    builds = [a for a in attempts if "Write the model answer" not in a]
+    assert len(builds) == 2
+    assert "arc step 1" in builds[1]
     station = db.query(OsceStation).one()
     db.expire_all()
     assert station.prompts_status == "complete"
@@ -2642,3 +2645,24 @@ def test_two_genuinely_different_points_are_left_alone():
     ]
 
     assert _points_marked_twice(prompts) == []
+
+
+def test_rebuilding_prompts_rewrites_the_model_answers(db, admin):
+    """A model answer lives on its rubric point, and the review joins it back
+    by matching that point's text. Rebuilding prompts writes new points, so
+    the answers stop matching and the review loses the part worth reading."""
+    from app.models import Job
+    from app.models.ops import JOB_PENDING
+    from app.services.jobs.runner import JobContext
+    from app.services.osce.model_answers import JOB_MODEL_ANSWERS
+    from app.services.osce.prompts import _rewrite_model_answers
+
+    build = Job(job_type="build_osce_prompts", status=JOB_PENDING, payload={},
+                cursor={}, created_by_id=admin.id)
+    db.add(build)
+    db.commit()
+
+    _rewrite_model_answers(JobContext(db=db, job=build), [9, 2])
+
+    queued = db.query(Job).filter(Job.job_type == JOB_MODEL_ANSWERS).one()
+    assert queued.payload["station_ids"] == [2, 9]
