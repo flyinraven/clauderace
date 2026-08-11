@@ -462,3 +462,87 @@ def test_the_stations_findings_are_not_written_under_a_photograph(db):
         "a picture with no words beats the station's answer written under it"
     )
     assert figure.verification_status == "from_paper", "and the tier is untouched"
+
+
+def _station_for_strict(db, diagnosis: str, findings: str):
+    from tests.test_api_osce import make_station
+
+    station = make_station(db)
+    station.diagnosis = diagnosis
+    station.findings = findings
+    station.findings_elicited = findings
+    db.commit()
+    return station
+
+
+def test_an_opening_picture_may_not_say_the_diagnosis_even_when_grounded(db):
+    """Station 3B of 2020 Semester 2 opened with "A dislocated PMMA IOL is
+    present" against a diagnosis of "Dislocated IOL".
+
+    Grounded, accurate, and the entire answer. `leaked_term` forgives it
+    because the findings say it too - which is the right call where the words
+    are all the candidate has, and the wrong one under a photograph.
+    """
+    from app.services.osce.station_images.verify import (
+        leaked_term,
+        names_the_diagnosis,
+    )
+
+    station = _station_for_strict(
+        db, "Dislocated IOL.", "A dislocated PMMA IOL is present in the right eye."
+    )
+    words = "The anterior chamber is quiet. A dislocated PMMA IOL is present."
+
+    assert leaked_term(words, station) is None, "the lenient guard lets it through"
+    assert names_the_diagnosis(words, station) == "dislocated"
+
+
+def test_the_strict_rule_still_lets_a_plain_sign_through(db):
+    """It must not become the rule that binned 37 descriptions of 38."""
+    from app.services.osce.station_images.verify import names_the_diagnosis
+
+    station = _station_for_strict(
+        db, "Leber's Hereditary Optic Neuropathy (LHON).",
+        "There is a right relative afferent pupillary defect.",
+    )
+    words = (
+        "There is a right relative afferent pupillary defect. The right red "
+        "saturation is 60% and the left is 100%."
+    )
+
+    assert names_the_diagnosis(words, station) is None
+
+
+def test_the_strict_rule_catches_an_acronym(db):
+    from app.services.osce.station_images.verify import names_the_diagnosis
+
+    station = _station_for_strict(
+        db, "Leber's Hereditary Optic Neuropathy (LHON).", "Disc swelling.",
+    )
+
+    assert names_the_diagnosis("The disc is swollen in LHON.", station) == "lhon"
+
+
+def test_a_figure_a_question_owns_is_judged_leniently(db):
+    """By then the examiner has asked, and naming what a pathology slide shows
+    is the point of showing it."""
+    from app.models import Image, OsceFigure
+    from app.services.osce.station_images.describe import _opens_the_station
+
+    station = _station_for_strict(db, "Conjunctival Melanoma", "Pigmented lesion.")
+    station.figures.clear()
+    image = Image(sha256="f" * 64, size_bytes=5, content_type="image/jpeg",
+                  data=b"x", origin="pdf")
+    db.add(image)
+    db.commit()
+    figure = OsceFigure(station_id=station.id, position=0, image_id=image.id)
+    db.add(figure)
+    db.commit()
+
+    assert _opens_the_station(station, figure)
+
+    station.prompts = [{"label": "C", "text": "What does this show?",
+                        "figure_id": figure.id, "seconds": 120, "rubric": []}]
+    db.commit()
+
+    assert not _opens_the_station(station, figure)

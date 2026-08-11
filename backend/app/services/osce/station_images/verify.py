@@ -289,6 +289,63 @@ def leaked_term(text: str, station: OsceStation) -> str | None:
     return None
 
 
+def names_the_diagnosis(text: str, station: OsceStation) -> str | None:
+    """The strict reading, for words written under a picture the candidate opens on.
+
+    `leaked_term` forgives any word the station's own findings use, because it
+    has to: it guards the last resort of the image protocol, where the words
+    ARE the station, and a rule that strikes them leaves the candidate with
+    nothing. Of 38 figures put through a stricter version, 37 lost good
+    descriptions.
+
+    None of that reasoning holds where there is a photograph. Striking the
+    words there costs a caption and keeps the picture, so the balance flips and
+    the station can afford the strict rule: a word of the diagnosis is refused
+    however well the findings ground it.
+
+    That matters most on the opening screen, which is what the candidate meets
+    before they have said anything. Station 3B of 2020 Semester 2 opened with
+    "A dislocated PMMA IOL is present" against a diagnosis of "Dislocated IOL" -
+    grounded, accurate, and the entire answer. A figure a question owns is
+    judged by `leaked_term` instead: by then the examiner has asked, and naming
+    what a pathology slide shows is the point of showing it.
+    """
+    conclusion = _CONCLUSION_RE.search(text)
+    if conclusion:
+        return conclusion.group(0)
+
+    # Strict about grounding, not about anatomy. "Adie's pupil" must not make
+    # "pupil" a forbidden word, and a station about a lateral rectus cannot be
+    # described without saying "lateral" - the same trap `leaked_term` names,
+    # and it fires harder here because nothing else forgives it. What is
+    # refused is the distinctive part: "Adie", "dislocated", "pseudoexfoliation".
+    from app.services.osce.findings import _STEM_VOCABULARY
+
+    innocuous = _GENERIC_WORDS | _STEM_VOCABULARY
+    spoken = set(_significant(text))
+    candidates = {
+        w for w in set(_significant(station.diagnosis)) - innocuous
+        # "73-year-old" is the patient, not the answer, and several diagnoses
+        # are recorded with the demographic attached.
+        if not any(ch.isdigit() for ch in w)
+    }
+    for word in candidates:
+        # Same root matching the rest of the module uses, so "dislocation"
+        # answers for "dislocated" and "melanoma" for "melanomas".
+        root = word[:5]
+        if any(other.startswith(root) for other in spoken):
+            return word
+    # "TB-associated panuveitis" and "LHON" are two letters and four, so the
+    # word check above cannot see them.
+    acronym_re = re.compile(r"\b[A-Z]{2,6}\b")
+    acronyms = {a.lower() for a in acronym_re.findall(station.diagnosis or "")}
+    said = {a.lower() for a in acronym_re.findall(text)}
+    overlap = acronyms & said
+    if overlap:
+        return sorted(overlap)[0]
+    return None
+
+
 def verify_image(
     db: Session,
     client: AIClient,

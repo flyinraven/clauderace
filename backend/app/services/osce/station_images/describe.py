@@ -23,10 +23,24 @@ from app.services.osce.station_images.constants import (
 from app.services.osce.station_images.verify import (
     grounding_problem,
     leaked_term,
+    names_the_diagnosis,
     verbatim_findings_floor,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _opens_the_station(station: OsceStation, figure: OsceFigure) -> bool:
+    """Whether the candidate meets this figure on walking in.
+
+    A figure a question owns appears when that question does, and by then the
+    examiner has asked - naming what a pathology slide shows is the point of
+    showing it. Only the opening screen has to keep its mouth shut.
+    """
+    from app.services.osce.station_images.ingested import bound_figure_ids
+
+    claimed = {i for p in (station.prompts or []) for i in bound_figure_ids(p)}
+    return figure.id not in claimed
 
 
 class DescriptionUnavailable(RuntimeError):
@@ -338,6 +352,20 @@ def handle_describe_station_figures(ctx: JobContext) -> bool:
                 described, concern = verbatim_findings_floor(
                     station, figure.wanted_description
                 )
+            if described and figure.image_id is not None and _opens_the_station(
+                station, figure
+            ):
+                # Stricter than the guard inside describe_findings, and it can
+                # afford to be: striking these words costs a caption and keeps
+                # the photograph. See `names_the_diagnosis`.
+                stated = names_the_diagnosis(described, station)
+                if stated:
+                    logger.info(
+                        "Figure %s opens station %s and its words state %r; "
+                        "the picture stands on its own",
+                        figure.id, station.id, stated,
+                    )
+                    described = None
             if described:
                 figure.described_findings = described
                 # "described" says this figure IS words, which is only true of
