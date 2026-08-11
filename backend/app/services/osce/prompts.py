@@ -110,6 +110,17 @@ needs more than one with two:
    It is still marked, and heavily: what comes back is the candidate's
    description of the signs, so EVERY rubric point about identifying or
    describing a finding belongs here. It must never carry zero marks.
+   ONLY WHERE THERE IS SOMETHING TO EXAMINE. The list of images below is what
+   the candidate will actually be shown. If it holds no view of the patient or
+   the eye - no external photograph, no slit lamp, no fundus, no montage - and
+   only ancillary tests such as an OCT, a B-scan or an MRI, then "Please
+   examine the anterior segment and fundus" asks for an examination that
+   cannot happen, and the marks on it cannot be earned by anyone. A live
+   station did exactly that: six marks for describing an anterior segment and
+   fundus, with a macular OCT and an ultrasound on screen and nothing else.
+   In that case the first question is what the material supports - "Here is
+   this patient's macular OCT and B-scan. Describe what they show." - and the
+   describing marks belong to it.
 2. WHAT ELSE WOULD YOU DO - about THIS case. This is the step that most often
    comes out generic, and a generic version is a wasted question. "What other
    investigations would you perform in this patient?" could be asked of any
@@ -151,10 +162,17 @@ needs more than one with two:
    immigration medical with no complaint, shows a dislocated lens, and then
    marks the candidate for saying "UGH syndrome". Nothing in the question says
    what it is a differential OF, so it cannot be answered as intended.
-   Name the thing: "You have described a dislocated lens - what is your
-   differential for the cause of that in this eye?" / "What is your
-   differential for this optic neuropathy?" The subject must be a finding the
-   candidate has already been given or asked to describe.
+   REFER to the subject, never ASSERT it. "You have described a coloboma with
+   zonular insufficiency - what is your differential?" tells the candidate
+   what they found, and on a live station it told them the wrong thing: they
+   had described nothing yet, and the station was about a macular schisis.
+   Anchor it to what the EXAMINER has already put in front of them, or to
+   their own findings without naming those findings:
+     "Summarise your findings and give me three differentials for the cause."
+     "What is your differential for the appearance in these photographs?"
+     "What is your differential for this patient's reduced vision?"
+   Never begin "You have described...", "You have found...", "You noted...".
+   The candidate says what they found; the examiner does not say it for them.
    Where the picture settles the diagnosis, a differential OF the diagnosis is
    not a question. Ask for the differential of its CAUSE, or for what
    threatens the eye next - and ask in those words rather than dressing it up
@@ -334,6 +352,9 @@ def build_prompts_for_station(
             for i, f in enumerate(figures)
         )
     needs_investigation = station_needs_an_investigation(station.rubric)
+    # Whether there is anything to examine. A station whose only pictures are
+    # ancillary tests cannot ask the candidate to examine an eye.
+    has_view = any((f.modality or "") in VIEW_MODALITIES for f in figures)
     # What this station is about, used to reject questions that could have been
     # written for any station at all.
     vocabulary = station_vocabulary(station)
@@ -346,7 +367,11 @@ def build_prompts_for_station(
     )
     image_note = (
         f"IMAGES THIS STATION ALREADY HAS:\n{listed}\n"
-        "The first is the patient - what the candidate examines at step 1, not "
+        + ("" if has_view else
+           "NONE of these is a view of the patient or the eye - they are ancillary "
+           "tests. There is nothing to examine, so step 1 must ask the candidate to "
+           "read what is on screen rather than to examine an eye they cannot see.\n")
+        + "The first is the patient - what the candidate examines at step 1, not "
         "something to hand over. Any others are ancillary tests you may ask about "
         "directly. If the case needs an investigation that is not listed, still ask "
         "the question and describe the image in \"image_wanted\"; it will be sourced "
@@ -379,7 +404,9 @@ def build_prompts_for_station(
     # The arc is the whole point of the station, and the model does drop steps
     # or give the diagnosis away in the opening instruction. Say what is wrong
     # and ask once more rather than shipping a station that examines nothing.
-    problems = _arc_problems(prompts, has_image, needs_investigation, vocabulary, station.aims)
+    problems = _arc_problems(
+        prompts, has_image, needs_investigation, vocabulary, station.aims, has_view
+    )
     if problems:
         retry_user = (
             user
@@ -388,7 +415,9 @@ def build_prompts_for_station(
             + "\n\nRewrite the whole sequence, fixing these."
         )
         retried, retry_warnings = _generate(client, retry_user, job_id)
-        remaining = _arc_problems(retried, has_image, needs_investigation, vocabulary, station.aims)
+        remaining = _arc_problems(
+            retried, has_image, needs_investigation, vocabulary, station.aims, has_view
+        )
         # Keep whichever attempt is closer to a real station; a second try that
         # is still imperfect is usually still better than the first.
         if len(remaining) <= len(problems):
@@ -580,6 +609,65 @@ _RUBRIC_VERBS = {
     "differential", "differentials", "diagnosis", "diagnoses", "complication",
     "complications", "management", "least", "candidate", "patient",
 }
+
+
+# A view of the patient or the eye - something a candidate can be asked to
+# examine. An OCT is a test, not a view.
+VIEW_MODALITIES = {"external", "slit_lamp", "fundus", "motility", "orthoptic", "photo"}
+
+_ASSERTS_FINDINGS = re.compile(
+    r"\byou (?:have |had |'ve )?(?:described|found|noted|identified|seen|observed)\b",
+    re.IGNORECASE,
+)
+
+
+def _tells_the_candidate_what_they_found(prompts: list[dict[str, Any]]) -> list[str]:
+    """A question that says what the candidate found, before they have said it.
+
+    Written while fixing something else: "a differential must say what it is a
+    differential of" was obeyed by asserting the finding. A live station then
+    opened question 2 with "You have described a coloboma with zonular
+    insufficiency" - to a candidate who had described nothing, on a station
+    whose opening screen said macular schisis. Both halves wrong, and the
+    second half is a leak.
+    """
+    problems = []
+    for prompt in prompts:
+        match = _ASSERTS_FINDINGS.search(str(prompt.get("text") or ""))
+        if match:
+            problems.append(
+                f"question {prompt.get('label') or '?'} says {match.group(0)!r} - the "
+                f"candidate says what they found, not the examiner; refer to it "
+                f"without asserting it"
+            )
+    return problems
+
+
+def _examines_what_cannot_be_seen(
+    prompts: list[dict[str, Any]], has_view: bool
+) -> list[str]:
+    """Marks for examining an eye the candidate is never shown.
+
+    The standing instruction carries every mark for describing the signs. Where
+    the station's only images are ancillary tests, there is no eye to examine
+    and those marks cannot be earned by anyone: one live station put six of its
+    twenty on "examine the anterior segment and fundus" with a macular OCT and
+    a B-scan on screen and nothing else.
+    """
+    if has_view:
+        return []
+    for prompt in prompts:
+        if prompt.get("step") != 1:
+            continue
+        if re.search(r"\bexamin\w*\b", str(prompt.get("text") or ""), re.IGNORECASE):
+            marks = sum(float(p.get("marks") or 0) for p in prompt.get("rubric") or [])
+            return [
+                f"question {prompt.get('label') or '?'} asks the candidate to examine, "
+                f"but the station shows no view of the patient or the eye - only "
+                f"ancillary tests, so its {marks:g} mark(s) cannot be earned; ask them "
+                f"to read what is actually on screen"
+            ]
+    return []
 
 
 def _points_marked_twice(
@@ -799,6 +887,7 @@ def _arc_problems(
     needs_investigation: bool = False,
     vocabulary: set[str] | None = None,
     aims: list[str] | None = None,
+    has_view: bool = True,
 ) -> list[str]:
     """Check the sequence against the arc. Empty means it is a real station."""
     problems: list[str] = []
@@ -807,6 +896,8 @@ def _arc_problems(
     problems.extend(_unshowable_questions(prompts))
     problems.extend(_unmarked_questions(prompts))
     problems.extend(_points_marked_twice(prompts, vocabulary))
+    problems.extend(_tells_the_candidate_what_they_found(prompts))
+    problems.extend(_examines_what_cannot_be_seen(prompts, has_view))
 
     # What this particular report supports, not a fixed shape. Step 3 reads an
     # ancillary image: the station need not already have one - a question that

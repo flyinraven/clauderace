@@ -2666,3 +2666,57 @@ def test_rebuilding_prompts_rewrites_the_model_answers(db, admin):
 
     queued = db.query(Job).filter(Job.job_type == JOB_MODEL_ANSWERS).one()
     assert queued.payload["station_ids"] == [2, 9]
+
+
+def test_the_examiner_does_not_say_what_the_candidate_found():
+    """A live station opened question 2 with "You have described a coloboma
+    with zonular insufficiency" - to a candidate who had described nothing, on
+    a station whose opening screen said macular schisis. Both halves wrong."""
+    from app.services.osce.prompts import _tells_the_candidate_what_they_found
+
+    problems = _tells_the_candidate_what_they_found([
+        {"label": "B", "text": "You have described a coloboma with zonular "
+         "insufficiency. What is your differential for the cause?"},
+    ])
+
+    assert len(problems) == 1
+    assert "you have described" in problems[0].lower()
+
+
+def test_referring_to_the_findings_without_asserting_them_is_fine():
+    from app.services.osce.prompts import _tells_the_candidate_what_they_found
+
+    assert _tells_the_candidate_what_they_found([
+        {"label": "B", "text": "Summarise your findings and give me three "
+         "differentials for the cause."},
+        {"label": "C", "text": "What is your differential for the appearance in "
+         "these photographs?"},
+    ]) == []
+
+
+def test_no_marks_for_examining_an_eye_that_is_never_shown():
+    """Six of twenty marks rode on "examine the anterior segment and fundus"
+    with a macular OCT and a B-scan on screen and nothing else."""
+    from app.services.osce.prompts import _examines_what_cannot_be_seen
+
+    prompts = [{
+        "label": "A", "step": 1,
+        "text": "Please examine the anterior segment and fundus of the right eye "
+                "and describe your findings.",
+        "rubric": [{"text": "Identify the coloboma", "marks": 6}],
+    }]
+
+    assert _examines_what_cannot_be_seen(prompts, has_view=False)
+    assert _examines_what_cannot_be_seen(prompts, has_view=True) == []
+
+
+def test_reading_the_tests_is_a_fair_opening_when_that_is_all_there_is():
+    from app.services.osce.prompts import _examines_what_cannot_be_seen
+
+    prompts = [{
+        "label": "A", "step": 1,
+        "text": "Here is this patient's macular OCT and B-scan. Describe what they show.",
+        "rubric": [{"text": "Describes the schisis cavity", "marks": 6}],
+    }]
+
+    assert _examines_what_cannot_be_seen(prompts, has_view=False) == []
