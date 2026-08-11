@@ -582,7 +582,9 @@ _RUBRIC_VERBS = {
 }
 
 
-def _points_marked_twice(prompts: list[dict[str, Any]]) -> list[str]:
+def _points_marked_twice(
+    prompts: list[dict[str, Any]], vocabulary: set[str] | None = None
+) -> list[str]:
     """The same thing paid for at two questions.
 
     Station 3B of 2020 Semester 2 marks "UGH syndrome" 0.5 as a differential at
@@ -592,11 +594,20 @@ def _points_marked_twice(prompts: list[dict[str, Any]]) -> list[str]:
 
     Matched on the distinctive words a point is about, so "Propose UGH syndrome
     as a differential" and "Discuss the risk of Uveitis-Glaucoma-Hyphema (UGH)
-    syndrome as a potential complication" are recognised as one point. Common
-    rubric verbs are stripped first or every "discuss" would collide.
+    syndrome as a potential complication" are recognised as one point.
+
+    Two things are stripped before comparing. Rubric verbs, or every "discuss"
+    would collide. And the station's OWN vocabulary, because every point on a
+    paediatric cataract station says "paediatric cataract": without that,
+    "Discusses vision rehabilitation strategies", "Discusses considerations in
+    management" and "Discusses regular risks of surgery" all read as one point,
+    which is three false accusations on a station whose rubric is fine. What is
+    left is what makes a point *that* point - and "ugh syndrome" survives it,
+    because the diagnosis there is "Dislocated IOL".
     """
     problems: list[str] = []
     seen: dict[frozenset[str], str] = {}
+    common = vocabulary or set()
     for prompt in prompts:
         label = prompt.get("label") or "?"
         for point in prompt.get("rubric") or []:
@@ -605,8 +616,9 @@ def _points_marked_twice(prompts: list[dict[str, Any]]) -> list[str]:
             # cannot see them: "UGH" is three letters and its floor is four.
             # Without this, "Propose UGH syndrome as a differential" reduces to
             # {syndrome} and matches nothing.
-            words = (_content_words(text) - _RUBRIC_VERBS) | {
+            words = (_content_words(text) - _RUBRIC_VERBS - common) | {
                 a.lower() for a in re.findall(r"\b[A-Z]{2,6}\b", text)
+                if a.lower() not in common
             }
             if len(words) < 2:
                 continue
@@ -789,7 +801,7 @@ def _arc_problems(
     problems.extend(_generic_problems(prompts, vocabulary, aims))
     problems.extend(_unshowable_questions(prompts))
     problems.extend(_unmarked_questions(prompts))
-    problems.extend(_points_marked_twice(prompts))
+    problems.extend(_points_marked_twice(prompts, vocabulary))
 
     index = needs_differential_first(prompts)
     if index is not None:
