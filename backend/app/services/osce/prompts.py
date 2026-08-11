@@ -665,7 +665,12 @@ def _generic_problems(
     # medical with no complaint. A differential has to say what it is a
     # differential OF, and the only way to say that is in this case's words.
     for prompt in prompts:
-        if prompt.get("step") == 1 or not prompt.get("step"):
+        # Step 1 names a region and an eye and nothing else, on purpose. Step 3
+        # is asked BLIND on purpose - "What does this show?" is what the arc
+        # above tells the model to write, and then this called it generic and
+        # sent the station back. A rule that rejects the thing another rule
+        # demands costs a retry and teaches the model nothing.
+        if prompt.get("step") in (1, 3) or not prompt.get("step"):
             continue
         if not (_content_words(prompt["text"]) & vocabulary):
             if prompt.get("step") == 4:
@@ -803,14 +808,6 @@ def _arc_problems(
     problems.extend(_unmarked_questions(prompts))
     problems.extend(_points_marked_twice(prompts, vocabulary))
 
-    index = needs_differential_first(prompts)
-    if index is not None:
-        problems.append(
-            f"question {prompts[index].get('label') or index} states the diagnosis, but no "
-            f"earlier question asks for a differential - the candidate is told the answer "
-            f"before being asked to reason towards it"
-        )
-
     # What this particular report supports, not a fixed shape. Step 3 reads an
     # ancillary image: the station need not already have one - a question that
     # asks for it says what it needs and the image is sourced - so it is
@@ -837,7 +834,25 @@ def _arc_problems(
                 f"arc step {step} appears {steps.count(step)} times; it must appear at most once"
             )
 
-    ordered = [s for s in steps if isinstance(s, int)]
+    # The reveal must not land before the candidate has been asked to reason -
+    # but only where this case calls for a differential at all. Demanding one
+    # before every reveal, while step 4 is optional, is two of my own rules
+    # fighting: nineteen stations were told both that they must not have a
+    # differential and that they must have one before question D.
+    if 4 in required:
+        index = needs_differential_first(prompts)
+        if index is not None:
+            problems.append(
+                f"question {prompts[index].get('label') or index} states the diagnosis, but "
+                f"no earlier question asks for a differential - the candidate is told the "
+                f"answer before being asked to reason towards it"
+            )
+
+    # Arc order, with steps 3 and 4 free to swap. "What is your differential,
+    # and what would you order?" followed by "here is the MRI, what does it
+    # show?" is how a real station runs, and insisting the image always comes
+    # first rejected it.
+    ordered = [3 if s == 4 else s for s in steps if isinstance(s, int)]
     if ordered != sorted(ordered):
         problems.append("the questions are not in arc order")
 
