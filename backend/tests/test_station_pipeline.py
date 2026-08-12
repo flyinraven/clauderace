@@ -2792,3 +2792,49 @@ def test_the_reveal_and_everything_after_it_may_name_the_diagnosis():
     ]
 
     assert _diagnosis_named_before_the_reveal(prompts, "Diabetic macular oedema") == []
+
+
+def test_a_question_may_not_assume_a_sign_the_candidate_cannot_reach():
+    """"...specifically addressing the zonular weakness" on a station whose
+    only picture is a macular OCT. Zonular weakness is a slit lamp finding; it
+    is in the paper's elicited findings, on no image the candidate is shown,
+    and stated nowhere."""
+    from app.services.osce.prompts import _presupposes_an_unreachable_sign
+
+    prompts = [{"label": "B", "step": 2,
+                "text": "How would you plan surgery, specifically addressing "
+                        "the zonular weakness?"}]
+
+    problems = _presupposes_an_unreachable_sign(
+        prompts,
+        elicited="Left zonular weakness with phacodonesis. Left cataract.",
+        available="77 year old male. Optical coherence tomography of the macula.",
+    )
+
+    assert len(problems) == 1
+    assert "zonular" in problems[0]
+
+
+def test_a_sign_the_candidate_can_see_may_be_named():
+    """An examiner naming a sign the candidate has just described is proper."""
+    from app.services.osce.prompts import _presupposes_an_unreachable_sign
+
+    prompts = [{"label": "B", "step": 2,
+                "text": "How would you measure the proptosis?"}]
+
+    assert _presupposes_an_unreachable_sign(
+        prompts,
+        elicited="Right proptosis of 4mm with lid retraction.",
+        available="External photograph showing right proptosis.",
+    ) == []
+
+
+def test_after_the_reveal_the_examiner_may_refer_to_anything():
+    from app.services.osce.prompts import _presupposes_an_unreachable_sign
+
+    prompts = [{"label": "E", "step": 6,
+                "text": "If the zonular weakness progressed, what would you do?"}]
+
+    assert _presupposes_an_unreachable_sign(
+        prompts, elicited="Zonular weakness.", available="An OCT.",
+    ) == []

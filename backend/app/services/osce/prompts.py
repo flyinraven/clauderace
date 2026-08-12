@@ -372,6 +372,14 @@ def build_prompts_for_station(
     # ancillary tests cannot ask the candidate to examine an eye.
     has_view = any((f.modality or "") in VIEW_MODALITIES for f in figures)
     has_ancillary = any((f.modality or "") in ANCILLARY_MODALITIES for f in figures)
+    # Everything the candidate can actually reach: what the examiner tells
+    # them up front, and whatever the pictures show or say.
+    available = " ".join(filter(None, [
+        station.findings_given or "",
+        *(f.caption or "" for f in figures),
+        *(f.described_findings or "" for f in figures),
+        *(f.wanted_description or "" for f in figures),
+    ]))
     # What this station is about, used to reject questions that could have been
     # written for any station at all.
     vocabulary = station_vocabulary(station)
@@ -424,6 +432,7 @@ def build_prompts_for_station(
     problems = _arc_problems(
         prompts, has_image, needs_investigation, vocabulary, station.aims, has_view,
         has_ancillary, bool((station.diagnosis or '').strip()), station.diagnosis,
+        station.findings_elicited, available,
     )
     if problems:
         retry_user = (
@@ -436,6 +445,7 @@ def build_prompts_for_station(
         remaining = _arc_problems(
             retried, has_image, needs_investigation, vocabulary, station.aims, has_view,
             has_ancillary, bool((station.diagnosis or '').strip()), station.diagnosis,
+            station.findings_elicited, available,
         )
         # Keep whichever attempt is closer to a real station; a second try that
         # is still imperfect is usually still better than the first.
@@ -753,6 +763,63 @@ def _diagnosis_named_before_the_reveal(
     return problems
 
 
+def _presupposes_an_unreachable_sign(
+    prompts: list[dict[str, Any]],
+    elicited: str | None,
+    available: str,
+) -> list[str]:
+    """A question that refers to a sign the candidate was never given a way to find.
+
+    "How would you manage him, specifically addressing THE ZONULAR WEAKNESS?"
+    on a station whose only picture is a macular OCT. Zonular weakness is a
+    slit lamp finding; it is in the paper's elicited findings, it is on no
+    image the candidate is shown, and no words state it. The question assumes
+    they found it, and marks them as though they had.
+
+    Deliberately narrow, because being broad here has cost a day:
+      * only the definite reference - "the zonular weakness", "this cataract" -
+        since that is what presupposes rather than asks;
+      * only signs the paper records as ELICITED, so nothing given up front
+        counts;
+      * only where the sign appears nowhere the candidate can reach it: not in
+        the background, not in a caption, not in any stated findings;
+      * and only before the reveal, since afterwards the examiner has handed
+        the case over and may refer to any of it.
+    An examiner naming a sign the candidate has just described is proper, and
+    that sign will be visible in an image or stated in words, so it is not
+    caught here.
+    """
+    if not (elicited or "").strip():
+        return []
+    reachable = _content_words(available)
+    unreachable = _content_words(elicited) - reachable - _GENERIC_WORDS
+    if not unreachable:
+        return []
+
+    problems = []
+    for prompt in prompts:
+        step = prompt.get("step")
+        if not isinstance(step, int) or step >= 5:
+            continue
+        text = str(prompt.get("text") or "")
+        for word in sorted(unreachable):
+            pattern = (
+                r"\b(?:the|this|that|his|her|their)\s+"
+                rf"(?:\w+\s+){{0,2}}{re.escape(word)}\b"
+            )
+            found = re.search(pattern, text, re.IGNORECASE)
+            if found:
+                # The phrase, not the word that tripped it: "the zonular
+                # weakness" tells you what to fix, "weakness" does not.
+                problems.append(
+                    f"question {prompt.get('label') or '?'} refers to "
+                    f"{found.group(0)!r} as though the candidate had found it, but "
+                    f"nothing they are shown or told contains it"
+                )
+                break
+    return problems
+
+
 def _points_marked_twice(
     prompts: list[dict[str, Any]], vocabulary: set[str] | None = None
 ) -> list[str]:
@@ -974,6 +1041,8 @@ def _arc_problems(
     has_ancillary: bool = False,
     has_diagnosis: bool = False,
     diagnosis: str | None = None,
+    elicited: str | None = None,
+    available: str = "",
 ) -> list[str]:
     """Check the sequence against the arc. Empty means it is a real station."""
     problems: list[str] = []
@@ -985,6 +1054,7 @@ def _arc_problems(
     problems.extend(_tells_the_candidate_what_they_found(prompts))
     problems.extend(_examines_what_cannot_be_seen(prompts, has_view))
     problems.extend(_diagnosis_named_before_the_reveal(prompts, diagnosis))
+    problems.extend(_presupposes_an_unreachable_sign(prompts, elicited, available))
 
     # What this particular report supports, not a fixed shape. Step 3 reads an
     # ancillary image: the station need not already have one - a question that
