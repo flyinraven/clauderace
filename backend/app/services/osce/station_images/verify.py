@@ -289,7 +289,9 @@ def leaked_term(text: str, station: OsceStation) -> str | None:
     return None
 
 
-def names_the_diagnosis(text: str, station: OsceStation) -> str | None:
+def names_the_diagnosis(
+    text: str, station: OsceStation, conclusions: bool = True
+) -> str | None:
     """The strict reading, for words written under a picture the candidate opens on.
 
     `leaked_term` forgives any word the station's own findings use, because it
@@ -310,9 +312,13 @@ def names_the_diagnosis(text: str, station: OsceStation) -> str | None:
     judged by `leaked_term` instead: by then the examiner has asked, and naming
     what a pathology slide shows is the point of showing it.
     """
-    conclusion = _CONCLUSION_RE.search(text)
-    if conclusion:
-        return conclusion.group(0)
+    # A caption saying "consistent with" is drawing the conclusion for the
+    # candidate. A QUESTION saying "give me three differential diagnoses" is
+    # asking them to draw it, so callers checking question text turn this off.
+    if conclusions:
+        conclusion = _CONCLUSION_RE.search(text)
+        if conclusion:
+            return conclusion.group(0)
 
     # Strict about grounding, not about anatomy. "Adie's pupil" must not make
     # "pupil" a forbidden word, and a station about a lateral rectus cannot be
@@ -321,7 +327,17 @@ def names_the_diagnosis(text: str, station: OsceStation) -> str | None:
     # refused is the distinctive part: "Adie", "dislocated", "pseudoexfoliation".
     from app.services.osce.findings import _STEM_VOCABULARY
 
-    innocuous = _GENERIC_WORDS | _STEM_VOCABULARY
+    # Words a diagnosis field carries because it is a diagnosis field, not
+    # because they are the answer. Recorded diagnoses read "The diagnosis is
+    # X", so "diagnosis" became a forbidden word and every question asking for
+    # a differential diagnosis was refused - sixteen stations of one run.
+    # Anatomy goes the same way: "anterior" is not the answer to anything.
+    boilerplate = {
+        "diagnosis", "diagnoses", "differential", "differentials", "presumed",
+        "probable", "likely", "presentation", "patient", "station",
+        "bilateral", "unilateral", "anterior", "posterior", "segment",
+    }
+    innocuous = _GENERIC_WORDS | _STEM_VOCABULARY | boilerplate
     spoken = set(_significant(text))
     candidates = {
         w for w in set(_significant(station.diagnosis)) - innocuous

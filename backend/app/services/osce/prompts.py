@@ -754,7 +754,9 @@ def _diagnosis_named_before_the_reveal(
         step = prompt.get("step")
         if not isinstance(step, int) or step >= 5:
             continue
-        named = names_the_diagnosis(str(prompt.get("text") or ""), station)
+        named = names_the_diagnosis(
+            str(prompt.get("text") or ""), station, conclusions=False
+        )
         if named:
             problems.append(
                 f"question {prompt.get('label') or '?'} names {named!r} before step 5 "
