@@ -2755,3 +2755,40 @@ def test_a_case_with_no_diagnosis_is_still_not_made_to_differentiate():
         has_diagnosis=False,
     )
     assert 4 not in supported
+
+
+def test_no_question_names_the_diagnosis_before_the_reveal():
+    """A live station asked the candidate to describe a macular OCT, then at
+    question 2: "how would you manage the diabetic macular oedema
+    pre-operatively?" - and at question 3 asked for three differentials for the
+    reduced vision, already answered two questions earlier by the examiner."""
+    from app.services.osce.prompts import _diagnosis_named_before_the_reveal
+
+    prompts = [
+        {"label": "A", "step": 1, "text": "Here is this patient's macular OCT. "
+         "Describe what it shows."},
+        {"label": "B", "step": 2, "text": "How would you manage the diabetic "
+         "macular oedema pre-operatively?"},
+        {"label": "C", "step": 4, "text": "Give me three differentials for the "
+         "reduced vision."},
+    ]
+
+    problems = _diagnosis_named_before_the_reveal(
+        prompts, "Left diabetic macular oedema with moderate NPDR"
+    )
+
+    assert len(problems) == 1
+    assert "question B" in problems[0]
+
+
+def test_the_reveal_and_everything_after_it_may_name_the_diagnosis():
+    from app.services.osce.prompts import _diagnosis_named_before_the_reveal
+
+    prompts = [
+        {"label": "D", "step": 5, "text": "The diagnosis is diabetic macular "
+         "oedema. How would you manage him?"},
+        {"label": "E", "step": 7, "text": "What are the systemic associations of "
+         "diabetic macular oedema?"},
+    ]
+
+    assert _diagnosis_named_before_the_reveal(prompts, "Diabetic macular oedema") == []

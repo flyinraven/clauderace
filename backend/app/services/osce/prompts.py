@@ -23,6 +23,8 @@ from app.services.ai.client import AIError
 from app.services.coerce import as_float
 from app.services.errors import log_error
 from app.services.jobs.runner import JobContext, JobHandlerError, register_handler
+from types import SimpleNamespace
+
 from app.services.marking import absorb_mark_drift, rescale_marks_to_awardable
 
 logger = logging.getLogger(__name__)
@@ -421,7 +423,7 @@ def build_prompts_for_station(
     # and ask once more rather than shipping a station that examines nothing.
     problems = _arc_problems(
         prompts, has_image, needs_investigation, vocabulary, station.aims, has_view,
-        has_ancillary, bool((station.diagnosis or '').strip()),
+        has_ancillary, bool((station.diagnosis or '').strip()), station.diagnosis,
     )
     if problems:
         retry_user = (
@@ -433,7 +435,7 @@ def build_prompts_for_station(
         retried, retry_warnings = _generate(client, retry_user, job_id)
         remaining = _arc_problems(
             retried, has_image, needs_investigation, vocabulary, station.aims, has_view,
-            has_ancillary, bool((station.diagnosis or '').strip()),
+            has_ancillary, bool((station.diagnosis or '').strip()), station.diagnosis,
         )
         # Keep whichever attempt is closer to a real station; a second try that
         # is still imperfect is usually still better than the first.
@@ -717,6 +719,40 @@ def _examines_what_cannot_be_seen(
     return []
 
 
+def _diagnosis_named_before_the_reveal(
+    prompts: list[dict[str, Any]], diagnosis: str | None
+) -> list[str]:
+    """A question that names the diagnosis before step 5 hands it over.
+
+    The prompt has always said not to, and the model does it anyway. A live
+    station asked the candidate to describe a macular OCT, and then at question
+    2: "how would you manage the diabetic macular oedema pre-operatively?" -
+    followed at question 3 by "give me three differential diagnoses for the
+    patient's reduced vision". The differential was already answered two
+    questions earlier, by the examiner.
+
+    Step 5 states it deliberately, and everything after may use the name.
+    """
+    if not (diagnosis or "").strip():
+        return []
+    # Imported here: verify -> sittability -> prompts closes the circle.
+    from app.services.osce.station_images.verify import names_the_diagnosis
+
+    station = SimpleNamespace(diagnosis=diagnosis)
+    problems = []
+    for prompt in prompts:
+        step = prompt.get("step")
+        if not isinstance(step, int) or step >= 5:
+            continue
+        named = names_the_diagnosis(str(prompt.get("text") or ""), station)
+        if named:
+            problems.append(
+                f"question {prompt.get('label') or '?'} names {named!r} before step 5 "
+                f"gives the diagnosis - every question after it is answered in advance"
+            )
+    return problems
+
+
 def _points_marked_twice(
     prompts: list[dict[str, Any]], vocabulary: set[str] | None = None
 ) -> list[str]:
@@ -937,6 +973,7 @@ def _arc_problems(
     has_view: bool = True,
     has_ancillary: bool = False,
     has_diagnosis: bool = False,
+    diagnosis: str | None = None,
 ) -> list[str]:
     """Check the sequence against the arc. Empty means it is a real station."""
     problems: list[str] = []
@@ -947,6 +984,7 @@ def _arc_problems(
     problems.extend(_points_marked_twice(prompts, vocabulary))
     problems.extend(_tells_the_candidate_what_they_found(prompts))
     problems.extend(_examines_what_cannot_be_seen(prompts, has_view))
+    problems.extend(_diagnosis_named_before_the_reveal(prompts, diagnosis))
 
     # What this particular report supports, not a fixed shape. Step 3 reads an
     # ancillary image: the station need not already have one - a question that
