@@ -223,7 +223,22 @@ def _adjacent_pairs(words: list[str]) -> set[frozenset[str]]:
     return {frozenset(pair) for pair in zip(words, words[1:]) if len(set(pair)) == 2}
 
 
-def leaked_term(text: str, station: OsceStation) -> str | None:
+# Words a diagnosis field carries because it is a diagnosis field, not because
+# they are the answer. Recorded diagnoses read "The presumed diagnosis is X",
+# so "diagnosis" became a forbidden word and every question asking for a
+# differential diagnosis was refused - sixteen stations of one count, and
+# sixteen again when the second guard was pointed at question text without
+# this. Anatomy goes the same way: "anterior" is not the answer to anything.
+_DIAGNOSIS_BOILERPLATE = frozenset({
+    "diagnosis", "diagnoses", "differential", "differentials", "presumed",
+    "probable", "likely", "presentation", "patient", "station",
+    "bilateral", "unilateral", "anterior", "posterior", "segment",
+})
+
+
+def leaked_term(
+    text: str, station: OsceStation, conclusions: bool = True
+) -> str | None:
     """What this description gives away, or None if it only reports signs.
 
     Deterministic rather than another model call: it has to be reliable, it
@@ -256,14 +271,20 @@ def leaked_term(text: str, station: OsceStation) -> str | None:
     grounded each half is, which is what stops the findings being quoted back
     as a name.
     """
-    conclusion = _CONCLUSION_RE.search(text)
-    if conclusion:
-        return conclusion.group(0)
+    # The conclusion words include "diagnos\w+", which is drawing the
+    # conclusion when written under a picture and simply the word "diagnosis"
+    # when it appears in a question. Callers checking question text turn this
+    # half off.
+    if conclusions:
+        conclusion = _CONCLUSION_RE.search(text)
+        if conclusion:
+            return conclusion.group(0)
 
     # Only the diagnosis, not the case summary. The summary is prose full of
     # ordinary clinical vocabulary - checking it rejected "there is a defect in
     # the left half of each field" because the summary happened to say "field".
-    diagnosis = _significant(station.diagnosis)
+    diagnosis = [w for w in _significant(station.diagnosis)
+                 if w not in _DIAGNOSIS_BOILERPLATE]
     if not diagnosis:
         return None
 
@@ -327,17 +348,7 @@ def names_the_diagnosis(
     # refused is the distinctive part: "Adie", "dislocated", "pseudoexfoliation".
     from app.services.osce.findings import _STEM_VOCABULARY
 
-    # Words a diagnosis field carries because it is a diagnosis field, not
-    # because they are the answer. Recorded diagnoses read "The diagnosis is
-    # X", so "diagnosis" became a forbidden word and every question asking for
-    # a differential diagnosis was refused - sixteen stations of one run.
-    # Anatomy goes the same way: "anterior" is not the answer to anything.
-    boilerplate = {
-        "diagnosis", "diagnoses", "differential", "differentials", "presumed",
-        "probable", "likely", "presentation", "patient", "station",
-        "bilateral", "unilateral", "anterior", "posterior", "segment",
-    }
-    innocuous = _GENERIC_WORDS | _STEM_VOCABULARY | boilerplate
+    innocuous = _GENERIC_WORDS | _STEM_VOCABULARY | _DIAGNOSIS_BOILERPLATE
     spoken = set(_significant(text))
     candidates = {
         w for w in set(_significant(station.diagnosis)) - innocuous

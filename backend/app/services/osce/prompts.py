@@ -674,8 +674,13 @@ _RUBRIC_VERBS = {
 # examine. An OCT is a test, not a view.
 VIEW_MODALITIES = {"external", "slit_lamp", "fundus", "motility", "orthoptic", "photo"}
 
+# Only where the examiner OPENS by telling the candidate what they found.
+# "What is your differential for the occlusive vasculitis you have described?"
+# is the recommended form - it refers to their answer rather than asserting it -
+# and matching anywhere in the sentence rejected exactly that.
 _ASSERTS_FINDINGS = re.compile(
-    r"\byou (?:have |had |'ve )?(?:described|found|noted|identified|seen|observed)\b",
+    r"^\s*(?:so\s+|now\s+|ok(?:ay)?,?\s+)?you (?:have |had |'ve )?"
+    r"(?:described|found|noted|identified|seen|observed)\b",
     re.IGNORECASE,
 )
 
@@ -730,7 +735,9 @@ def _examines_what_cannot_be_seen(
 
 
 def _diagnosis_named_before_the_reveal(
-    prompts: list[dict[str, Any]], diagnosis: str | None
+    prompts: list[dict[str, Any]],
+    diagnosis: str | None,
+    elicited: str | None = None,
 ) -> list[str]:
     """A question that names the diagnosis before step 5 hands it over.
 
@@ -746,15 +753,26 @@ def _diagnosis_named_before_the_reveal(
     if not (diagnosis or "").strip():
         return []
     # Imported here: verify -> sittability -> prompts closes the circle.
-    from app.services.osce.station_images.verify import names_the_diagnosis
+    from app.services.osce.station_images.verify import leaked_term
 
-    station = SimpleNamespace(diagnosis=diagnosis)
+    station = SimpleNamespace(
+        diagnosis=diagnosis, findings_elicited=elicited, findings=elicited
+    )
     problems = []
     for prompt in prompts:
         step = prompt.get("step")
         if not isinstance(step, int) or step >= 5:
             continue
-        named = names_the_diagnosis(
+        # The LENIENT guard, not the strict one. A recorded diagnosis carries
+        # the signs with it - "CPEO with bilateral ptosis", "multifocal
+        # choroiditis with a choroidal neovascular membrane" - so the strict
+        # rule made "ptosis" and "multifocal" forbidden words and rejected
+        # "what further measurements would you perform to assess the ptosis?",
+        # which is the examiner naming a sign the candidate has just described.
+        # `leaked_term` forgives a word the station's own findings use, which
+        # is exactly the distinction wanted here: the sign is fair, the label
+        # is not.
+        named = leaked_term(
             str(prompt.get("text") or ""), station, conclusions=False
         )
         if named:
@@ -769,6 +787,7 @@ def _presupposes_an_unreachable_sign(
     prompts: list[dict[str, Any]],
     elicited: str | None,
     available: str,
+    has_view: bool = False,
 ) -> list[str]:
     """A question that refers to a sign the candidate was never given a way to find.
 
@@ -791,7 +810,13 @@ def _presupposes_an_unreachable_sign(
     that sign will be visible in an image or stated in words, so it is not
     caught here.
     """
-    if not (elicited or "").strip():
+    if not (elicited or "").strip() or has_view:
+        # There is a patient to examine, so the elicited signs are exactly what
+        # the candidate is meant to go and find - "what measurements would you
+        # perform to assess the ptosis?" follows them describing the ptosis.
+        # Without this the check fired on every station with a photograph, and
+        # the fault it was written for is the opposite case: a station whose
+        # only picture is an OCT, asking about zonular weakness.
         return []
     reachable = _content_words(available)
     unreachable = _content_words(elicited) - reachable - _GENERIC_WORDS
@@ -864,6 +889,12 @@ def _points_marked_twice(
                 continue
             key = frozenset(words)
             for earlier, where in seen.items():
+                # Two points of the SAME question are two things that question
+                # asks for, not one thing paid for twice. Comparing a question
+                # with itself reported "question A marks X, which question A
+                # already marks".
+                if where == label:
+                    continue
                 shared = earlier & key
                 # Two-thirds of the smaller point, so a longer restatement of
                 # the same thing still counts as the same thing.
@@ -912,7 +943,25 @@ def _generic_problems(
         # demands costs a retry and teaches the model nothing.
         if prompt.get("step") in (1, 3) or not prompt.get("step"):
             continue
-        if not (_content_words(prompt["text"]) & vocabulary):
+        # "Summarise your findings and give me three differentials for the
+        # cause" says perfectly well what it is about: the candidate's own
+        # findings. It shares no disease word with the case, so a
+        # vocabulary-only test called it unanchored - forty-nine times.
+        text = str(prompt.get("text") or "")
+        anchored = re.search(
+            r"\byour findings\b|\bthese findings\b|\bthe findings\b|"
+            r"\bwhat you (?:have )?(?:just )?(?:described|found|seen)\b",
+            text, re.IGNORECASE,
+        ) and not re.search(
+            # Except this one, which is the phrase that started all of it:
+            # "three differential diagnoses for the patient's CURRENT
+            # PRESENTATION" of a woman at an immigration medical who has not
+            # presented with anything. Naming the findings and then hanging the
+            # differential on a presentation that does not exist is still
+            # leaving the candidate to guess.
+            r"\b(?:current|this|the)\s+presentation\b", text, re.IGNORECASE,
+        )
+        if not (_content_words(prompt["text"]) & vocabulary) and not anchored:
             if prompt.get("step") == 4:
                 problems.append(
                     f"question {prompt['label']} ({prompt['text'][:60]!r}...) asks for a "
@@ -927,12 +976,17 @@ def _generic_problems(
                 )
 
     asked = _content_words(" ".join(p["text"] for p in prompts))
+    # Matched on a shared opening, not the whole word. "To examine the eyelid
+    # in a systematic manner" against "Please examine the eyelids of both eyes"
+    # was reported as an aim never asked about, on a plural - eighty-four of
+    # one count were that kind of miss.
+    asked_roots = {w[:5] for w in asked}
     for aim in aims or []:
         wanted = _content_words(aim) & vocabulary
         # An aim like "Describe findings." carries nothing to check against.
         if len(wanted) < 2:
             continue
-        if not (wanted & asked):
+        if not any(w[:5] in asked_roots for w in wanted):
             problems.append(
                 f"the aim {aim[:70]!r} is never asked about; it is what the station "
                 "exists to test, so it needs a question of its own"
@@ -1055,8 +1109,12 @@ def _arc_problems(
     problems.extend(_points_marked_twice(prompts, vocabulary))
     problems.extend(_tells_the_candidate_what_they_found(prompts))
     problems.extend(_examines_what_cannot_be_seen(prompts, has_view))
-    problems.extend(_diagnosis_named_before_the_reveal(prompts, diagnosis))
-    problems.extend(_presupposes_an_unreachable_sign(prompts, elicited, available))
+    problems.extend(
+        _diagnosis_named_before_the_reveal(prompts, diagnosis, elicited)
+    )
+    problems.extend(
+        _presupposes_an_unreachable_sign(prompts, elicited, available, has_view)
+    )
 
     # What this particular report supports, not a fixed shape. Step 3 reads an
     # ancillary image: the station need not already have one - a question that
