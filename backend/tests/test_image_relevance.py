@@ -546,3 +546,63 @@ def test_a_figure_a_question_owns_is_judged_leniently(db):
     db.commit()
 
     assert not _opens_the_station(station, figure)
+
+
+def _figure_on(db, station, **kw):
+    from app.models import Image, OsceFigure
+    image = Image(sha256=kw.pop("sha", "9" * 64), size_bytes=5,
+                  content_type="image/jpeg", data=b"x", origin="pdf")
+    db.add(image)
+    db.commit()
+    figure = OsceFigure(station_id=station.id, image_id=image.id, **kw)
+    db.add(figure)
+    db.commit()
+    return figure
+
+
+def test_a_picture_that_cannot_show_the_sign_gets_the_findings_read_out(db):
+    """An external photograph cannot show pseudoexfoliative material at the
+    pupil margin. Twelve marks for eliciting it, and nothing to elicit it from.
+
+    Clearing the smear was right; restricting the fallback to figures with no
+    image at all stopped it in the place it was needed too.
+    """
+    from app.services.osce.station_images.describe import _may_state_the_findings
+    from tests.test_api_osce import make_station
+
+    station = make_station(db)
+    station.figures.clear()
+    db.commit()
+    figure = _figure_on(db, station, position=0, verification_status="representative")
+
+    assert _may_state_the_findings(db, figure, doubtful=True)
+
+
+def test_a_picture_that_does_show_the_sign_stays_silent(db):
+    from app.services.osce.station_images.describe import _may_state_the_findings
+    from tests.test_api_osce import make_station
+
+    station = make_station(db)
+    station.figures.clear()
+    db.commit()
+    figure = _figure_on(db, station, position=0, verification_status="from_paper",
+                        match_confidence=1.0)
+
+    assert not _may_state_the_findings(db, figure, doubtful=False)
+
+
+def test_the_findings_are_read_out_once_not_under_every_photograph(db):
+    """The floor states the WHOLE case. Twice is how the smear happened."""
+    from app.services.osce.station_images.describe import _may_state_the_findings
+    from tests.test_api_osce import make_station
+
+    station = make_station(db)
+    station.figures.clear()
+    db.commit()
+    _figure_on(db, station, position=0, verification_status="representative",
+               described_findings="The right pupil margin shows flaky white material.",
+               sha="a1" * 32)
+    second = _figure_on(db, station, position=1,
+                        verification_status="representative", sha="b1" * 32)
+
+    assert not _may_state_the_findings(db, second, doubtful=True)

@@ -30,6 +30,41 @@ from app.services.osce.station_images.verify import (
 logger = logging.getLogger(__name__)
 
 
+def _may_state_the_findings(db, figure: OsceFigure, doubtful: bool) -> bool:
+    """Whether the examiner should read the findings out for this figure.
+
+    Always where there is no picture: the words are the station.
+
+    Also where there IS a picture that does not carry the sign. An external
+    photograph cannot show pseudoexfoliative material at the pupil margin, and
+    a station whose twelve marks are for eliciting that leaves the candidate
+    with nothing to elicit it from. A picture of the right disease and the
+    wrong patient is the same problem. Restricting this to figures with no
+    image at all - which is how the smear was stopped - stopped it in the
+    place it was needed too.
+
+    Once per station, though. The floor states the WHOLE case, so writing it
+    under a second figure is how the same paragraph came to sit under five
+    photographs, the external and a blank image included. If any sibling
+    already carries words, the findings have been stated and this figure keeps
+    its silence.
+    """
+    if figure.image_id is None:
+        return True
+    if not doubtful:
+        return False
+    from sqlalchemy import select as _select
+
+    stated = db.execute(
+        _select(OsceFigure.id)
+        .where(OsceFigure.station_id == figure.station_id)
+        .where(OsceFigure.id != figure.id)
+        .where(OsceFigure.described_findings.isnot(None))
+        .where(OsceFigure.described_findings != "")
+    ).first()
+    return stated is None
+
+
 def _opens_the_station(station: OsceStation, figure: OsceFigure) -> bool:
     """Whether the candidate meets this figure on walking in.
 
@@ -323,7 +358,7 @@ def handle_describe_station_figures(ctx: JobContext) -> bool:
             described, concern = describe_findings(
                 AIClient(ctx.db), station, unshown or figure.wanted_description
             )
-            if not described and figure.image_id is None:
+            if not described and _may_state_the_findings(ctx.db, figure, doubtful):
                 # Almost every figure that reaches this job has no
                 # `wanted_description`: it was written by ingest, or the view it
                 # names was cleared. The rubric section of the prompt then reads
