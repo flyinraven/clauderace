@@ -145,13 +145,18 @@ def test_a_stub_answer_costs_a_retry_not_the_station(client, db, admin, ai, run_
     assert len(station.prompts) == 7
 
 
-def test_a_station_with_no_image_need_not_ask_the_candidate_to_read_one():
-    """Nothing is shown, so there is no photograph to describe."""
+def test_only_an_ancillary_test_has_to_be_read_out_loud():
+    """An external photograph is examined, not read. An OCT is read.
+
+    The rule was "any image at all demands a read-this question", which asked
+    for one on stations whose only picture is the patient.
+    """
     from app.services.osce.prompts import _arc_problems, _normalise
 
     prompts, _ = _normalise([item for item in full_arc() if item["step"] != 3])
-    assert _arc_problems(prompts, has_image=False) == []
-    assert any("arc step 3" in p for p in _arc_problems(prompts, has_image=True))
+    assert _arc_problems(prompts, has_ancillary=False) == []
+    assert any("arc step 3" in p
+               for p in _arc_problems(prompts, has_ancillary=True))
 
 
 def test_a_test_result_cannot_be_handed_over_when_there_is_none_to_show():
@@ -2720,3 +2725,33 @@ def test_reading_the_tests_is_a_fair_opening_when_that_is_all_there_is():
     }]
 
     assert _examines_what_cannot_be_seen(prompts, has_view=False) == []
+
+
+def test_an_ancillary_image_on_screen_must_be_asked_about():
+    """A live station showed a macular OCT and a B-scan and asked about neither.
+    They are the only things on the screen a candidate can interpret."""
+    from app.services.osce.prompts import steps_the_case_supports
+
+    assert 3 in steps_the_case_supports([], "", has_ancillary=True)
+    assert 3 not in steps_the_case_supports([], "", has_ancillary=False)
+
+
+def test_a_case_with_a_diagnosis_must_ask_the_candidate_to_reason_first():
+    """Another live station went from "examine both eyes" straight to
+    "summarise your findings and give me your diagnosis" - recognition only,
+    no reasoning anywhere."""
+    from app.services.osce.prompts import steps_the_case_supports
+
+    assert 4 in steps_the_case_supports([], "", has_diagnosis=True)
+
+
+def test_a_case_with_no_diagnosis_is_still_not_made_to_differentiate():
+    """The immigration-medical station is still not asked for a differential
+    of nothing."""
+    from app.services.osce.prompts import steps_the_case_supports
+
+    supported = steps_the_case_supports(
+        ["Communicate the management plan to the patient."], "",
+        has_diagnosis=False,
+    )
+    assert 4 not in supported

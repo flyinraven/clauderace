@@ -97,6 +97,20 @@ was mandatory. The candidate is left guessing what the examiner wants. Four
 good questions beat six with two of them invented, and a report that supports
 three questions is a three-question station.
 
+TWO STEPS ARE NOT OPTIONAL WHEN THE MATERIAL IS THERE, and leaving them out
+guts the station:
+- If the images below include an ancillary test - an OCT, a visual field, an
+  angiogram, an ultrasound, an MRI - one question MUST ask the candidate to
+  read it. It is the only thing on the screen they can interpret, and a
+  station that shows a macular OCT and a B-scan and asks about neither has
+  wasted both.
+- If the case has a diagnosis to reach, the candidate MUST be asked to reason
+  towards it BEFORE step 5 gives it away. A station that goes from "examine
+  both eyes" straight to "summarise your findings and give me your diagnosis"
+  tests recognition and nothing else. Ask what else it could be, what would
+  distinguish them, what the finding implies - that reasoning is what the
+  examiners mark and what the candidate is practising.
+
 Where a case genuinely carries more, add questions - a station with five aims
 needs more than one with two:
 
@@ -355,6 +369,7 @@ def build_prompts_for_station(
     # Whether there is anything to examine. A station whose only pictures are
     # ancillary tests cannot ask the candidate to examine an eye.
     has_view = any((f.modality or "") in VIEW_MODALITIES for f in figures)
+    has_ancillary = any((f.modality or "") in ANCILLARY_MODALITIES for f in figures)
     # What this station is about, used to reject questions that could have been
     # written for any station at all.
     vocabulary = station_vocabulary(station)
@@ -405,7 +420,8 @@ def build_prompts_for_station(
     # or give the diagnosis away in the opening instruction. Say what is wrong
     # and ask once more rather than shipping a station that examines nothing.
     problems = _arc_problems(
-        prompts, has_image, needs_investigation, vocabulary, station.aims, has_view
+        prompts, has_image, needs_investigation, vocabulary, station.aims, has_view,
+        has_ancillary, bool((station.diagnosis or '').strip()),
     )
     if problems:
         retry_user = (
@@ -416,7 +432,8 @@ def build_prompts_for_station(
         )
         retried, retry_warnings = _generate(client, retry_user, job_id)
         remaining = _arc_problems(
-            retried, has_image, needs_investigation, vocabulary, station.aims, has_view
+            retried, has_image, needs_investigation, vocabulary, station.aims, has_view,
+            has_ancillary, bool((station.diagnosis or '').strip()),
         )
         # Keep whichever attempt is closer to a real station; a second try that
         # is still imperfect is usually still better than the first.
@@ -501,7 +518,20 @@ _STEP_EVIDENCE = {
 }
 
 
-def steps_the_case_supports(aims: list[str] | None, rubric_text: str = "") -> set[int]:
+# Something the candidate READS rather than examines. A station that holds one
+# and never asks about it wastes the only interpretable thing on the screen.
+ANCILLARY_MODALITIES = {
+    "oct", "visual_field", "angiogram", "radiology", "ultrasound", "pathology",
+    "specular", "topography", "biometry",
+}
+
+
+def steps_the_case_supports(
+    aims: list[str] | None,
+    rubric_text: str = "",
+    has_ancillary: bool = False,
+    has_diagnosis: bool = False,
+) -> set[int]:
     """Which arc steps this station's own report actually calls for.
 
     The arc was a mould: steps 1, 2, 4 and 5 were demanded of every station,
@@ -521,6 +551,23 @@ def steps_the_case_supports(aims: list[str] | None, rubric_text: str = "") -> se
     for step, evidence in _STEP_EVIDENCE.items():
         if any(word in haystack for word in evidence):
             supported.add(step)
+
+    # An OCT, a field or an MRI on the screen is the one thing on this station
+    # the candidate can be asked to interpret. A live station showed a macular
+    # OCT and a B-scan and asked about neither.
+    if has_ancillary:
+        supported.add(3)
+
+    # And they must be asked to reason towards the diagnosis before it is given
+    # to them. Making step 4 optional fixed a station that asked for a
+    # differential of nothing, and broke the ones that should ask: another live
+    # station went straight from "examine both eyes" to "summarise your
+    # findings and give me your diagnosis", with no differential sought
+    # anywhere. Where there is a diagnosis to reach, the reasoning is the
+    # station. What step 4 may not do is fail to say what it is a differential
+    # OF - that rule lives in `_generic_problems`.
+    if has_diagnosis:
+        supported.add(4)
     return supported
 
 # Investigations a candidate is marked on READING, as opposed to merely naming.
@@ -888,6 +935,8 @@ def _arc_problems(
     vocabulary: set[str] | None = None,
     aims: list[str] | None = None,
     has_view: bool = True,
+    has_ancillary: bool = False,
+    has_diagnosis: bool = False,
 ) -> list[str]:
     """Check the sequence against the arc. Empty means it is a real station."""
     problems: list[str] = []
@@ -909,8 +958,10 @@ def _arc_problems(
         for prompt in prompts
         for point in prompt.get("rubric") or []
     )
-    required = steps_the_case_supports(aims, rubric_text)
-    if has_image or needs_investigation:
+    required = steps_the_case_supports(
+        aims, rubric_text, has_ancillary=has_ancillary, has_diagnosis=has_diagnosis
+    )
+    if needs_investigation:
         required.add(3)
     for step in sorted(required):
         if steps.count(step) != 1:
