@@ -215,6 +215,61 @@ def station_faults(station: OsceStation) -> list[Fault]:
                 + (f" ({count} investigations asked for)" if count > 1 else ""),
             ))
 
+    faults.extend(_wrong_eye(station))
+    faults.extend(_answers_itself(station))
+    return faults
+
+
+def _wrong_eye(station: OsceStation) -> list[Fault]:
+    """A question about one eye showing a figure captioned the other.
+
+    Worse than showing nothing: the candidate reads the picture correctly and
+    is marked wrong for it. Four of these were live, and one was created by the
+    binder itself in the course of fixing something else - which is why the
+    check belongs here, where every stage's output is judged, and not inside
+    any one stage.
+    """
+    from app.services.osce.station_images.ingested import _opposite_eyes
+
+    by_id = {f.id: f for f in station.figures}
+    faults: list[Fault] = []
+    for prompt in station.prompts or []:
+        text = str(prompt.get("text") or "")
+        for fid in bound_figure_ids([prompt]):
+            figure = by_id.get(fid)
+            if figure is not None and _opposite_eyes(text, figure.caption):
+                faults.append(Fault(
+                    "wrong_eye",
+                    f"question {prompt.get('label') or '?'} asks about one eye "
+                    f"and shows {(figure.caption or 'a figure')[:40]!r}",
+                    fixable_by_sourcing=False,
+                ))
+    return faults
+
+
+def _answers_itself(station: OsceStation) -> list[Fault]:
+    """A question that gives away what it was set to test.
+
+    Every repair pass so far has been capable of introducing this while fixing
+    something else - the differential fix made the model assert the finding,
+    and the words-for-images pass named the diagnosis in question A eleven
+    times. A repair that damages the station is a fault like any other, so it
+    is judged in the same place rather than guarded separately inside each pass.
+    """
+    from app.services.osce.reconcile import _states_more_than_it_asks
+
+    faults: list[Fault] = []
+    for prompt in station.prompts or []:
+        why = _states_more_than_it_asks(
+            str(prompt.get("text") or ""), station,
+            int(prompt.get("step") or 0) < 5,
+        )
+        if why:
+            faults.append(Fault(
+                "answers_itself",
+                f"question {prompt.get('label') or '?'} {why}",
+                fixable_by_sourcing=False,
+            ))
     return faults
 
 
