@@ -43,6 +43,7 @@ from app.models import OsceFigure, OsceStation
 from app.services.ai import AIClient
 from app.services.errors import log_error
 from app.services.jobs.runner import JobContext, JobHandlerError, register_handler
+from app.services.osce.station_images.verify import leaked_term
 from app.services.osce.prompts import PRESENTS_INVESTIGATION_RE
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,19 @@ findings recorded for this station. "This is his automated visual field. Talk \
 me through what it shows" becomes "His automated visual field shows a dense \
 superior arcuate defect respecting the horizontal midline. What does that tell \
 you?"
+
+Two things a stated result must never do.
+
+It must not then ask the candidate to describe it. Once you have said what the \
+test showed, "describe what it shows" is a question you have already answered, \
+and the marks for reading it are handed over. Ask what it MEANS instead - its \
+significance, what it makes you think, what you would do about it.
+
+It must not name the diagnosis, or any word only the diagnosis supplies. The \
+candidate is asked for that later in the station and would simply read it back. \
+State the appearance, never the conclusion: "a choroidal neovascular membrane \
+with intraretinal fluid" is a finding; "her multifocal choroiditis" is the \
+answer to a question further down.
 
 If the station's record does not say what that test showed, DO NOT \
 invent a result. Turn the question into what the candidate would expect \
@@ -241,6 +255,48 @@ def _describe_what_is_there(db: Session, station: OsceStation, ids: list[int]) -
     )
 
 
+# "Describe what they show" after a sentence saying what they show.
+_ASKS_FOR_THE_DESCRIPTION = re.compile(
+    r"\b(describe|talk me through|what (do|does) (they|it|these|this) show"
+    r"|what can you see|tell me what you see)\b",
+    re.I,
+)
+
+
+def _states_more_than_it_asks(
+    text: str, station: OsceStation, before_the_reveal: bool = True
+) -> str | None:
+    """Why a rewritten question gives away what it was set to test, if it does.
+
+    Thirteen questions came back stating the finding and then asking the
+    candidate to describe it - the reading marks handed over in the stem - and
+    one opened by naming the diagnosis the station reveals two questions later.
+
+    The lenient guard, not the strict one, and only ahead of the reveal. The
+    strict guard refuses a diagnosis word however it is grounded, which on a
+    first pass rejected "The diagnosis is a third nerve palsy. What would you
+    expect her CT angiography to show?" - the reveal question itself, doing
+    exactly what the arc asks of it.
+    """
+    if before_the_reveal and leaked_term(text, station, conclusions=False):
+        return "it names the diagnosis the station has not revealed yet"
+
+    # Everything before the candidate is asked to describe something is the
+    # examiner talking. Splitting on the question mark instead missed the
+    # commonest form of all - "Talk me through what it shows." ends in a full
+    # stop, so the whole question read as stem and nothing was ever checked.
+    ask = _ASKS_FOR_THE_DESCRIPTION.search(text)
+    if ask:
+        stem = text[: ask.start()].lower()
+        # Only where the stem actually carries a finding. "This is her OCT.
+        # Describe what it shows" states nothing and is the normal wording for
+        # a question that really does have a picture.
+        if any(w in stem for w in ("shows", "showed", "showing", "demonstrates",
+                                   "reveals", "revealed", "there is", "there are")):
+            return "it states the result and then asks the candidate to describe it"
+    return None
+
+
 def reconcile_station(
     db: Session, client: AIClient, station: OsceStation, job_id: int | None = None
 ) -> dict[str, int]:
@@ -314,6 +370,43 @@ def reconcile_station(
         if not new_text or not str(new_text).strip():
             tally["failed"] += 1
             continue
+
+        # The reveal question and everything after it are entitled to the
+        # diagnosis; the arc puts it there on purpose.
+        before_reveal = int(prompt.get("step") or 0) < 5
+        spoiled = _states_more_than_it_asks(str(new_text), station, before_reveal)
+        if spoiled:
+            # Both failures are the same trade gone wrong: the rewrite bought
+            # a question the candidate can follow by giving away what they were
+            # meant to supply. The "expected" form never can - it asks what the
+            # test WOULD show - so that is what a spoiled rewrite falls back to.
+            logger.info("Rewrite of %s on station %s %s; asking for the "
+                        "expected form instead", prompt.get("label"), station.id,
+                        spoiled)
+            try:
+                data = client.complete_json(
+                    task="utility", system=SYSTEM_PROMPT,
+                    user=user + (
+                        f"\n\nYOUR PREVIOUS ATTEMPT WAS REJECTED: {spoiled}.\n"
+                        f"Do not state the result at all. Ask what the candidate "
+                        f"would EXPECT it to show, and answer with basis "
+                        f'"expected".'
+                    ),
+                    job_id=job_id,
+                )
+            except Exception:  # noqa: BLE001
+                db.rollback()
+                tally["failed"] += 1
+                continue
+            new_text = (data or {}).get("text") if isinstance(data, dict) else None
+            basis = (data or {}).get("basis") if isinstance(data, dict) else None
+            if (
+                not new_text
+                or not str(new_text).strip()
+                or _states_more_than_it_asks(str(new_text), station, before_reveal)
+            ):
+                tally["failed"] += 1
+                continue
 
         # Kept so a later run can tell a question it has already corrected from
         # one that was written this way, so an admin can see why it changed, and
