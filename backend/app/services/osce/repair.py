@@ -169,6 +169,15 @@ def handle_repair_stations(ctx: JobContext) -> bool:
     return index + 1 >= len(station_ids)
 
 
+# Faults that do not stop a candidate answering, and so do not on their own
+# justify a search. A representative image is a stand-in for the real
+# appearance, not a blank screen, and re-sourcing all of them would have been
+# 58 of the 78 searches in the first repair run for no station made answerable.
+# They stay in `station_faults` - the audit should still say so - and a station
+# being searched for some other reason may still be improved by the pass.
+NOT_WORTH_SPENDING_ALONE = {"representative_only"}
+
+
 def stations_needing_repair(db: Session, skip: set[int] | None = None) -> list[int]:
     """Every station a candidate could not fully answer today.
 
@@ -179,8 +188,11 @@ def stations_needing_repair(db: Session, skip: set[int] | None = None) -> list[i
     from sqlalchemy import select
 
     skip = skip or set()
-    return [
-        s.id
-        for s in db.execute(select(OsceStation).order_by(OsceStation.id)).scalars()
-        if s.id not in skip and (s.prompts or []) and station_faults(s)
-    ]
+    out = []
+    for station in db.execute(select(OsceStation).order_by(OsceStation.id)).scalars():
+        if station.id in skip or not (station.prompts or []):
+            continue
+        kinds = {f.kind for f in station_faults(station)}
+        if kinds - NOT_WORTH_SPENDING_ALONE:
+            out.append(station.id)
+    return out

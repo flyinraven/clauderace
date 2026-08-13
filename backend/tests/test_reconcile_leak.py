@@ -86,3 +86,51 @@ def test_the_reveal_question_may_name_the_diagnosis():
             "angiography to show, and how would it change your management?")
     assert _states_more_than_it_asks(text, s, before_the_reveal=False) is None
     assert _states_more_than_it_asks(text, s, before_the_reveal=True) is not None
+
+
+# Real questions from the bank, with the verdict reached by reading them. The
+# word-level guard that preceded this flagged five of the six safe ones - the
+# same over-firing that rejected 181 good stations and cost a rebuild's spend.
+JUDGED_BY_READING = [
+    ("Multifocal choroiditis with right choroidal neovascular membrane",
+     "You have described multifocal choroiditis. What other investigations "
+     "would you order to determine the cause?", True),
+    ("Multifocal choroiditis with right choroidal neovascular membrane",
+     "Summarise your findings and give me three differential diagnoses for "
+     "multifocal choroiditis.", True),
+    ("Bilateral optic disc drusen with left peripapillary haemorrhage",
+     "What ancillary tests would you perform to confirm the presence of optic "
+     "disc drusen?", True),
+    ("Retinitis Pigmentosa with pseudophakia and cystoid macular oedema",
+     "What other complications of Retinitis Pigmentosa would you look for?", True),
+    # A word the diagnosis happens to use is the subject of the question.
+    ("Congenital fibrosis of extraocular muscles.",
+     "Please examine the extraocular movements of both eyes.", False),
+    ("Anterior pyramidal cataract.",
+     "Summarise your findings and give differential diagnoses for the cause of "
+     "the cataract.", False),
+    ('CPEO "plus" (dysmotility, ptosis, retinopathy)',
+     "Give me a structured differential diagnosis for generalised ocular "
+     "dysmotility.", False),
+    # Named as one of several candidates: the candidate must still choose.
+    ("Bilateral lower lid cicatricial ectropion.",
+     "You have described bilateral lower lid ectropion. How would you "
+     "differentiate between an involutional tarsal ectropion and a cicatricial "
+     "ectropion in this patient?", False),
+    ("Duane's syndrome, Esotropic / Type I.",
+     "What is your differential diagnosis for the findings you have described, "
+     "and how would you differentiate Duane's syndrome from other causes of "
+     "abduction deficit?", False),
+    ("Congenital (click-type) Brown syndrome",
+     "You have described a limitation of elevation in adduction of the right "
+     "eye. How would you distinguish this from an inferior oblique palsy?", False),
+]
+
+
+def test_the_guard_agrees_with_reading_the_question():
+    wrong = []
+    for diagnosis, text, leaks in JUDGED_BY_READING:
+        got = _states_more_than_it_asks(text, station(diagnosis=diagnosis)) is not None
+        if got != leaks:
+            wrong.append((text[:60], leaks, got))
+    assert not wrong, f"guard disagrees with the reading on: {wrong}"

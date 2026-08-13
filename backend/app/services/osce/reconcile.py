@@ -263,6 +263,41 @@ _ASKS_FOR_THE_DESCRIPTION = re.compile(
 )
 
 
+def _diagnosis_phrases(station: OsceStation) -> set[str]:
+    """Adjacent word pairs from the diagnosis that actually identify it.
+
+    A shared *word* is the subject of the question; a shared *phrase* is its
+    answer. "How would you differentiate involutional from cicatricial
+    ectropion?" and "Please examine the extraocular movements" were both
+    rejected by a word-level test, on "ectropion" and "extraocular" - the very
+    words the candidate is being asked to work with. "Multifocal choroiditis"
+    and "optic disc drusen" are conclusions, and they only appear as phrases.
+    """
+    from app.services.osce.station_images.verify import _DIAGNOSIS_BOILERPLATE
+
+    words = [
+        w for w in re.findall(r"[a-z']+", (station.diagnosis or "").lower())
+        if len(w) > 3 and w not in _DIAGNOSIS_BOILERPLATE
+    ]
+    return {f"{a} {b}" for a, b in zip(words, words[1:])}
+
+
+# Naming the diagnosis as one of several candidates is the question, not the
+# answer. "How would you differentiate involutional from cicatricial ectropion?"
+# gives nothing away - the candidate must still say which, and why - and it is
+# the form the college's own reports use most.
+_OFFERS_ALTERNATIVES = re.compile(
+    r"\b(differentiate|distinguish|tell apart|versus|vs\.?)\b", re.I
+)
+
+
+def _names_the_conclusion(text: str, station: OsceStation) -> bool:
+    if _OFFERS_ALTERNATIVES.search(text):
+        return False
+    lowered = " ".join(re.findall(r"[a-z']+", text.lower()))
+    return any(phrase in lowered for phrase in _diagnosis_phrases(station))
+
+
 def _states_more_than_it_asks(
     text: str, station: OsceStation, before_the_reveal: bool = True
 ) -> str | None:
@@ -278,7 +313,7 @@ def _states_more_than_it_asks(
     expect her CT angiography to show?" - the reveal question itself, doing
     exactly what the arc asks of it.
     """
-    if before_the_reveal and leaked_term(text, station, conclusions=False):
+    if before_the_reveal and _names_the_conclusion(text, station):
         return "it names the diagnosis the station has not revealed yet"
 
     # Everything before the candidate is asked to describe something is the
