@@ -22,6 +22,10 @@ interface PromptResult {
   marks: number
   awarded: number | null
   transcript: string
+  // Set when the transcript could not be trusted. A zero explained by the
+  // transcriber having failed is a different fact from a zero the candidate
+  // earned, and the result page is where that distinction matters.
+  transcription_error: string | null
   // What was on screen when this question was asked. A mark can only be read
   // against the picture it was given for.
   figures: StationFigure[]
@@ -283,6 +287,14 @@ export default function OsceResult() {
           <p className="mt-1 whitespace-pre-wrap rounded bg-slate-50 p-3 text-sm text-slate-700">
             {prompt.transcript || '(nothing recorded)'}
           </p>
+
+          {prompt.transcription_error && (
+            <div className="mt-2">
+              <Alert tone="warning" title="This mark was given against a faulty transcript">
+                {prompt.transcription_error}
+              </Alert>
+            </div>
+          )}
 
           {prompt.examiners[0]?.breakdown && (
             <ul className="mt-3 space-y-2">
