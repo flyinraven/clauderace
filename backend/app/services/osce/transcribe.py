@@ -297,6 +297,64 @@ def looks_hallucinated(
     )
 
 
+# Phrases that occur only in our own instructions. If they come back in the
+# transcript the model answered the prompt instead of the audio, which it does
+# when there is nothing audible to transcribe.
+_PROMPT_GIVEAWAYS = (
+    "you are a transcriber, not an assistant",
+    "return only the transcript text",
+    "absolute rules:",
+    "words you can actually hear",
+)
+
+# A loop has to repeat several times before it is a loop rather than a speaker
+# labouring a point, and it has to dominate the transcript rather than sit in it.
+MIN_LOOP_REPEATS = 5
+LOOP_SHARE = 0.6
+
+
+def _split_into_phrases(text: str) -> list[str]:
+    import re
+
+    return [p.strip().lower() for p in re.split(r"[.?!\n]+", text) if p.strip()]
+
+
+def not_speech(text: str) -> str | None:
+    """Return a reason if this transcript holds no answer the candidate gave.
+
+    Two failures produce text that reads like an answer but is not one: the
+    model echoing our own instructions back, and a phrase looping until the
+    output budget runs out. Both get marked as though they were spoken, so both
+    have to be caught before the examiner ever sees them.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return None
+
+    lowered = stripped.lower()
+    if any(giveaway in lowered for giveaway in _PROMPT_GIVEAWAYS):
+        return (
+            "The transcriber returned its own instructions instead of a transcript, "
+            "which it does when the recording holds nothing audible. Nothing was "
+            "recorded for this answer."
+        )
+
+    phrases = _split_into_phrases(stripped)
+    if len(phrases) >= MIN_LOOP_REPEATS:
+        import collections
+
+        phrase, count = collections.Counter(phrases).most_common(1)[0]
+        repeated_words = count * len(phrase.split())
+        if count >= MIN_LOOP_REPEATS and repeated_words >= LOOP_SHARE * len(stripped.split()):
+            return (
+                f'The transcriber looped on "{phrase[:60]}", repeating it {count} '
+                "times. That is a known failure on silent or very quiet audio, not "
+                "something you said, so the transcript has been discarded."
+            )
+
+    return None
+
+
 def transcribe_response(db: Session, response: OsceResponse) -> str:
     """Transcribe a stored response, then release its audio.
 
@@ -331,7 +389,24 @@ def transcribe_response(db: Session, response: OsceResponse) -> str:
         db.commit()
         raise
 
-    suspicious = looks_hallucinated(
+    junk = not_speech(text)
+    if junk:
+        # Seen on 6 of 238 answers: the same clip transcribes fine on a second
+        # ask, so the fault is in the reply rather than in the recording.
+        logger.warning("Discarding a bad transcript and asking again: %s", junk)
+        try:
+            retry = transcribe_audio(db, clip.data, clip.content_type, store)
+        except AIError:
+            retry = ""
+        if retry.strip() and not not_speech(retry):
+            text, junk = retry, None
+
+    if junk:
+        # Better an empty answer than a fabricated one: an empty answer scores
+        # zero and says so, a fabricated one scores zero and blames the candidate.
+        text = ""
+
+    suspicious = junk or looks_hallucinated(
         text, response.duration_ms or clip.duration_ms, clip.size_bytes
     )
 

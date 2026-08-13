@@ -11,6 +11,7 @@ from app.services.osce.transcribe import (
     MIN_FLAGGED_WORDS,
     TRANSCRIBE_PROMPT,
     looks_hallucinated,
+    not_speech,
 )
 
 
@@ -49,6 +50,42 @@ def test_missing_duration_falls_back_to_file_size():
 
 def test_no_duration_and_no_size_cannot_be_judged():
     assert looks_hallucinated(words(500), None, None) is None
+
+
+def test_the_prompt_coming_back_is_not_an_answer():
+    """Seen live on 13 Aug 2026: four questions across one circuit were marked
+    against our own transcriber instructions, echoed back verbatim."""
+    reason = not_speech(TRANSCRIBE_PROMPT)
+    assert reason is not None
+    assert "instructions" in reason
+
+    # It comes back without the opening line as often as with it.
+    without_first_line = TRANSCRIBE_PROMPT.split("\n\n", 1)[1]
+    assert not_speech(without_first_line) is not None
+
+
+def test_a_looping_phrase_is_discarded():
+    looped = "I'm going to be looking forward for me. " * 40
+    reason = not_speech(looped)
+    assert reason is not None
+    assert "looped" in reason
+
+
+def test_a_repeated_phrase_that_does_not_dominate_is_kept():
+    real = (
+        "There is band keratopathy in the interpalpebral fissure. "
+        "The lens shows a posterior subcapsular cataract. "
+        "I would check the pressure. I would check the pressure. "
+        "The disc is cupped and the rim is thin superiorly. "
+        "There are posterior synechiae at six o'clock. "
+        "I would examine the fellow eye as well."
+    )
+    assert not_speech(real) is None
+
+
+def test_ordinary_answers_survive():
+    assert not_speech("Radial keratotomy incisions in both corneas.") is None
+    assert not_speech("") is None
 
 
 def test_prompt_does_not_prime_the_model_with_content():
