@@ -7,6 +7,7 @@ question they belong to.
 from __future__ import annotations
 
 import logging
+import re
 
 from typing import Any
 from sqlalchemy import select
@@ -25,6 +26,7 @@ from app.services.osce.station_images.constants import (
     REVIEWABLE_STATUSES,
 )
 from app.services.osce.station_images.verify import label_side, leaked_term, verify_image
+from app.services.osce.prompts import PRESENTS_INVESTIGATION_RE
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +107,29 @@ def verify_ingested_figures(
     return {"kept": kept, "rejected": 0, "described": described, "skipped": skipped}
 
 
+_RIGHT_EYE = re.compile(r"\b(right eye|right|OD|RE)\b", re.I)
+_LEFT_EYE = re.compile(r"\b(left eye|left|OS|LE)\b", re.I)
+
+
+def _named_eyes(text: str | None) -> set[str]:
+    found = set()
+    if _RIGHT_EYE.search(text or ""):
+        found.add("right")
+    if _LEFT_EYE.search(text or ""):
+        found.add("left")
+    return found
+
+
+def _opposite_eyes(wanted: str | None, caption: str | None) -> bool:
+    """True when each names exactly one eye and they disagree.
+
+    "Both eyes", "one eye" and silence all name no single side, and none of
+    those is a contradiction - only two definite and different answers are.
+    """
+    asked, shown = _named_eyes(wanted), _named_eyes(caption)
+    return len(asked) == 1 and len(shown) == 1 and asked != shown
+
+
 def bind_ingested_figures_to_questions(
     db: Session, client: AIClient, station: OsceStation
 ) -> dict[str, Any]:
@@ -146,10 +171,23 @@ def bind_ingested_figures_to_questions(
     for prompt in prompts:
         if reserve_opening and len(spare) == 1:
             break
-        wanted = str(prompt.get("image_wanted") or "").strip()
-        if not wanted or bound_figure_ids(prompt) or prompt.get("image_impossible"):
+        if bound_figure_ids(prompt) or prompt.get("image_impossible"):
             continue
-        asked = named_modality(wanted)
+        wanted = str(prompt.get("image_wanted") or "").strip()
+        # A question that says "This is her OCT. What does it show?" has named
+        # its investigation as plainly as any image_wanted could, and 26 blank
+        # questions were carrying exactly that wording with the request field
+        # empty - lost when the question was rewritten. The question's own words
+        # are the request; the modality match is still exact either way.
+        asked = named_modality(wanted) if wanted else None
+        if asked is None:
+            # Only where the question hands the test over. "What further
+            # investigation would you request?" names a modality too, and
+            # answering it with the picture is the leak the arc exists to stop.
+            text = str(prompt.get("text") or "")
+            if PRESENTS_INVESTIGATION_RE.search(text):
+                asked = named_modality(text)
+                wanted = wanted or text.strip()
         if asked is None:
             continue
 
@@ -166,6 +204,10 @@ def bind_ingested_figures_to_questions(
                 f"{figure.caption or ''} {figure.verification_notes or ''}"
             )
             if mine != asked:
+                continue
+            # The right modality of the wrong eye is worse than nothing: the
+            # candidate reads the picture correctly and is marked wrong for it.
+            if _opposite_eyes(wanted, figure.caption):
                 continue
 
             figure.wanted_description = wanted

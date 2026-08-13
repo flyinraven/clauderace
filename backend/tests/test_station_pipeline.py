@@ -2838,3 +2838,107 @@ def test_after_the_reveal_the_examiner_may_refer_to_anything():
     assert _presupposes_an_unreachable_sign(
         prompts, elicited="Zonular weakness.", available="An OCT.",
     ) == []
+
+
+def test_a_question_that_hands_over_a_test_names_its_own_image(
+    client, db, admin, ai
+):
+    """26 blank questions read "This is her OCT. What does it show?" with the
+    image_wanted field empty - dropped when the question was rewritten - while
+    the paper's own OCT sat unclaimed beside them."""
+    from app.models import OsceFigure
+    from app.services.osce.station_images import bind_ingested_figures_to_questions
+
+    station = make_station(db, prompts=[
+        {"label": "A", "text": "Please examine the anterior segment.",
+         "seconds": 270, "rubric": [{"text": "Describes the findings", "marks": 10}]},
+        {"label": "B", "text": "This is her OCT. What does it show?",
+         "seconds": 90, "rubric": [{"text": "Reads the OCT", "marks": 5}]},
+    ])
+    image = Image(sha256="2" * 64, content_type="image/jpeg", data=big_photo(),
+                  size_bytes=100, origin="pdf")
+    db.add(image)
+    db.flush()
+    db.add(OsceFigure(
+        station_id=station.id, position=1, image_id=image.id,
+        verification_status="from_paper", is_approved=True, modality="oct",
+        caption="Optical coherence tomography of the macula",
+    ))
+    # A second figure, so the opening instruction is not left with a blank screen.
+    other = Image(sha256="3" * 64, content_type="image/jpeg", data=big_photo(),
+                  size_bytes=100, origin="pdf")
+    db.add(other)
+    db.flush()
+    db.add(OsceFigure(
+        station_id=station.id, position=2, image_id=other.id,
+        verification_status="from_paper", is_approved=True, modality="slit_lamp",
+        caption="Slit lamp photograph",
+    ))
+    db.commit()
+
+    assert bind_ingested_figures_to_questions(db, AIClient(db), station)["bound"] == 1
+
+    db.expire_all()
+    station = db.query(OsceStation).filter_by(id=station.id).one()
+    assert station.prompts[1]["figure_id"] is not None
+
+
+def test_a_question_merely_naming_a_test_is_not_handed_one(client, db, admin, ai):
+    """"What further investigation would you request?" names a modality too, and
+    answering it with the picture hands over the mark the question was set for."""
+    from app.models import OsceFigure
+    from app.services.osce.station_images import bind_ingested_figures_to_questions
+
+    station = make_station(db, prompts=[
+        {"label": "A", "text": "Please examine the fundus.", "seconds": 270,
+         "rubric": [{"text": "Describes the findings", "marks": 10}]},
+        {"label": "B", "text": "What further investigation would you request, "
+                               "and would an OCT help you here?",
+         "seconds": 90, "rubric": [{"text": "Names an investigation", "marks": 5}]},
+    ])
+    for n, (sha, modality) in enumerate(
+        [("4" * 64, "oct"), ("5" * 64, "fundus")], start=1
+    ):
+        image = Image(sha256=sha, content_type="image/jpeg", data=big_photo(),
+                      size_bytes=100, origin="pdf")
+        db.add(image)
+        db.flush()
+        db.add(OsceFigure(
+            station_id=station.id, position=n, image_id=image.id,
+            verification_status="from_paper", is_approved=True, modality=modality,
+            caption=f"{modality} image",
+        ))
+    db.commit()
+
+    assert bind_ingested_figures_to_questions(db, AIClient(db), station)["bound"] == 0
+
+
+def test_the_right_modality_of_the_wrong_eye_is_refused(client, db, admin, ai):
+    """Four questions asked about one eye and were shown the other. The
+    candidate reads the picture correctly and is marked wrong for it."""
+    from app.models import OsceFigure
+    from app.services.osce.station_images import bind_ingested_figures_to_questions
+
+    station = make_station(db, prompts=[
+        {"label": "A", "text": "Please examine the fundus.", "seconds": 270,
+         "rubric": [{"text": "Describes the findings", "marks": 10}]},
+        {"label": "B", "text": "This is the fluorescein angiogram of the left "
+                               "eye. What does it show?",
+         "seconds": 90, "rubric": [{"text": "Reads the angiogram", "marks": 5}]},
+    ])
+    for n, (sha, caption) in enumerate(
+        [("6" * 64, "Fluorescein angiogram of the right eye"),
+         ("7" * 64, "External photograph")], start=1
+    ):
+        image = Image(sha256=sha, content_type="image/jpeg", data=big_photo(),
+                      size_bytes=100, origin="pdf")
+        db.add(image)
+        db.flush()
+        db.add(OsceFigure(
+            station_id=station.id, position=n, image_id=image.id,
+            verification_status="from_paper", is_approved=True,
+            modality="angiogram" if n == 1 else "external", caption=caption,
+        ))
+    db.commit()
+
+    assert bind_ingested_figures_to_questions(db, AIClient(db), station)["bound"] == 0
