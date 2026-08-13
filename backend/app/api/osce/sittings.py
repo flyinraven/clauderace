@@ -500,6 +500,10 @@ def sitting_result(session_id: int, user: CurrentUser, db: DbSession) -> dict[st
                 "marks": sum(pt.get("marks", 0) for pt in (prompt.get("rubric") or [])),
                 "awarded": round(awarded, 2) if awarded is not None else None,
                 "transcript": response.marking_text if response else "",
+                # Why the transcript could not be trusted, if it could not be.
+                # A zero the transcriber caused reads exactly like a zero the
+                # candidate earned unless the reason survives to the result.
+                "transcription_error": response.transcription_error if response else None,
                 # Exactly what was on screen when the question was asked, so a
                 # mark can be read against the picture it was given for. A
                 # rejected figure was never shown and is not shown here either.
