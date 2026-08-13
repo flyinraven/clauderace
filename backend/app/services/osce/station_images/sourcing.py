@@ -57,6 +57,7 @@ from app.services.osce.station_images.describe import (
     describe_findings,
 )
 from app.services.osce.station_images.ingested import bound_figure_ids
+from app.services.osce.prompts import PRESENTS_INVESTIGATION_RE
 
 logger = logging.getLogger(__name__)
 
@@ -682,6 +683,21 @@ def opening_image_is_settled(station: OsceStation) -> bool:
     return (figure.match_confidence or 1.0) >= SETTLED_MATCH_CONFIDENCE
 
 
+def _question_is_waiting_for_a_picture(prompt: dict[str, Any]) -> bool:
+    """A question that hands a test over and has nothing bound to it.
+
+    Selecting on image_wanted alone missed twelve questions whose request field
+    was empty but whose wording - "This is her OCT. What does it show?" - hands
+    the test over just as plainly. Those were invisible to sourcing, so nothing
+    was ever bought for them and the candidate met a blank screen.
+    """
+    if bound_figure_ids(prompt) or prompt.get("image_impossible"):
+        return False
+    if str(prompt.get("image_wanted") or "").strip():
+        return True
+    return bool(PRESENTS_INVESTIGATION_RE.search(str(prompt.get("text") or "")))
+
+
 def stations_needing_images(db: Session) -> list[int]:
     """Stations with no verified image yet, or a question still waiting for one."""
     with_image = set(
@@ -698,10 +714,7 @@ def stations_needing_images(db: Session) -> list[int]:
     for station in db.execute(select(OsceStation).order_by(OsceStation.id)).scalars():
         if station.id in needed:
             continue
-        if any(
-            p.get("image_wanted") and not p.get("figure_id")
-            for p in (station.prompts or [])
-        ):
+        if any(_question_is_waiting_for_a_picture(p) for p in (station.prompts or [])):
             needed.append(station.id)
             continue
         # Only the views the candidate opens on. A question's own investigation
