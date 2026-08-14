@@ -350,6 +350,32 @@ Every aim must be reachable from some question, and every noted mistake must \
 have a question that would expose it. A station that leaves one untested has \
 left out the thing the examiners wrote the station for.
 
+WHERE THE REPORT IS THIN, ASK WHAT THE TOPIC DEMANDS.
+
+Some reports record almost nothing - two lines of aims, no mistakes, "the \
+cohort performed well". They are not a licence to fall back on the arc. Ask \
+what a competent general ophthalmologist must know about THIS condition, and \
+be specific enough that a candidate who has not studied it cannot bluff:
+
+  - the sign that distinguishes it from the thing it is usually mistaken for,
+    and how you would elicit that sign;
+  - the investigation that confirms it, and what a positive result looks like;
+  - the complication that costs vision, and how early you would catch it;
+  - the treatment threshold - when you would start, what you would start
+    with, and what you would do when it fails;
+  - the systemic or genetic association a general ophthalmologist is expected
+    to screen for, and how.
+
+Ask for numbers, intervals, doses and names wherever the topic has them: \
+"how often would you screen, and until what age", "which two drugs, and in \
+what order", "name three". A question that can be answered with "I would \
+investigate and refer appropriately" has tested nothing, whatever the report \
+did or did not say.
+
+Then cite the topic itself in "drawn_from" - "core knowledge: screening \
+intervals in JIA-associated uveitis" - so it is clear the question came from \
+the subject rather than from a slot in the arc.
+
 Return ONLY a JSON object:
 {{
   "prompts": [

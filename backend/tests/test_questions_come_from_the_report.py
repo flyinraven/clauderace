@@ -160,3 +160,22 @@ def test_an_uploaded_paper_gets_the_same_rules():
         "the builder's instructions must still require each question to name "
         "what it was drawn from"
     )
+
+
+def test_a_thin_report_still_gets_a_specific_station():
+    """Some reports record two lines of aims and no mistakes. That is not a
+    licence to fall back on the arc - the questions must then come from what
+    the topic demands of a general ophthalmologist."""
+    from app.services.osce.prompts import SYSTEM_PROMPT
+
+    lowered = SYSTEM_PROMPT.lower()
+    assert "where the report is thin" in lowered
+    for demand in (
+        "distinguishes it from",
+        "investigation that confirms it",
+        "complication that costs vision",
+        "treatment threshold",
+    ):
+        assert demand in lowered, demand
+    # A question answerable by a shrug is the failure this guards against.
+    assert "investigate and refer appropriately" in lowered
