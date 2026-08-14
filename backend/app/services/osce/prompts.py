@@ -318,11 +318,44 @@ markable expectation. The marks across ALL questions must total exactly 20.
 - Where the examiners noted a common mistake, make sure the question that would \
 expose it is present, and mark that rubric point is_critical.
 
+EVERY QUESTION MUST COME FROM THE REPORT, AND SAY SO.
+
+Give each question a "drawn_from": the aim, the noted mistake or the rubric \
+point it exists to test, quoted from the material above. This is not \
+paperwork. A question written from the arc alone comes out as the same \
+sentence every time - "Summarise your findings and give me three differential \
+diagnoses for this patient's presentation", "How would you manage her if she \
+were new to you and you had just made the diagnosis" - and a candidate who has \
+sat four of these can answer the fifth without reading the case.
+
+The report tells you what the examiners actually cared about. "Candidates were \
+unable to interpret the 3-step test" is an instruction to ask about the 3-step \
+test. "Not making the link between the radial keratotomy and the flatter \
+central cornea" is an instruction to ask what the topography shows AND why. \
+"Knowledge of screening regimes was poor" is an instruction to ask for the \
+screening regime, by name, with its intervals.
+
+So write the question the examiners would have asked about THIS case:
+  not "What investigations would you order?"
+      but "Which test would settle whether this is a fourth nerve palsy or a \
+skew, and what would it show?"
+  not "Summarise your findings and give three differentials."
+      but "This lens is dislocated superotemporally. What does that direction \
+tell you, and what would you look for systemically?"
+  not "How would you manage her?"
+      but "She is 4 and this eye is her only good one. Walk me through the \
+first year."
+
+Every aim must be reachable from some question, and every noted mistake must \
+have a question that would expose it. A station that leaves one untested has \
+left out the thing the examiners wrote the station for.
+
 Return ONLY a JSON object:
 {{
   "prompts": [
     {{"label": "A",
       "text": "the question as spoken",
+      "drawn_from": "the aim, mistake or rubric point this question tests",
       "step": <integer 1-7, the arc step this question is>,
       "image_wanted": "<only on a step 3 question that needs an image the
                        request does not already list; otherwise omit>",
@@ -683,6 +716,111 @@ _ASSERTS_FINDINGS = re.compile(
     r"(?:described|found|noted|identified|seen|observed)\b",
     re.IGNORECASE,
 )
+
+# "You mentioned auscultation. What would you be listening for?" - if they did
+# not mention it, the question cannot be answered at all, and the candidate
+# loses the mark for a conversation that never happened. Seen live on station
+# 81. Unlike the assertion above this one may appear anywhere in the sentence.
+_PRESUPPOSES_AN_ANSWER = re.compile(
+    r"\byou (?:mentioned|said|suggested|indicated|referred to|talked about)\b"
+    r"|\bas you (?:mentioned|said|noted)\b"
+    r"|\byour (?:earlier|previous|last) (?:answer|response|reply)\b",
+    re.IGNORECASE,
+)
+
+# Sentences the model reaches for when it is writing from the arc instead of
+# from the report. Each is a real string that came back on many stations at
+# once; a candidate who has sat four of them can answer the fifth blind.
+#
+# Only the content-free ones. "The diagnosis is X. How would you manage her if
+# she were new to you?" appears on 140 stations and is NOT here: that wording
+# is what the arc asks for and what a real examiner says, and rejecting it
+# would reject nearly every station in the bank to fix nothing. What is here
+# names no subject at all - "for this patient's presentation" on a patient who
+# has no presentation is the station that sent a woman to an immigration
+# medical and marked her differential.
+_STOCK_SENTENCES = (
+    "differential diagnoses for this patient's presentation",
+    "differential diagnosis for this patient's presentation",
+    "differentials for this patient's presentation",
+)
+
+
+def _presupposes_an_answer(prompts: list[dict[str, Any]]) -> list[str]:
+    """A question that assumes the candidate volunteered something."""
+    problems = []
+    for prompt in prompts:
+        match = _PRESUPPOSES_AN_ANSWER.search(str(prompt.get("text") or ""))
+        if match:
+            problems.append(
+                f"question {prompt.get('label') or '?'} opens {match.group(0)!r}, "
+                f"which assumes an answer the candidate may never have given - ask "
+                f"the question on its own terms"
+            )
+    return problems
+
+
+def _reveal_before_the_reading(prompts: list[dict[str, Any]]) -> list[str]:
+    """The answer given, and then the candidate asked to work it out.
+
+    Station 320 revealed "glaucoma secondary to Sturge Weber" at question C and
+    asked the candidate to talk through the OCT and RNFL at question D, for 4.5
+    marks they could not fail to earn. Station 110 revealed the diagnosis and
+    then asked them to summarise and give it.
+
+    Only reading and concluding, not the questions that legitimately follow a
+    reveal: "what would you expect the B-scan to show" and "what ancillary
+    tests would confirm it" are asked AFTER the diagnosis on purpose.
+    """
+    problems: list[str] = []
+    revealed = False
+    for prompt in prompts:
+        step = int(as_float(prompt.get("step"), 0.0) or 0)
+        if step == 5:
+            revealed = True
+            continue
+        if not revealed or step not in (3, 4):
+            continue
+        text = str(prompt.get("text") or "")
+        # A hypothetical about what a test WOULD show stands on its own.
+        if re.search(r"\bwould you expect\b|\bif\b", text, re.IGNORECASE):
+            continue
+        problems.append(
+            f"question {prompt.get('label') or '?'} asks the candidate to "
+            f"{'read a test' if step == 3 else 'reach the diagnosis'} after the "
+            f"diagnosis has already been given - it must come before the reveal"
+        )
+    return problems
+
+
+def _written_from_the_arc_not_the_report(
+    prompts: list[dict[str, Any]],
+) -> list[str]:
+    """Questions that could belong to any station in the bank."""
+    problems: list[str] = []
+    for prompt in prompts:
+        label = prompt.get("label") or "?"
+        text = str(prompt.get("text") or "").lower()
+        for stock in _STOCK_SENTENCES:
+            if stock in text:
+                problems.append(
+                    f"question {label} uses the stock sentence {stock!r}, which "
+                    f"fits every station and tests none - write what the "
+                    f"examiners' report says this station was about"
+                )
+                break
+    # Rejecting a station because one question forgot to cite itself would
+    # throw away five good questions to punish a missing string - which is how
+    # a whole rebuild was lost to this gate before. It bites when the
+    # instruction was ignored wholesale, not when it was imperfectly followed.
+    cited = sum(1 for p in prompts if str(p.get("drawn_from") or "").strip())
+    if prompts and cited * 2 < len(prompts):
+        problems.append(
+            f"only {cited} of {len(prompts)} questions say which aim, mistake or "
+            f"rubric point they came from - write the questions from the "
+            f"examiners' report and name what each one tests in \"drawn_from\""
+        )
+    return problems
 
 
 def _tells_the_candidate_what_they_found(prompts: list[dict[str, Any]]) -> list[str]:
@@ -1108,6 +1246,9 @@ def _arc_problems(
     problems.extend(_unmarked_questions(prompts))
     problems.extend(_points_marked_twice(prompts, vocabulary))
     problems.extend(_tells_the_candidate_what_they_found(prompts))
+    problems.extend(_presupposes_an_answer(prompts))
+    problems.extend(_reveal_before_the_reading(prompts))
+    problems.extend(_written_from_the_arc_not_the_report(prompts))
     problems.extend(_examines_what_cannot_be_seen(prompts, has_view))
     problems.extend(
         _diagnosis_named_before_the_reveal(prompts, diagnosis, elicited)
@@ -1244,6 +1385,11 @@ def _normalise(raw_prompts: list[Any]) -> tuple[list[dict[str, Any]], list[str]]
                 # sequence actually examines the candidate, and kept so a
                 # station can be audited later.
                 "step": int(as_float(item.get("step"), 0.0) or 0) or None,
+                # The aim, noted mistake or rubric point this question exists
+                # to test, in the report's own words. Kept so a station can be
+                # read back against the examiners' account of it, and checked
+                # so a question written from the arc alone does not ship.
+                "drawn_from": str(item.get("drawn_from") or "").strip() or None,
                 # What image this question needs but the station does not yet
                 # have. Sourcing turns it into a figure bound to this question.
                 "image_wanted": str(item.get("image_wanted") or "").strip() or None,

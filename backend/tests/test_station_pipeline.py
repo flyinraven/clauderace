@@ -56,25 +56,38 @@ def test_building_prompts_produces_a_timed_marked_sequence(client, db, admin, ai
 
 
 def full_arc() -> list[dict]:
-    """A sequence that follows the examiner's arc all the way through."""
+    """A sequence that follows the examiner's arc all the way through.
+
+    Every question carries `drawn_from`, because a correct reply does: the
+    builder is told to write each question from an aim, a noted mistake or a
+    rubric point and to name which. A reply that cites nothing was written from
+    the arc alone, and comes out as the same sentence on every station.
+    """
     return [
         {"label": "A", "step": 1, "text": "Please examine the posterior segment of both eyes.",
+         "drawn_from": "Aim: examine the posterior segment systematically",
          "seconds": 90, "rubric": [{"text": "Identifies the lesion", "marks": 8, "is_critical": True}]},
         {"label": "B", "step": 2, "text": "What other investigations would you perform?",
+         "drawn_from": "Rubric: names the OCT",
          "seconds": 60, "rubric": [{"text": "Names OCT", "marks": 2, "is_critical": False}]},
         {"label": "C", "step": 3, "text": "This is her OCT. What does it show?",
          # Presenting an investigation obliges the station to have asked for
          # one; without this the candidate reads a blank screen.
          "image_wanted": "OCT of the right macula showing subretinal fluid",
+         "drawn_from": "Mistake: candidates misread the subretinal fluid",
          "seconds": 60, "rubric": [{"text": "Reads the OCT", "marks": 2, "is_critical": False}]},
         {"label": "D", "step": 4, "text": "Summarise and give me 4 differential diagnoses.",
+         "drawn_from": "Aim: form a differential for the cause",
          "seconds": 90, "rubric": [{"text": "Four differentials", "marks": 3, "is_critical": False}]},
         {"label": "E", "step": 5,
          "text": "The diagnosis is X. How would you manage her if she were new to you?",
+         "drawn_from": "Aim: organise a management plan",
          "seconds": 120, "rubric": [{"text": "A plan", "marks": 4, "is_critical": False}]},
         {"label": "F", "step": 6, "text": "Five years on her vision drops. What now?",
+         "drawn_from": "Mistake: candidates did not plan for progression",
          "seconds": 60, "rubric": [{"text": "Evolves the case", "marks": 2, "is_critical": False}]},
         {"label": "G", "step": 7, "text": "What are the risk factors? Name 4.",
+         "drawn_from": "Aim: know the risk factors",
          "seconds": 60, "rubric": [{"text": "Risk factors", "marks": 1, "is_critical": False}]},
     ]
 
