@@ -370,13 +370,38 @@ def _states_more_than_it_asks(
     return None
 
 
+# "Three differential diagnoses for this patient's presentation" - of WHAT?
+_DIFFERENTIAL_OF_NOTHING = re.compile(
+    r"differential(?:\s+diagnos\w+|s)?\s+for\s+(?:this|the)\s+patient's"
+    r"(?:\s+current)?\s+presentation",
+    re.IGNORECASE,
+)
+
+# Naming the sign and asking what produced it is the pattern the arc asks for,
+# not a leak: "what is your differential for the CAUSE of this optic
+# neuropathy" is a proper question even on a station whose diagnosis is an
+# optic neuropathy.
+_ASKS_WHAT_CAUSED_IT = re.compile(
+    r"\bcause[sd]?\b|\baetiolog\w+|\betiolog\w+|\bunderlying\b"
+    r"|\bsecondary to\b|\bresponsible for\b",
+    re.IGNORECASE,
+)
+
 UNLEAK_PROMPT = """\
 You are a RANZCO examiner correcting one question of an OSCE station that gives \
-away its own answer.
+away its own answer, or asks for something the candidate cannot answer.
 
-The question names the diagnosis, which the station reveals later and asks the \
-candidate to reach for themselves. Rewrite it so it asks the same thing about \
-the same case without naming that conclusion.
+Rewrite it so it asks the same thing about the same case, without the fault.
+
+If it names the diagnosis: the station reveals that later and asks the \
+candidate to reach it themselves, so refer to the appearance instead of the \
+conclusion.
+
+If it asks for a differential without saying what of: say what of, taking the \
+subject from the findings recorded below - "three differentials for the cause \
+of the corneal melt", "your differential for this patient's reduced vision", \
+"what else could produce this optic disc appearance". Never leave it as "this \
+patient's presentation", which names nothing.
 
 Say the finding instead of the conclusion. "Summarise your findings and give me \
 three differential diagnoses for multifocal choroiditis" becomes "Summarise your \
@@ -411,16 +436,40 @@ def unleak_station(
     changed = False
 
     for prompt in prompts:
-        if not 1 < int(prompt.get("step") or 0) < 5:
-            continue  # the reveal and after are entitled to the diagnosis
+        step = int(prompt.get("step") or 0)
         text = str(prompt.get("text") or "")
-        if not _names_the_conclusion(text, station):
+
+        # A differential of nothing. "Three differential diagnoses for this
+        # patient's presentation" is the sentence a candidate cannot answer,
+        # because nothing in it says what the differential is OF.
+        no_subject = bool(_DIFFERENTIAL_OF_NOTHING.search(text))
+
+        # The diagnosis given away before the station reveals it. Two patterns
+        # are deliberately NOT this: the standing instruction naming the region
+        # to examine ("Please examine the cranial nerves" against a diagnosis
+        # of cranial nerve palsy), and naming the sign to ask what caused it,
+        # which is what the arc asks for. Both were flagged by an earlier
+        # version, and rewriting them would have made good questions worse.
+        early = (
+            1 < step < 5
+            and _names_the_conclusion(text, station)
+            and not _ASKS_WHAT_CAUSED_IT.search(text)
+        )
+        if not (no_subject or early):
             continue
 
+        fault = (
+            "It asks for a differential without saying what the differential is "
+            "OF, which the candidate cannot answer."
+            if no_subject else
+            "It names the diagnosis, which this station does not reveal until "
+            "later."
+        )
         user = (
             f"DIAGNOSIS THE STATION REVEALS LATER: {station.diagnosis or 'not recorded'}\n"
             f"FINDINGS RECORDED FOR THIS STATION:\n"
             f"{station.findings_elicited or station.findings or '(none recorded)'}\n\n"
+            f"WHAT IS WRONG WITH THIS QUESTION: {fault}\n\n"
             f"THE QUESTION AS IT STANDS:\n{text}"
         )
         try:
@@ -438,11 +487,20 @@ def unleak_station(
         # The replacement has to actually be an improvement. A rewrite that
         # still names the conclusion, or that answers itself another way, is
         # not worth the original wording.
-        if (
-            not new_text
-            or not str(new_text).strip()
-            or _states_more_than_it_asks(str(new_text), station, True)
-        ):
+        replacement = str(new_text or "").strip()
+        still_wrong = (
+            not replacement
+            # The fault it was sent to fix, still there.
+            or bool(_DIFFERENTIAL_OF_NOTHING.search(replacement))
+            or (
+                _names_the_conclusion(replacement, station)
+                and not _ASKS_WHAT_CAUSED_IT.search(replacement)
+            )
+            # Or a new fault in its place: stating the result and then asking
+            # the candidate to describe it.
+            or _states_more_than_it_asks(replacement, station, False)
+        )
+        if still_wrong:
             tally["unleak_failed"] += 1
             continue
 
@@ -452,7 +510,7 @@ def unleak_station(
             "mode": "unleak",
             "original": previous.get("original") or text,
         }
-        prompt["text"] = str(new_text).strip()
+        prompt["text"] = replacement
         tally["unleaked"] += 1
         changed = True
 
