@@ -46,6 +46,12 @@ class Fault:
     # approve something, reword a question, supply an image by hand - and
     # re-sourcing would spend and change nothing.
     fixable_by_sourcing: bool = True
+    # What to search for, ready-made, for a fault that names no rubric view of
+    # its own - missing_side and missing_structure exist precisely because the
+    # rubric-derived view list has nothing for them, so `source_coverage_images`
+    # would find nothing to source even when this fault says searching would
+    # fix it. None means the existing rubric-driven sourcing already knows.
+    sourcing_hint: str | None = None
 
     def __str__(self) -> str:  # pragma: no cover - convenience for the CLI
         return self.detail
@@ -264,6 +270,17 @@ def _missing_side(station: OsceStation) -> list[Fault]:
     if sides_shown == {"left", "right"}:
         return []
 
+    # What to ask for: the same kind of photograph the shown side already has.
+    modality_label = {
+        "fundus": "Fundus photograph",
+        "external": "External photograph",
+        "slit_lamp": "Slit lamp photograph",
+        "motility": "External photograph",
+        "orthoptic": "External photograph",
+        "photo": "Photograph",
+    }.get(opening[0].modality or "", "Photograph")
+    missing = "left" if sides_shown == {"right"} else "right"
+
     faults: list[Fault] = []
     for prompt in station.prompts or []:
         if prompt.get("step") != 1:
@@ -271,12 +288,12 @@ def _missing_side(station: OsceStation) -> list[Fault]:
         text = str(prompt.get("text") or "")
         if not _BOTH_RE.search(text):
             continue
-        missing = "left" if sides_shown == {"right"} else "right"
         faults.append(Fault(
             "missing_side",
             f"question {prompt.get('label') or '?'} asks to examine both eyes, "
             f"but every image that names a side names the {next(iter(sides_shown))} "
             f"eye - no {missing} eye is shown",
+            sourcing_hint=f"{modality_label} of the {missing} eye",
         ))
     return faults
 
@@ -331,6 +348,8 @@ def _missing_structure(station: OsceStation) -> list[Fault]:
         for f in opening
     )
 
+    from app.services.osce.station_images.ingested import _named_eyes
+
     faults: list[Fault] = []
     modalities = sorted({f.modality or "unlabelled" for f in opening})
     for prompt in station.prompts or []:
@@ -340,12 +359,18 @@ def _missing_structure(station: OsceStation) -> list[Fault]:
         if not re.search(r"\bexamin\w*\b", text, re.IGNORECASE):
             continue
         label = prompt.get("label") or "?"
+        side = _named_eyes(text)
+        of_eye = (
+            f"the {next(iter(side))} eye" if len(side) == 1 else "both eyes"
+        )
         if _ANTERIOR_RE.search(text) and not covers_anterior:
             faults.append(Fault(
                 "missing_structure",
                 f"question {label} asks to examine the anterior segment, but no "
                 f"external, slit-lamp or anterior-segment OCT image is shown - "
                 f"only {modalities}",
+                sourcing_hint=f"External or slit lamp photograph of the anterior "
+                f"segment of {of_eye}",
             ))
         if _POSTERIOR_RE.search(text) and not covers_posterior:
             faults.append(Fault(
@@ -353,6 +378,7 @@ def _missing_structure(station: OsceStation) -> list[Fault]:
                 f"question {label} asks to examine the fundus/posterior segment, "
                 f"but no fundus photograph or posterior OCT is shown - "
                 f"only {modalities}",
+                sourcing_hint=f"Fundus photograph of {of_eye}",
             ))
     return faults
 

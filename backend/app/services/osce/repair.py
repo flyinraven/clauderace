@@ -69,6 +69,45 @@ REMEDIES: dict[str, str] = {
 }
 
 
+def _source_from_hints(
+    db: Session,
+    client: AIClient,
+    station: OsceStation,
+    job_id: int | None,
+    faults: list,
+) -> int:
+    """Search for exactly what `missing_side` and `missing_structure` name.
+
+    Those faults exist because the rubric never named a second eye or a
+    structure, so `station_views` has nothing for `source_coverage_images` to
+    search from - the fault is right and the rubric-driven sourcing finds
+    nothing anyway. Each fault already built its own search description as
+    `sourcing_hint`; this asks for exactly that, one new figure per hint.
+    """
+    from app.models import OsceFigure
+    from app.services.osce.station_images.sourcing import source_image_for_station
+
+    attached = 0
+    seen: set[str] = set()
+    for fault in faults:
+        hint = fault.sourcing_hint
+        if not hint or hint in seen:
+            continue
+        seen.add(hint)
+        figure = OsceFigure(
+            station_id=station.id,
+            position=max((f.position for f in station.figures), default=-1) + 1,
+            wanted_description=hint,
+        )
+        db.add(figure)
+        db.flush()
+        attached += int(bool(
+            source_image_for_station(db, client, station, job_id, figure=figure)
+            .get("attached")
+        ))
+    return attached
+
+
 def repair_station(
     db: Session, client: AIClient, station: OsceStation, job_id: int | None = None
 ) -> dict[str, Any]:
@@ -121,10 +160,12 @@ def repair_station(
                 attached += int(bool(
                     source_image_for_station(db, client, station, job_id).get("attached")
                 ))
-            if kinds & {"too_few_views", "missing_side", "missing_structure"}:
+            if "too_few_views" in kinds:
                 attached += source_coverage_images(
                     db, client, station, job_id
                 ).get("attached", 0)
+            if kinds & {"missing_side", "missing_structure"}:
+                attached += _source_from_hints(db, client, station, job_id, remaining)
             if "missing_investigation" in kinds:
                 attached += source_prompt_images(
                     db, client, station, job_id
