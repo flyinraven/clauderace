@@ -1181,7 +1181,14 @@ PRESENTS_INVESTIGATION_RE = re.compile(
     r"[^.?!]{0,80}?\b(?:OCT\b|OCT-A|MRI|CT\b|B-?scan|A-?scan|ultrasound|UBM|"
     r"angiogra\w+|topograph\w+|tomograph\w+|biometry|specular|autofluorescence|"
     r"FAF|ERG|visual\s+field|perimetry|Hess\s+chart|photograph|image|scan|"
-    r"printout|x-?ray|radiograph)",
+    r"printout|x-?ray|radiograph|"
+    # Station 219 handed over a full blood examination, a laboratory report
+    # and a Quantiferon test - none of them a picture, all three genuinely
+    # ingested from the paper, and none of them bound to the question that
+    # named them, because this regex only ever recognised imaging.
+    r"blood\s+(?:test|examination|count)\w*|laboratory\s+report\w*|"
+    r"lab\s+report\w*|pathology\s+report\w*|serology\s+result\w*|"
+    r"biopsy\s+report\w*|quantiferon\w*)",
     re.IGNORECASE,
 )
 
@@ -1212,6 +1219,81 @@ def _unshowable_questions(prompts: list[dict[str, Any]]) -> list[str]:
             f"({text[:48]!r}) but gives no image_wanted, so the candidate would "
             f"be asked to read a blank screen"
         )
+    return problems
+
+
+_ANCILLARY_WORD_RE = re.compile(r"\bancillary\s+tests?\b", re.IGNORECASE)
+# What "ancillary test" cannot mean: anything sent away rather than done in
+# the room. RACE keeps the two words apart on purpose - see
+# race-ancillary-tests-vs-investigations - and a rubric that answers an
+# "ancillary tests" question with a systemic workup is marking against a word
+# the question never used.
+_SYSTEMIC_WORKUP_RE = re.compile(
+    r"\bfull\s+blood\s+count\b|\bFBC\b|\bESR\b|\bCRP\b|\bANA\b|\bANCA\b|\bRF\b|"
+    r"\bACE\s+level\b|\bRPR\b|\bFTA-ABS\b|\bquantiferon\w*|\bbiopsy\b|"
+    r"\bserology\b|\bchest\s+x-?ray\b|\bCXR\b|\bautoimmune\s+screen\b|"
+    r"\bgenetic\s+test\w*|\bkaryotype\b|\bMRI\s+(?:brain|head)\b|"
+    r"\bCT\s+(?:chest|abdomen|head)\b|\blumbar\s+puncture\b|\bblood\s+culture\w*",
+    re.IGNORECASE,
+)
+
+
+def _ancillary_wants_investigations(prompts: list[dict[str, Any]]) -> list[str]:
+    """"Ancillary tests" asked for, and the rubric wants a systemic workup.
+
+    Station 219 asked "what ancillary tests would you perform to further
+    characterise this scleritis?" and the rubric's model answer was a full
+    blood count, ESR, CRP, ANA, ANCA, RF, ACE, RPR, FTA-ABS and a
+    Quantiferon-TB test - none of it available in the room. A candidate who
+    correctly kept to what "ancillary" means lost every mark on the question
+    for not naming things the word they were asked had already excluded.
+    """
+    problems = []
+    for prompt in prompts:
+        text = str(prompt.get("text") or "")
+        if not _ANCILLARY_WORD_RE.search(text):
+            continue
+        model_answers = " ".join(
+            str(point.get("model_answer") or "")
+            for point in prompt.get("rubric") or []
+        )
+        if _SYSTEMIC_WORKUP_RE.search(model_answers):
+            problems.append(
+                f"question {prompt.get('label') or '?'} asks for 'ancillary "
+                f"tests', but its rubric wants a systemic workup sent away "
+                f"from the room - call it 'investigations', or keep the "
+                f"rubric to what is actually done in the room"
+            )
+    return problems
+
+
+def _undisclosed_finding(elicited: str | None, available: str) -> list[str]:
+    """A finding the report says was elicited, that nothing on screen states.
+
+    Station 201's own findings_elicited opened with "Bilateral visually
+    significant cataracts" - the reason ten of its twenty marks existed, all
+    in the surgical management questions - and no image caption, no described
+    finding, no examiner line ever said so. A candidate reading everything
+    they were actually shown had no way to reach the case's own headline
+    finding. The aim check catches a station that tests nothing of its own
+    report; this catches the opposite - a report finding the station never
+    handed over.
+    """
+    if not (elicited or "").strip():
+        return []
+    reachable_roots = {w[:5] for w in _content_words(available)}
+    problems = []
+    for line in (elicited or "").splitlines():
+        line = line.strip()
+        wanted = _content_words(line)
+        if not wanted:
+            continue
+        if not any(w[:5] in reachable_roots for w in wanted):
+            problems.append(
+                f"the report records {line[:70]!r} among the findings, but "
+                f"nothing the candidate can reach - no caption, no described "
+                f"finding, no examiner line - ever states it"
+            )
     return problems
 
 
@@ -1297,6 +1379,12 @@ def _arc_problems(
     problems.extend(
         _presupposes_an_unreachable_sign(prompts, elicited, available, has_view)
     )
+    problems.extend(_ancillary_wants_investigations(prompts))
+    # _undisclosed_finding exists but is deliberately not wired in yet: it
+    # cannot tell an unshown EXAM SIGN (station 201's cataracts - a real bug)
+    # from a withheld HISTORY FACT (this station's design, not a bug), and
+    # fired on 221 of the latter across the bank before it caught a single
+    # real one worth acting on.
 
     # What this particular report supports, not a fixed shape. Step 3 reads an
     # ancillary image: the station need not already have one - a question that
