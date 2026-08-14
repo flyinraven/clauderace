@@ -63,7 +63,7 @@ REMEDIES: dict[str, str] = {
     "impossible_request": "reconcile",
     "missing_investigation": "bind_then_source_then_reconcile",
     "wrong_eye": "bind",
-    "answers_itself": "reconcile",
+    "answers_itself": "unleak",
 }
 
 
@@ -71,7 +71,7 @@ def repair_station(
     db: Session, client: AIClient, station: OsceStation, job_id: int | None = None
 ) -> dict[str, Any]:
     """Close what can be closed on one station. Returns what each step did."""
-    from app.services.osce.reconcile import reconcile_station
+    from app.services.osce.reconcile import reconcile_station, unleak_station
     from app.services.osce.station_images.ingested import (
         bind_ingested_figures_to_questions,
     )
@@ -129,6 +129,15 @@ def repair_station(
     if station_faults(station):
         tally = reconcile_station(db, client, station, job_id=job_id)
         done.update({k: v for k, v in tally.items() if v})
+
+    # 4. A question can hold every image it asked for and still give away the
+    #    answer in its wording. No image-shaped repair touches that, which is
+    #    how twenty of them stayed live while the audit reported them.
+    if any(f.kind == "answers_itself" for f in station_faults(station)):
+        done.update({
+            k: v for k, v in unleak_station(db, client, station, job_id=job_id).items()
+            if v
+        })
 
     done["faults_before"] = len(before)
     done["faults_after"] = len(station_faults(station))

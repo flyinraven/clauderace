@@ -70,3 +70,40 @@ def test_the_repair_order_is_cheapest_first():
     source_at = body.index("source_prompt_images(")
     reconcile = body.index("reconcile_station(db")
     assert bind < source_at < reconcile
+
+
+def test_each_remedy_names_a_step_the_repair_actually_runs():
+    """Listing a remedy is not the same as running one.
+
+    `answers_itself` was mapped to "reconcile" and the repair run closed none
+    of them: reconciling only rewrites a question whose IMAGE mismatched, and a
+    question that hands over the answer in its wording is returned unchanged by
+    every image-shaped check there is. Twenty stayed live, reported by the
+    audit the whole time.
+
+    So each remedy must name a step `repair_station` calls, and each step it
+    calls must be reachable from some remedy.
+    """
+    import pathlib
+
+    source = (
+        pathlib.Path(__file__).resolve().parents[1]
+        / "app" / "services" / "osce" / "repair.py"
+    ).read_text(encoding="utf-8")
+    body = source.split("def repair_station", 1)[1].split("@register_handler", 1)[0]
+
+    runs = {
+        "bind": "bind_ingested_figures_to_questions(db" in body,
+        "source": "source_prompt_images(" in body,
+        "reconcile": "reconcile_station(db" in body,
+        "unleak": "unleak_station(db" in body,
+        "human": True,  # nothing to run; a person acts
+    }
+    for kind, remedy in REMEDIES.items():
+        for step in remedy.split("_then_"):
+            assert step in runs, f"{kind}: unknown remedy step {step!r}"
+            assert runs[step], f"{kind}: remedy {step!r} is never run by repair_station"
+
+    named = {s for r in REMEDIES.values() for s in r.split("_then_")}
+    unused = sorted({k for k, v in runs.items() if v and k != "human"} - named)
+    assert not unused, f"repair_station runs steps no fault asks for: {unused}"

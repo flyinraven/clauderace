@@ -332,6 +332,99 @@ def _states_more_than_it_asks(
     return None
 
 
+UNLEAK_PROMPT = """\
+You are a RANZCO examiner correcting one question of an OSCE station that gives \
+away its own answer.
+
+The question names the diagnosis, which the station reveals later and asks the \
+candidate to reach for themselves. Rewrite it so it asks the same thing about \
+the same case without naming that conclusion.
+
+Say the finding instead of the conclusion. "Summarise your findings and give me \
+three differential diagnoses for multifocal choroiditis" becomes "Summarise your \
+findings and give me three differential diagnoses for the multifocal chorioretinal \
+lesions you have described". "What other complications of Retinitis Pigmentosa \
+would you look for?" becomes "What other complications of this condition would \
+you look for?".
+
+Everything else must survive unchanged: what is being asked, the clinical \
+content, the number of differentials, any image the question hands over.
+
+Never invent a finding the station did not record, and never replace the \
+diagnosis with a different one.
+
+Return JSON only:
+{"text": "<the rewritten question>"}"""
+
+
+def unleak_station(
+    db: Session, client: AIClient, station: OsceStation, job_id: int | None = None
+) -> dict[str, int]:
+    """Rewrite questions that answer themselves, keeping their marks.
+
+    Separate from `reconcile_station` because the two repair different things.
+    Reconciling is about the picture: a question whose image never arrived. A
+    question can hold every image it asked for and still hand over the answer
+    in its wording, and that one is returned "unchanged" by every image-shaped
+    check there is - which is how twenty of them stayed live.
+    """
+    prompts = [dict(p) for p in (station.prompts or [])]
+    tally = {"unleaked": 0, "unleak_failed": 0}
+    changed = False
+
+    for prompt in prompts:
+        if int(prompt.get("step") or 0) >= 5:
+            continue  # the reveal and after are entitled to the diagnosis
+        text = str(prompt.get("text") or "")
+        if not _names_the_conclusion(text, station):
+            continue
+
+        user = (
+            f"DIAGNOSIS THE STATION REVEALS LATER: {station.diagnosis or 'not recorded'}\n"
+            f"FINDINGS RECORDED FOR THIS STATION:\n"
+            f"{station.findings_elicited or station.findings or '(none recorded)'}\n\n"
+            f"THE QUESTION AS IT STANDS:\n{text}"
+        )
+        try:
+            data = client.complete_json(
+                task="utility", system=UNLEAK_PROMPT, user=user, job_id=job_id
+            )
+        except Exception:  # noqa: BLE001 - one question must not stop the station
+            db.rollback()
+            logger.exception("Could not unleak %s on station %s",
+                             prompt.get("label"), station.id)
+            tally["unleak_failed"] += 1
+            continue
+
+        new_text = (data or {}).get("text") if isinstance(data, dict) else None
+        # The replacement has to actually be an improvement. A rewrite that
+        # still names the conclusion, or that answers itself another way, is
+        # not worth the original wording.
+        if (
+            not new_text
+            or not str(new_text).strip()
+            or _states_more_than_it_asks(str(new_text), station, True)
+        ):
+            tally["unleak_failed"] += 1
+            continue
+
+        previous = prompt.get("reconciled") or {}
+        prompt["reconciled"] = {
+            **previous,
+            "mode": "unleak",
+            "original": previous.get("original") or text,
+        }
+        prompt["text"] = str(new_text).strip()
+        tally["unleaked"] += 1
+        changed = True
+
+    if changed:
+        station.prompts = prompts
+        flag_modified(station, "prompts")
+        db.commit()
+    return tally
+
+
 def reconcile_station(
     db: Session, client: AIClient, station: OsceStation, job_id: int | None = None
 ) -> dict[str, int]:
