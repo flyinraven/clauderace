@@ -208,7 +208,12 @@ def get_sitting(session_id: int, user: CurrentUser, db: DbSession) -> dict[str, 
             "findings_given": given,
             "findings_pending_split": station.findings_split_status != "complete",
             "figures": figures,
-            "total_marks": station.total_marks,
+            # What this sitting will actually ask for, not what the station
+            # holds. A station whose examination question was dropped - no
+            # image, findings printed on entry - asks for 9.5 and headed the
+            # page "20 marks", so a perfect answer looked like half a fail.
+            # Marking already works off what was asked; only this line lied.
+            "total_marks": sum(p["marks"] for p in prompts) or station.total_marks,
         },
         "clock": clock.as_dict(),
         "current_prompt_index": sitting.current_prompt_index,
