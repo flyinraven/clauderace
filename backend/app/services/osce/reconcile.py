@@ -160,6 +160,15 @@ _INVESTIGATION_TERMS: tuple[tuple[str, str], ...] = (
     ("hess", r"\bHess\b|\bLees screen\b"),
     ("gonio", r"\bgonioscop\w*|\bgonio\b"),
     ("slitlamp_photo", r"\bslit[- ]?lamp (?:photo\w*|image\w*)|\banterior segment photo\w*"),
+    # A plain photograph, named as such - station 355 asked for "three
+    # photographs of the patient... showing marked proptosis" and was handed
+    # three CT scans. Nothing here recognised "photograph" at all: only the
+    # narrower fundus_photo and slitlamp_photo variants existed, so a generic
+    # request for photographs compared as empty against anything, and no
+    # mismatch could ever be found. Checked last so a more specific match
+    # above (a fundus or slit-lamp photograph) still names itself precisely;
+    # this only adds the general case, it never replaces it.
+    ("photo", r"\bphotograph\w*|\bexternal photo\w*|\bclinical photo\w*"),
 )
 _COMPILED_TERMS = tuple((name, re.compile(pat, re.I)) for name, pat in _INVESTIGATION_TERMS)
 
@@ -167,7 +176,14 @@ _COMPILED_TERMS = tuple((name, re.compile(pat, re.I)) for name, pat in _INVESTIG
 def named_investigations(*texts: str | None) -> set[str]:
     """Every distinct investigation these texts name."""
     blob = " ".join(t for t in texts if t)
-    return {name for name, pattern in _COMPILED_TERMS if pattern.search(blob)}
+    names = {name for name, pattern in _COMPILED_TERMS if pattern.search(blob)}
+    # "photo" is the fallback for a plain photograph named as such, not a
+    # third tag beside "fundus photograph" - a request that already named the
+    # specific kind does not need the generic one repeated back as a second,
+    # redundant entry in what is missing.
+    if "photo" in names and names & {"fundus_photo", "slitlamp_photo"}:
+        names.discard("photo")
+    return names
 
 
 def classify_prompt(
