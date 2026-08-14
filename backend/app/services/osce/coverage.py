@@ -299,6 +299,25 @@ def station_views(station) -> list[View]:
     return views
 
 
+# A question that asks for anything beyond looking is not an examination
+# instruction, however much of the examiner's vocabulary it borrows.
+#
+# `_EXAMINE_RE` was written to decide which questions EARN AN IMAGE, and it
+# matches the bare word "findings" for that purpose. Reusing it to decide which
+# questions to DELETE cost station 87 its question B - "What is your
+# differential diagnosis for these findings, and how would you confirm your
+# leading diagnosis?" - and with it 6.5 of the station's 20 marks. The candidate
+# met a station that opened on "The diagnosis is Adie's pupil", because the two
+# questions before the reveal had both been dropped.
+_ASKS_MORE_THAN_LOOKING = re.compile(
+    r"\bdifferential\w*\b|\bdiagnos\w+\b|\bcauses?\b|\baetiolog\w*\b|\betiolog\w*\b"
+    r"|\bmanage\w*\b|\btreat\w*\b|\binvestigat\w*\b|\bancillary\b"
+    r"|\bwhat\s+else\b|\bhow\s+would\s+you\s+confirm\b|\bsummar\w+\b"
+    r"|\brisk\s+factors?\b|\bassociat\w+\b|\bcomplications?\b|\bexpect\b",
+    re.IGNORECASE,
+)
+
+
 def sittable_prompts(station) -> list[dict]:
     """The questions worth asking, given what the candidate can actually see.
 
@@ -342,7 +361,13 @@ def sittable_prompts(station) -> list[dict]:
         first = keep[0]
         if first.get("figure_id") in with_image:
             break
-        if not _EXAMINE_RE.search(str(first.get("text") or "")):
+        text = str(first.get("text") or "")
+        if not _EXAMINE_RE.search(text):
+            break
+        # Only a pure instruction to look. Anything that also asks what it
+        # means, what else it could be, or what to do about it still has an
+        # answer the printed findings do not give.
+        if _ASKS_MORE_THAN_LOOKING.search(text):
             break
         keep.pop(0)
 
