@@ -275,11 +275,49 @@ def _diagnosis_phrases(station: OsceStation) -> set[str]:
     """
     from app.services.osce.station_images.verify import _DIAGNOSIS_BOILERPLATE
 
-    words = [
-        w for w in re.findall(r"[a-z']+", (station.diagnosis or "").lower())
-        if len(w) > 3 and w not in _DIAGNOSIS_BOILERPLATE
-    ]
-    return {f"{a} {b}" for a, b in zip(words, words[1:])}
+    # Adjacency is the whole signal, so a dropped word must BREAK the pair
+    # rather than close it up: filtering first turned "third nerve palsy" into
+    # "third palsy" and "drusen with ..." into "drusen with", neither of which
+    # anyone would ever write.
+    phrases: set[str] = set()
+    tokens = re.split(r"[^a-z']+", (station.diagnosis or "").lower())
+    for a, b in zip(tokens, tokens[1:]):
+        if len(a) <= 3 or len(b) <= 3:
+            continue
+        if a in _CONNECTIVES or b in _CONNECTIVES:
+            continue
+        if a in _DIAGNOSIS_BOILERPLATE or b in _DIAGNOSIS_BOILERPLATE:
+            continue
+        # Pure anatomy is a location, not a conclusion. One pathology word in
+        # the pair is enough: "disc drusen" identifies, "upper eyelid" does not.
+        if a in _ANATOMY and b in _ANATOMY:
+            continue
+        phrases.add(f"{a} {b}")
+    return phrases
+
+
+# Words that join two ideas rather than belonging to either. A pair spanning
+# one of these is not a phrase anybody says.
+_CONNECTIVES = {
+    "with", "without", "secondary", "from", "following", "post", "plus",
+    "associated", "causing", "complicated", "status", "versus",
+}
+
+
+# Where, not what. A question must be able to say which part of the eye it is
+# about: "give me a differential for the left upper eyelid lesion you
+# described" was rejected against a diagnosis of left upper eyelid carcinoma,
+# on the words naming the eyelid. The pathology in that diagnosis is "squamous
+# cell carcinoma", and it survives this list intact.
+_ANATOMY = {
+    "eyelid", "eyelids", "lower", "upper", "left", "right", "bilateral",
+    "both", "canthus", "canthal", "medial", "lateral", "cornea", "corneal",
+    "conjunctiva", "conjunctival", "iris", "lens", "retina", "retinal",
+    "macula", "macular", "choroid", "choroidal", "optic", "nerve", "disc",
+    "orbit", "orbital", "anterior", "posterior", "segment", "chamber",
+    "angle", "vitreous", "sclera", "scleral", "eye", "eyes", "fundus",
+    "peripheral", "central", "superior", "inferior", "nasal", "temporal",
+}
 
 
 # Naming the diagnosis as one of several candidates is the question, not the
@@ -373,7 +411,7 @@ def unleak_station(
     changed = False
 
     for prompt in prompts:
-        if int(prompt.get("step") or 0) >= 5:
+        if not 1 < int(prompt.get("step") or 0) < 5:
             continue  # the reveal and after are entitled to the diagnosis
         text = str(prompt.get("text") or "")
         if not _names_the_conclusion(text, station):

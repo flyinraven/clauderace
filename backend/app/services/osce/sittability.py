@@ -260,9 +260,15 @@ def _answers_itself(station: OsceStation) -> list[Fault]:
 
     faults: list[Fault] = []
     for prompt in station.prompts or []:
+        step = int(prompt.get("step") or 0)
+        # The standing instruction has to name the region it sends the
+        # candidate to. "Please examine the left upper eyelid" was flagged
+        # against a diagnosis of left upper eyelid carcinoma, and there is no
+        # wording that asks the question without it.
+        if step == 1:
+            continue
         why = _states_more_than_it_asks(
-            str(prompt.get("text") or ""), station,
-            int(prompt.get("step") or 0) < 5,
+            str(prompt.get("text") or ""), station, step < 5,
         )
         if why:
             faults.append(Fault(

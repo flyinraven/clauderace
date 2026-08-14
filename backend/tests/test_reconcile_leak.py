@@ -134,3 +134,18 @@ def test_the_guard_agrees_with_reading_the_question():
         if got != leaks:
             wrong.append((text[:60], leaks, got))
     assert not wrong, f"guard disagrees with the reading on: {wrong}"
+
+
+def test_the_standing_instruction_may_name_the_region_it_examines():
+    """"Please examine the left upper eyelid" against a diagnosis of left upper
+    eyelid carcinoma. There is no wording that asks it without the region."""
+    from app.services.osce.sittability import _answers_itself
+
+    s = station(diagnosis="Left upper eyelid invasive squamous cell carcinoma")
+    s.prompts = [
+        {"label": "A", "step": 1, "text": "Please examine the left upper eyelid."},
+        {"label": "B", "step": 4, "text": "Give me a differential for the left "
+                                          "upper eyelid lesion you described."},
+    ]
+    s.figures = []
+    assert _answers_itself(s) == []
