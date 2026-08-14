@@ -177,7 +177,19 @@ def station_faults(station: OsceStation) -> list[Fault]:
         # the invariant the pipeline never had, checked here as well as at the
         # point the question is written, because stations built before the rule
         # existed still carry the fault.
-        if PRESENTS_INVESTIGATION_RE.search(text) and not wanted and not bound:
+        #
+        # Step 1 is exempt when the station actually opens on something: "Here
+        # are some images of a 50-year-old male patient. Please describe what
+        # they show" is answered by whatever the candidate is shown on
+        # entering, not by a binding this one question owns - nothing else has
+        # ever asked step 1 to name every image on screen individually.
+        # Station 354 had nine real photographs from the paper and none of
+        # them bound to it, and was reported as a blank screen because of it.
+        step_one_opens_on_something = prompt.get("step") == 1 and bool(opening)
+        if (
+            PRESENTS_INVESTIGATION_RE.search(text) and not wanted and not bound
+            and not step_one_opens_on_something
+        ):
             faults.append(Fault(
                 "presents_nothing",
                 f"question {label} presents an investigation but never asked for "

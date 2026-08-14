@@ -171,7 +171,9 @@ def named_investigations(*texts: str | None) -> set[str]:
 
 
 def classify_prompt(
-    prompt: dict[str, Any], shown: dict[int, str]
+    prompt: dict[str, Any],
+    shown: dict[int, str],
+    opening_ids: frozenset[int] = frozenset(),
 ) -> tuple[str, list[int], set[str]]:
     """What, if anything, is wrong with this question. Pure - no database.
 
@@ -189,6 +191,15 @@ def classify_prompt(
     ids = prompt.get("figure_ids") or (
         [prompt["figure_id"]] if prompt.get("figure_id") else []
     )
+    # Step 1 is answered by whatever the station opens on, not by a binding
+    # of its own - nothing else has ever asked a question to name every image
+    # on screen individually. Station 354's "Here are some images of a
+    # 50-year-old male patient. Please describe what they show" had nine real
+    # photographs from the paper, none of them bound to it, and this read as
+    # a blank screen - so the rewrite it was given kept being told "nothing
+    # is on screen" while nine real images sat there unclaimed.
+    if not ids and prompt.get("step") == 1:
+        ids = list(opening_ids)
     here = [i for i in ids if i in shown]
 
     # A question that neither asks for an image nor claims to show one is fine
@@ -529,13 +540,21 @@ def reconcile_station(
     if not prompts:
         return {"trimmed": 0, "stated": 0, "expected": 0, "unchanged": 0, "failed": 0}
 
+    from app.services.osce.sittability import (
+        answers_a_view,
+        opening_figures,
+    )
+
     shown = _shown_figures(db, station)
+    opening_ids = frozenset(
+        f.id for f in opening_figures(station) if answers_a_view(f) and f.id in shown
+    )
     tally = {"trimmed": 0, "stated": 0, "expected": 0, "restored": 0,
              "unchanged": 0, "failed": 0}
     changed = False
 
     for prompt in prompts:
-        mode, here, missing = classify_prompt(prompt, shown)
+        mode, here, missing = classify_prompt(prompt, shown, opening_ids)
         if mode == UNCHANGED:
             tally["unchanged"] += 1
             continue
@@ -560,7 +579,7 @@ def reconcile_station(
             # asked for topography and pachymetry and was given the topography.
             # That is an ordinary trim, and doing it now rather than next run
             # means the question is never left over-promising.
-            mode, here, missing = classify_prompt(prompt, shown)
+            mode, here, missing = classify_prompt(prompt, shown, opening_ids)
             if mode != TRIM:
                 continue
 
