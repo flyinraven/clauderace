@@ -288,6 +288,15 @@ def _missing_side(station: OsceStation) -> list[Fault]:
         text = str(prompt.get("text") or "")
         if not _BOTH_RE.search(text):
             continue
+        # "Here are the Pentacam images for both eyes" also matches _BOTH_RE,
+        # but names a different investigation than the VIEW-modality figures
+        # this function judges - station 342's Pentacam topography genuinely
+        # covered both sides, and its unrelated single-sided slit lamp photos
+        # got blamed for a mismatch the question never asked about. Only a
+        # real examine-instruction ("please examine... both eyes") is asking
+        # about the kind of image opening_figures actually holds.
+        if not re.search(r"\bexamin\w*\b", text, re.IGNORECASE):
+            continue
         faults.append(Fault(
             "missing_side",
             f"question {prompt.get('label') or '?'} asks to examine both eyes, "
