@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 from app.api.deps import DbSession, load_owned
 from app.models import OsceSession
-from app.services.imagesearch.relevance import is_investigation
+from app.services.imagesearch.relevance import is_investigation, is_the_patient
 from app.services.osce.circuit import compute_station_clock
 
 
@@ -119,7 +119,12 @@ def opening_figures_payload(station) -> list[dict[str, Any]]:
         if not payload:
             continue
         # Words are the examiner speaking, never an investigation.
-        if figure.image_id and is_investigation(figure.modality):
+        # The test is "do we know this is the patient", not "do we know this is
+        # an investigation": an unnamed modality answers no to both, and the
+        # two mistakes are not symmetrical. Station 312 opened on an IOL
+        # calculation printout and two specular microscopy images, all recorded
+        # as "other", before the candidate had been asked to examine anything.
+        if figure.image_id and not is_the_patient(figure.modality):
             held_back.append(payload)
         else:
             shown.append(payload)

@@ -50,11 +50,30 @@ MODALITIES = (
 # the vision model could not name - so it is left where it is.
 PATIENT_VIEW_MODALITIES = frozenset({"external", "slit_lamp", "fundus", "other"})
 
+# What is definitely a view of the patient. "other" is absent on purpose:
+# unclassified is not the same as the patient. Station 312 opened on an IOL
+# calculation printout and both eyes' specular microscopy, all three recorded
+# as "other", handing over three investigations before the candidate had been
+# asked to examine anything.
+CERTAIN_PATIENT_VIEWS = frozenset({"external", "slit_lamp", "fundus"})
+
 
 def is_investigation(modality: str | None) -> bool:
     """Whether this is something handed over on request, not seen by looking."""
     name = (modality or "").strip().lower()
     return bool(name) and name not in PATIENT_VIEW_MODALITIES
+
+
+def is_the_patient(modality: str | None) -> bool:
+    """Whether this can be shown before the candidate has asked for anything.
+
+    The stricter question, and the right one for the opening screen: not "do we
+    know this is an investigation" but "do we know this is the patient". An
+    unnamed modality answers no to both, and the two failures are not
+    symmetrical - showing an investigation early hands over the answer, while
+    holding a patient photograph back is caught by the blank-screen fallback.
+    """
+    return (modality or "").strip().lower() in CERTAIN_PATIENT_VIEWS
 
 
 _REGION_MODALITIES: dict[str, frozenset[str]] = {
