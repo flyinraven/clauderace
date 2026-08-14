@@ -52,6 +52,12 @@ class Fault:
     # would find nothing to source even when this fault says searching would
     # fix it. None means the existing rubric-driven sourcing already knows.
     sourcing_hint: str | None = None
+    # The figure to re-search IN PLACE, for a fault about a figure a question
+    # already has bound - wrong_eye and low_confidence. sourcing_hint alone
+    # would only ever add a new, unbound figure to the station; the question
+    # still points at the old one. None means there is nothing to rebind, or
+    # nothing needs to be.
+    target_figure_id: int | None = None
 
     def __str__(self) -> str:  # pragma: no cover - convenience for the CLI
         return self.detail
@@ -158,6 +164,13 @@ def station_faults(station: OsceStation) -> list[Fault]:
             faults.append(Fault(
                 "low_confidence",
                 f"{label} scraped in at {figure.match_confidence:.0%} confidence",
+                # `kinds` has always included this - fixable_by_sourcing was
+                # never False for it - but nothing in repair.py ever branched
+                # on it, so a low-confidence figure sat flagged forever with
+                # no remedy attempted. The figure's own wanted_description is
+                # exactly what a fresh search needs.
+                sourcing_hint=figure.wanted_description or figure.caption or None,
+                target_figure_id=figure.id,
             ))
         if not figure.is_approved:
             faults.append(Fault(
@@ -413,7 +426,16 @@ def _wrong_eye(station: OsceStation) -> list[Fault]:
     check belongs here, where every stage's output is judged, and not inside
     any one stage.
     """
-    from app.services.osce.station_images.ingested import _opposite_eyes
+    from app.services.osce.station_images.ingested import _named_eyes, _opposite_eyes
+
+    modality_label = {
+        "fundus": "Fundus photograph",
+        "external": "External photograph",
+        "slit_lamp": "Slit lamp photograph",
+        "motility": "External photograph",
+        "orthoptic": "External photograph",
+        "photo": "Photograph",
+    }
 
     by_id = {f.id: f for f in station.figures}
     faults: list[Fault] = []
@@ -422,11 +444,27 @@ def _wrong_eye(station: OsceStation) -> list[Fault]:
         for fid in bound_figure_ids([prompt]):
             figure = by_id.get(fid)
             if figure is not None and _opposite_eyes(text, figure.caption):
+                # A real re-search, not just a human flag: station 356 asked
+                # for the left eye and was bound a photograph of the right,
+                # accepted at full confidence by the primed check - see the
+                # laterality fix in verify.py. Marked False for search since
+                # this fault was first written, before that fix existed and
+                # before anything here built its own search description; a
+                # search that knows which side it is missing can now find it.
+                asked = _named_eyes(text)
+                wanted_side = next(iter(asked)) if len(asked) == 1 else None
+                hint = (
+                    f"{modality_label.get(figure.modality or '', 'Photograph')} "
+                    f"of the {wanted_side} eye"
+                    if wanted_side else None
+                )
                 faults.append(Fault(
                     "wrong_eye",
                     f"question {prompt.get('label') or '?'} asks about one eye "
                     f"and shows {(figure.caption or 'a figure')[:40]!r}",
-                    fixable_by_sourcing=False,
+                    fixable_by_sourcing=bool(hint),
+                    sourcing_hint=hint,
+                    target_figure_id=figure.id if hint else None,
                 ))
     return faults
 

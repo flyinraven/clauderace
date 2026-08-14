@@ -62,7 +62,7 @@ REMEDIES: dict[str, str] = {
     "presents_nothing": "reconcile",
     "impossible_request": "reconcile",
     "missing_investigation": "bind_then_source_then_reconcile",
-    "wrong_eye": "bind",
+    "wrong_eye": "bind_then_source",
     "answers_itself": "unleak",
     "missing_side": "source",
     "missing_structure": "source",
@@ -101,6 +101,45 @@ def _source_from_hints(
         )
         db.add(figure)
         db.flush()
+        attached += int(bool(
+            source_image_for_station(db, client, station, job_id, figure=figure)
+            .get("attached")
+        ))
+    return attached
+
+
+def _resource_bound_figures(
+    db: Session,
+    client: AIClient,
+    station: OsceStation,
+    job_id: int | None,
+    faults: list,
+) -> int:
+    """Re-search a figure IN PLACE, for a fault about one a question already has.
+
+    `_source_from_hints` always creates a new, unbound figure - right for
+    missing_side and missing_structure, where nothing was ever bound. Wrong
+    enough here to defeat the point: low_confidence and wrong_eye are about a
+    figure a question's own `figure_id` already points at, so adding a
+    different figure beside it leaves the question showing the same bad one.
+    This updates that figure's own wanted_description and re-searches it,
+    which is what `source_image_for_station(figure=...)` has always been for.
+    """
+    from app.models import OsceFigure
+    from app.services.osce.station_images.sourcing import source_image_for_station
+
+    attached = 0
+    seen: set[int] = set()
+    for fault in faults:
+        fid = fault.target_figure_id
+        if not fid or fid in seen:
+            continue
+        seen.add(fid)
+        figure = db.get(OsceFigure, fid)
+        if figure is None:
+            continue
+        if fault.sourcing_hint:
+            figure.wanted_description = fault.sourcing_hint
         attached += int(bool(
             source_image_for_station(db, client, station, job_id, figure=figure)
             .get("attached")
@@ -166,6 +205,8 @@ def repair_station(
                 ).get("attached", 0)
             if kinds & {"missing_side", "missing_structure"}:
                 attached += _source_from_hints(db, client, station, job_id, remaining)
+            if kinds & {"low_confidence", "wrong_eye"}:
+                attached += _resource_bound_figures(db, client, station, job_id, remaining)
             if "missing_investigation" in kinds:
                 attached += source_prompt_images(
                     db, client, station, job_id
