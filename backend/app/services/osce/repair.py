@@ -82,11 +82,22 @@ def repair_station(
         source_prompt_images,
     )
 
+    done: dict[str, Any] = {"stations": 1}
+
+    # First, and before the early return below. A station can have every image
+    # it needs and still ask "give me three differential diagnoses for this
+    # patient's presentation", which names nothing to differentiate. Those
+    # stations have no image fault at all, so returning early on that basis
+    # meant twelve of fourteen were never offered to the rewrite.
+    done.update({
+        k: v for k, v in unleak_station(db, client, station, job_id=job_id).items()
+        if v
+    })
+
     before = station_faults(station)
     if not before:
-        return {"already_sittable": 1}
-
-    done: dict[str, Any] = {"stations": 1}
+        done["already_sittable"] = 1
+        return done
 
     # 1. Free. Always worth doing, and it can only add a picture.
     done["bound"] = bind_ingested_figures_to_questions(db, client, station).get("bound", 0)
@@ -129,19 +140,6 @@ def repair_station(
     if station_faults(station):
         tally = reconcile_station(db, client, station, job_id=job_id)
         done.update({k: v for k, v in tally.items() if v})
-
-    # 4. A question can hold every image it asked for and still give away the
-    #    answer in its wording. No image-shaped repair touches that, which is
-    #    how twenty of them stayed live while the audit reported them.
-    # Unconditionally, because it decides per question and costs nothing when
-    # no question matches. Gating it on the `answers_itself` fault meant the
-    # twenty-four "differential diagnoses for this patient's presentation"
-    # questions were never offered to it - that fault does not describe them,
-    # and only four of thirty-five stations were reached.
-    done.update({
-        k: v for k, v in unleak_station(db, client, station, job_id=job_id).items()
-        if v
-    })
 
     done["faults_before"] = len(before)
     done["faults_after"] = len(station_faults(station))
