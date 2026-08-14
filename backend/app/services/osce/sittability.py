@@ -79,12 +79,22 @@ def bound_figure_ids(prompts: list[dict]) -> set[int]:
 def opening_figures(station: OsceStation) -> list[OsceFigure]:
     """The figures the candidate meets on entering, in order.
 
-    A figure a question owns is not one of them: it appears when that question
-    does. Counting them together made a motility station whose question C owned
-    an MRI look as though it had an opening image, so no gaze montage was ever
-    searched for.
+    A figure a LATER question owns is not one of them: it appears when that
+    question does. Counting them together made a motility station whose
+    question C owned an MRI look as though it had an opening image, so no
+    gaze montage was ever searched for.
+
+    Step 1's own bindings are the one exception, because step 1 is by
+    definition what the candidate opens on. Station 355's reconcile trim
+    bound three CT scans to step 1 directly - correctly, they are what the
+    question actually shows - and this then reported them as "no opening
+    image at all" because a bound figure has never before meant anything but
+    "owned by a later question." The reconcile fix that made this reachable
+    is upstream of the fault it's now reporting; this is the other half.
     """
-    claimed = bound_figure_ids(station.prompts or [])
+    claimed = bound_figure_ids([
+        p for p in (station.prompts or []) if p.get("step") != 1
+    ])
     return sorted(
         (f for f in station.figures if f.id not in claimed), key=lambda f: f.position
     )
