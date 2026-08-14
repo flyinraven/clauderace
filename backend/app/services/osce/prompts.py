@@ -36,6 +36,12 @@ STATION_MARKS = OSCE_STATION_MARKS
 MIN_PROMPTS = 3
 # How many times to ask before giving up on a station.
 _GENERATE_ATTEMPTS = 2
+
+# How many times to ask for a question sequence that satisfies the arc checks.
+# One retry left station 182 shipping with no differential question at all.
+# Stations that pass first time are unaffected: this only spends on the ones
+# coming back wrong, and those are exactly the ones worth another call.
+_ARC_ATTEMPTS = 4
 # The arc below runs to seven steps: instruction, ancillary test, read the
 # image, differentials, the diagnosis-and-management question, an evolving
 # hypothetical and a knowledge question. One question per step, no more.
@@ -483,35 +489,44 @@ def build_prompts_for_station(
         f"seconds must total {STATION_SECONDS} and marks must total 20."
     )
 
-    prompts, warnings = _generate(client, user, job_id)
+    def judge(candidate: list[dict[str, Any]]) -> list[str]:
+        return _arc_problems(
+            candidate, has_image, needs_investigation, vocabulary, station.aims,
+            has_view, has_ancillary, bool((station.diagnosis or '').strip()),
+            station.diagnosis, station.findings_elicited, available,
+        )
 
     # The arc is the whole point of the station, and the model does drop steps
     # or give the diagnosis away in the opening instruction. Say what is wrong
-    # and ask once more rather than shipping a station that examines nothing.
-    problems = _arc_problems(
-        prompts, has_image, needs_investigation, vocabulary, station.aims, has_view,
-        has_ancillary, bool((station.diagnosis or '').strip()), station.diagnosis,
-        station.findings_elicited, available,
-    )
-    if problems:
+    # and ask again rather than shipping a station that examines nothing.
+    #
+    # One retry was not enough. Station 182 failed both attempts and shipped
+    # with no differential question at all - the candidate examined a lens,
+    # was told the diagnosis, and was never once asked what it was. A station
+    # that passes first time still costs one call; only the ones going wrong
+    # cost more, and those are the ones worth paying for.
+    prompts, warnings = _generate(client, user, job_id)
+    problems = judge(prompts)
+
+    attempt = 1
+    while problems and attempt < _ARC_ATTEMPTS:
+        attempt += 1
         retry_user = (
             user
-            + "\n\nYour first attempt was rejected because:\n"
+            + f"\n\nAttempt {attempt - 1} was rejected because:\n"
             + "\n".join(f"  - {p}" for p in problems)
-            + "\n\nRewrite the whole sequence, fixing these."
+            + "\n\nRewrite the whole sequence, fixing these. Keep what was "
+              "already specific to this case; the faults above are the only "
+              "reason it came back."
         )
         retried, retry_warnings = _generate(client, retry_user, job_id)
-        remaining = _arc_problems(
-            retried, has_image, needs_investigation, vocabulary, station.aims, has_view,
-            has_ancillary, bool((station.diagnosis or '').strip()), station.diagnosis,
-            station.findings_elicited, available,
-        )
-        # Keep whichever attempt is closer to a real station; a second try that
-        # is still imperfect is usually still better than the first.
+        remaining = judge(retried)
+        # Keep whichever attempt is closest to a real station.
         if len(remaining) <= len(problems):
             prompts, warnings, problems = retried, retry_warnings, remaining
-        if problems:
-            warnings.append("Question arc is incomplete: " + "; ".join(problems))
+
+    if problems:
+        warnings.append("Question arc is incomplete: " + "; ".join(problems))
 
     station.prompts = prompts
     station.prompts_status = "complete"

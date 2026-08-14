@@ -316,8 +316,12 @@ def test_the_model_is_asked_again_when_the_arc_is_wrong(client, db, admin, ai, r
     # The model answer job now chains behind a prompt build, so its call lands
     # in the same run - count only the attempts at the prompts themselves.
     builds = [a for a in attempts if "Write the model answer" not in a]
-    assert len(builds) == 2
-    assert "arc step 1" in builds[1]
+    # It asks again until the arc is right or the attempts run out, keeping
+    # whichever try came closest. One retry was not enough: station 182 failed
+    # both of its attempts and shipped with no differential question at all.
+    assert 2 <= len(builds) <= 4
+    assert "arc step 1" in builds[1], "the fault must be fed back to the model"
+    assert all("rejected because" in a for a in builds[1:])
     station = db.query(OsceStation).one()
     db.expire_all()
     assert station.prompts_status == "complete"
