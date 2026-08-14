@@ -127,3 +127,36 @@ def test_one_uncited_question_does_not_sink_the_station():
         q("B", "How would you manage her?"),
         q("C", "What are the risk factors? Name four.", drawn_from=""),
     ]) == []
+
+
+def test_an_uploaded_paper_gets_the_same_rules():
+    """A newly ingested station must be built by the same builder, or the
+    rules only ever apply to stations someone remembered to rebuild.
+
+    The ingest chain queues JOB_BUILD_OSCE_PROMPTS, whose handler calls
+    `build_prompts_for_station`, which is where `_arc_problems` runs. This
+    asserts the chain, so detaching it fails here rather than three papers
+    later.
+    """
+    import inspect
+
+    from app.services.ingest import pipeline
+    from app.services.osce import prompts as builder
+
+    chain = inspect.getsource(pipeline.queue_after_ingest)
+    assert "_queue_prompt_build" in chain
+
+    queued = inspect.getsource(pipeline._queue_prompt_build)
+    assert "JOB_BUILD_OSCE_PROMPTS" in queued
+
+    handler = inspect.getsource(builder.handle_build_osce_prompts)
+    assert "build_prompts_for_station" in handler
+
+    build = inspect.getsource(builder.build_prompts_for_station)
+    assert "_arc_problems" in build, (
+        "the builder must run the arc checks, or an uploaded paper skips them"
+    )
+    assert "drawn_from" in builder.SYSTEM_PROMPT, (
+        "the builder's instructions must still require each question to name "
+        "what it was drawn from"
+    )
