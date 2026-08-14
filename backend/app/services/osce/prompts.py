@@ -1617,7 +1617,33 @@ def handle_build_osce_prompts(ctx: JobContext) -> bool:
     if finished:
         _rebind_figures(ctx, station_ids)
         _rewrite_model_answers(ctx, station_ids)
+        _queue_repair(ctx, station_ids)
     return finished
+
+
+def _queue_repair(ctx: JobContext, station_ids: list[int]) -> None:
+    """Building the questions was never the whole job - close what is left.
+
+    A build writes wording and re-binds whatever the paper's own figures
+    already cover, for free. Nothing before this queued the paid step: a
+    station a candidate could not fully answer sat "ready" until someone
+    separately ran a repair sweep, which is why 9 of 18 stations from a
+    fresh ingest still needed one by hand. `repair_station` is the one place
+    that already knows the full bind -> source -> reconcile chain and the
+    cheapest order to try it in; nothing here needs to know that order too.
+    """
+    from app.services.jobs.runner import create_job
+    from app.services.osce.repair import JOB_REPAIR_STATIONS
+
+    job = create_job(
+        ctx.db,
+        JOB_REPAIR_STATIONS,
+        payload={"station_ids": sorted(station_ids)},
+        created_by_id=ctx.job.created_by_id,
+        total_steps=len(station_ids),
+        message=f"Repairing {len(station_ids)} station(s) after build",
+    )
+    logger.info("Queued repair job %s after a prompt build", job.id)
 
 
 def _rewrite_model_answers(ctx: JobContext, station_ids: list[int]) -> None:

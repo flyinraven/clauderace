@@ -313,9 +313,12 @@ def test_the_model_is_asked_again_when_the_arc_is_wrong(client, db, admin, ai, r
     client.post("/api/osce/stations/build-prompts", headers=auth(admin))
     run_jobs()
 
-    # The model answer job now chains behind a prompt build, so its call lands
-    # in the same run - count only the attempts at the prompts themselves.
-    builds = [a for a in attempts if "Write the model answer" not in a]
+    # The model answer job, and now a repair pass, both chain behind a prompt
+    # build and land in the same run, and reconcile's own user message reuses
+    # the same station-context block a build's does - count only the
+    # attempts at the prompts themselves, identified by the closing
+    # instruction only a build's user message carries.
+    builds = [a for a in attempts if "Write the examiner's question sequence now" in a]
     # It asks again until the arc is right or the attempts run out, keeping
     # whichever try came closest. One retry was not enough: station 182 failed
     # both of its attempts and shipped with no differential question at all.
