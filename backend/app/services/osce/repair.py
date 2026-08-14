@@ -133,11 +133,15 @@ def repair_station(
     # 4. A question can hold every image it asked for and still give away the
     #    answer in its wording. No image-shaped repair touches that, which is
     #    how twenty of them stayed live while the audit reported them.
-    if any(f.kind == "answers_itself" for f in station_faults(station)):
-        done.update({
-            k: v for k, v in unleak_station(db, client, station, job_id=job_id).items()
-            if v
-        })
+    # Unconditionally, because it decides per question and costs nothing when
+    # no question matches. Gating it on the `answers_itself` fault meant the
+    # twenty-four "differential diagnoses for this patient's presentation"
+    # questions were never offered to it - that fault does not describe them,
+    # and only four of thirty-five stations were reached.
+    done.update({
+        k: v for k, v in unleak_station(db, client, station, job_id=job_id).items()
+        if v
+    })
 
     done["faults_before"] = len(before)
     done["faults_after"] = len(station_faults(station))
