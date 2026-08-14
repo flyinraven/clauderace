@@ -217,6 +217,143 @@ def station_faults(station: OsceStation) -> list[Fault]:
 
     faults.extend(_wrong_eye(station))
     faults.extend(_answers_itself(station))
+    faults.extend(_missing_side(station))
+    faults.extend(_missing_structure(station))
+    return faults
+
+
+_BOTH_RE = re.compile(r"\bboth\s+eyes\b|\bbilateral(?:ly)?\b", re.IGNORECASE)
+
+
+def _missing_side(station: OsceStation) -> list[Fault]:
+    """Both eyes asked for, and every image shown is of the same one.
+
+    `_wrong_eye` deliberately lets "both eyes" through against any single-eye
+    caption, because asking for both is not a contradiction of showing one.
+    But two images that both name the RIGHT eye is not "both eyes" either -
+    station 317 opened two different photographs, both captioned "Fundus
+    photograph of the right eye", against a step 1 that asked to examine the
+    fundus of both eyes. No caption disagreed with the question, so nothing
+    caught it; the left eye was simply never shown.
+    """
+    from app.services.osce.prompts import VIEW_MODALITIES
+    from app.services.osce.station_images.ingested import _named_eyes
+
+    # Only images of the eye itself decide this, not the investigations beside
+    # them. Station 317 also carried a right-eye and a left-eye visual field,
+    # and pooling those in made the two identical right-eye fundus photographs
+    # look like "both eyes shown" - the fields answered a different question.
+    opening = [
+        f for f in opening_figures(station)
+        if answers_a_view(f) and (f.modality or "") in VIEW_MODALITIES
+    ]
+    named = [_named_eyes(f.caption) for f in opening]
+    if not named:
+        return []
+    # A composite or unlabelled image ("of both eyes", or no side at all) may
+    # be carrying the missing side. Firing only when EVERY opening image
+    # commits to exactly one side, and they all agree, keeps this to the
+    # unambiguous case: two named-right fundus photographs and nothing else is
+    # a real gap, but one named-left photo next to an uncaptioned composite is
+    # not something this can call - the composite may already be the right
+    # eye, and a guard that strips a usable station on a guess is worse than
+    # the leak it was trying to catch.
+    if any(len(n) != 1 for n in named):
+        return []
+    sides_shown: set[str] = set().union(*named)
+    if sides_shown == {"left", "right"}:
+        return []
+
+    faults: list[Fault] = []
+    for prompt in station.prompts or []:
+        if prompt.get("step") != 1:
+            continue
+        text = str(prompt.get("text") or "")
+        if not _BOTH_RE.search(text):
+            continue
+        missing = "left" if sides_shown == {"right"} else "right"
+        faults.append(Fault(
+            "missing_side",
+            f"question {prompt.get('label') or '?'} asks to examine both eyes, "
+            f"but every image that names a side names the {next(iter(sides_shown))} "
+            f"eye - no {missing} eye is shown",
+        ))
+    return faults
+
+
+_ANTERIOR_RE = re.compile(
+    r"\banterior\s+segment\b|\bcornea\b|\bconjunctiva\b|\biris\b|\blens\b|"
+    r"\banterior\s+chamber\b|\beyelids?\b",
+    re.IGNORECASE,
+)
+_POSTERIOR_RE = re.compile(
+    r"\bposterior\s+segment\b|\bfundus\b|\bretina\b|\boptic\s+(?:nerve|disc)\b|"
+    r"\bmacula\b|\bvitreous\b",
+    re.IGNORECASE,
+)
+_ANTERIOR_MODALITIES = {"external", "slit_lamp"}
+_POSTERIOR_MODALITIES = {"fundus"}
+# An OCT captioned plainly, or of "the retina"/"the macula", is a posterior
+# scan by convention - anterior segment OCT always says so. Treating every OCT
+# as ambiguous flagged four stations whose only fault was a caption that
+# didn't repeat the word "macula", including one carrying a real anterior
+# segment OCT correctly labelled as such right next to it.
+_OCT_ANTERIOR_RE = re.compile(
+    r"\banterior\s+segment\b|\banterior\s+chamber\b|\bAS[- ]?OCT\b", re.IGNORECASE
+)
+
+
+def _oct_covers(caption: str | None) -> str:
+    """Which structure a plain OCT figure counts toward."""
+    return "anterior" if _OCT_ANTERIOR_RE.search(caption or "") else "posterior"
+
+
+def _missing_structure(station: OsceStation) -> list[Fault]:
+    """Asked to examine a structure no image on screen can show.
+
+    Binary "is there any view at all" passed a step 1 asking to "examine the
+    anterior segment and fundus of both eyes" against a station whose only
+    images were two fundus photographs - there was a view, so the six marks
+    on the anterior segment half were unanswerable to anyone. The structure
+    named in the question has to have its own kind of image, not just any.
+    """
+    opening = [f for f in opening_figures(station) if answers_a_view(f) and f.image_id]
+    if not opening:
+        return []
+    covers_anterior = any(
+        f.modality in _ANTERIOR_MODALITIES
+        or (f.modality == "oct" and _oct_covers(f.caption) == "anterior")
+        for f in opening
+    )
+    covers_posterior = any(
+        f.modality in _POSTERIOR_MODALITIES
+        or (f.modality == "oct" and _oct_covers(f.caption) == "posterior")
+        for f in opening
+    )
+
+    faults: list[Fault] = []
+    modalities = sorted({f.modality or "unlabelled" for f in opening})
+    for prompt in station.prompts or []:
+        if prompt.get("step") != 1:
+            continue
+        text = str(prompt.get("text") or "")
+        if not re.search(r"\bexamin\w*\b", text, re.IGNORECASE):
+            continue
+        label = prompt.get("label") or "?"
+        if _ANTERIOR_RE.search(text) and not covers_anterior:
+            faults.append(Fault(
+                "missing_structure",
+                f"question {label} asks to examine the anterior segment, but no "
+                f"external, slit-lamp or anterior-segment OCT image is shown - "
+                f"only {modalities}",
+            ))
+        if _POSTERIOR_RE.search(text) and not covers_posterior:
+            faults.append(Fault(
+                "missing_structure",
+                f"question {label} asks to examine the fundus/posterior segment, "
+                f"but no fundus photograph or posterior OCT is shown - "
+                f"only {modalities}",
+            ))
     return faults
 
 

@@ -64,6 +64,8 @@ REMEDIES: dict[str, str] = {
     "missing_investigation": "bind_then_source_then_reconcile",
     "wrong_eye": "bind",
     "answers_itself": "unleak",
+    "missing_side": "source",
+    "missing_structure": "source",
 }
 
 
@@ -119,7 +121,7 @@ def repair_station(
                 attached += int(bool(
                     source_image_for_station(db, client, station, job_id).get("attached")
                 ))
-            if "too_few_views" in kinds:
+            if kinds & {"too_few_views", "missing_side", "missing_structure"}:
                 attached += source_coverage_images(
                     db, client, station, job_id
                 ).get("attached", 0)
