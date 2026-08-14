@@ -647,6 +647,26 @@ def blind_disagreement(blind: dict[str, Any], wanted: str | None, station: OsceS
     if _BILATERAL.search(expectation) and blind.get("affected") == "one_eye_affected":
         return "the station describes both eyes; only one is affected in this image"
 
+    # The primed check is told which side is wanted and can agree with it
+    # without having looked - station 356 asked for "the left eye" three
+    # times over in its request and a wide-field fundus photograph of the
+    # RIGHT eye was rated faithful at full confidence. The blind pass was
+    # told nothing, so a real disagreement here is the same anchoring
+    # failure `describe_blind` exists to catch, just on laterality instead
+    # of bilaterality. Downgrading rather than dropping the candidate keeps
+    # this in the same "note it, do not reject" policy as the rest of the
+    # function - and a downgrade to representative sends the search loop
+    # back for a second sweep on the same run, rather than stopping on a
+    # wrong-eye "faithful" match before a right one is ever tried.
+    wanted_side = side_from_request(wanted)
+    seen_side = str(blind.get("side") or "").strip().lower()
+    if (
+        wanted_side in ("left", "right")
+        and seen_side in ("left", "right")
+        and seen_side != wanted_side
+    ):
+        return f"the question asks for the {wanted_side} eye; this image shows the {seen_side}"
+
     # Only where `wanted` is a request for a particular investigation - "CT scan
     # of the orbits". A figure that named no view carries the station's whole
     # findings blob instead, and `expected_modalities_for` then guesses from
