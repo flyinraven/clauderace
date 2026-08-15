@@ -97,10 +97,8 @@ export default function OsceResult() {
   const result = data.result
   // How the paper names it, so a station can be found in the report it came
   // from - "2024 Semester 1 station 13" rather than "Neuro-ophthalmology".
-  const printed = data.station.station_label ?? data.station.station_number
-  const stationName = printed
-    ? `${data.station.exam_period ? `${data.station.exam_period} ` : ''}station ${printed}`
-    : null
+  const printed = data.station.station_label ?? data.station.station_number ?? `#${data.station.id}`
+  const stationName = `${data.station.exam_period ? `${data.station.exam_period} ` : ''}station ${printed}`
 
   const regrade = async () => {
     setRegrading(true)

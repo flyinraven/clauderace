@@ -781,7 +781,7 @@ Every station is rewritten from its rubric, so existing stations pick up the sta
                       <div className="space-y-3 text-sm">
                         <p className="text-slate-600">
                           <span className="font-medium text-slate-800">Station number:</span>{' '}
-                          {station.station_label ?? station.station_number ?? '(none recorded)'}
+                          {station.station_label ?? station.station_number ?? `#${station.id}`}
                         </p>
                         <p className="text-slate-600">
                           <span className="font-medium text-slate-800">Shown at the start:</span>{' '}
