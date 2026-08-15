@@ -336,6 +336,25 @@ def handle_describe_station_figures(ctx: JobContext) -> bool:
     # of these signs the image accounts for, the answer is decisive; asked with
     # it, the grader agrees with what it was told to expect. So a confident
     # image is compared, and where signs are left over they are stated.
+    #
+    # Only for a clinical-exam photograph. An OCT, visual field, angiogram or
+    # scan is a named, self-contained investigation - it was never going to
+    # show a relative afferent pupillary defect, and comparing it against the
+    # station's whole clinical picture always finds that "missing", which
+    # wrote the station's fundus/pupil exam findings as the caption underneath
+    # OCT scans, visual fields, angiograms and an MRI across dozens of
+    # stations. Station 396's brain MRI read "there is an adduction deficit
+    # ... slit-lamp examination shows keratic precipitates" - a different
+    # question's eye exam, not anything the scan itself contains.
+    # Named investigations, not a clinical exam - a scan cannot carry a sign
+    # only the exam can show, so this is never the wrong image for lacking
+    # one. Unset modality is left checked, same as before this existed: the
+    # bug was scans wrongly compared, not unlabelled figures.
+    NOT_A_CLINICAL_EXAM = {
+        "oct", "visual_field", "radiology", "angiogram", "topography",
+        "ultrasound", "pathology",
+    }
+
     unshown: str | None = None
     wants_checking = (
         figure is not None
@@ -343,6 +362,7 @@ def handle_describe_station_figures(ctx: JobContext) -> bool:
         and figure.image_id is not None
         and not doubtful
         and bool((figure.verification_notes or "").strip())
+        and (figure.modality or "") not in NOT_A_CLINICAL_EXAM
     )
     if wants_checking:
         try:

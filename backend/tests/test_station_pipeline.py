@@ -2277,6 +2277,44 @@ def test_the_words_describe_what_the_picture_misses_not_the_station(db, admin, r
     assert "external photograph of the orbits" not in seen[1]
 
 
+def test_a_scan_is_not_compared_against_the_whole_clinical_exam(db, admin, run_jobs, ai):
+    """An OCT cannot show a relative afferent pupillary defect, and being asked
+    what it does not show always says "everything" - which is how station 396's
+    brain MRI came to be captioned with a different question's eye exam.
+
+    A named investigation stands on its own image; only a clinical-exam
+    photograph gets compared against the station's findings for what it misses.
+    """
+    from app.models import Image, OsceFigure
+    from app.services.jobs.runner import create_job
+    from app.services.osce.station_images import JOB_DESCRIBE_STATION_FIGURES
+
+    station = make_station(db)
+    station.findings_elicited = "Left ptosis, limited abduction, reduced corneal sensation."
+    image = Image(sha256="9" * 63 + "4", content_type="image/jpeg", data=b"jpeg",
+                  size_bytes=4, origin="web")
+    db.add(image)
+    db.flush()
+    figure = OsceFigure(station_id=station.id, position=0, image_id=image.id,
+                        is_approved=True, verification_status="faithful",
+                        match_confidence=1.0, modality="oct",
+                        wanted_description="OCT macula showing cystoid change",
+                        verification_notes="Cystoid macular oedema on OCT.")
+    db.add(figure)
+    db.commit()
+
+    called = []
+    ai.responder = lambda body, n: called.append(n) or json.dumps({"unshown": "ptosis"})
+
+    create_job(db, JOB_DESCRIBE_STATION_FIGURES, payload={"figure_ids": [figure.id]},
+               created_by_id=admin.id, total_steps=1)
+    run_jobs()
+
+    db.refresh(figure)
+    assert not called, "an OCT was never asked what clinical-exam signs it lacks"
+    assert not figure.described_findings, "the scan's own image stands on its own"
+
+
 def test_words_beside_a_photograph_do_not_erase_its_tier(db, admin, run_jobs, ai):
     """"described" says the figure IS words, which is only true without a picture.
 
