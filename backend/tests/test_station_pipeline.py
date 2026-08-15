@@ -1561,6 +1561,7 @@ def test_sourcing_hands_over_to_describing_when_it_finishes(db, admin, run_jobs,
     ctx = _Ctx()
     ctx.db = db
     ctx.job = job
+    ctx.payload = job.payload or {}
     _queue_description_of_gaps(ctx)
 
     from app.models import Job

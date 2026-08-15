@@ -117,7 +117,8 @@ def handle_source_station_images(ctx: JobContext) -> bool:
 def _queue_description_of_gaps(ctx: JobContext) -> None:
     from app.services.jobs.runner import create_job
 
-    ids = figures_needing_description(ctx.db)
+    station_ids = ctx.payload.get("station_ids") or []
+    ids = figures_needing_description(ctx.db, station_ids=station_ids)
     if not ids:
         # Nothing to describe still has to be settled: the pass that follows is
         # what holds the end state, not a tidy-up after a description.

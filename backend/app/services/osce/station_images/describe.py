@@ -245,7 +245,9 @@ def describe_findings(
     return text, problem
 
 
-def figures_needing_description(db: Session) -> list[int]:
+def figures_needing_description(
+    db: Session, station_ids: list[int] | None = None
+) -> list[int]:
     """Figures with no image, whose station therefore has nothing to show.
 
     A figure reaches this state two ways: every candidate was rejected as the
@@ -274,21 +276,27 @@ def figures_needing_description(db: Session) -> list[int]:
 
     Already-described figures are skipped, so the pass can be re-run after a
     sourcing round without paying twice for the same station.
+
+    `station_ids`, when given, limits the sweep to those stations' figures.
+    Left unset, this reads the whole bank - only an explicit full-bank repair
+    should do that; a single paper's sourcing job passes its own station_ids
+    so it doesn't drag in every other paper's unrelated backlog.
     """
+    query = select(OsceFigure).where(
+        or_(
+            OsceFigure.image_id.is_(None),
+            # Any approved image with no words yet. A doubtful or
+            # representative one is described outright; a confident one
+            # is compared against the station first, and described only
+            # where signs are left over.
+            OsceFigure.is_approved.is_(True),
+        )
+    )
+    if station_ids is not None:
+        query = query.where(OsceFigure.station_id.in_(station_ids))
     return sorted(
         f.id
-        for f in db.execute(
-            select(OsceFigure).where(
-                or_(
-                    OsceFigure.image_id.is_(None),
-                    # Any approved image with no words yet. A doubtful or
-                    # representative one is described outright; a confident one
-                    # is compared against the station first, and described only
-                    # where signs are left over.
-                    OsceFigure.is_approved.is_(True),
-                )
-            )
-        ).scalars()
+        for f in db.execute(query).scalars()
         if not (f.described_findings or "").strip()
     )
 
