@@ -73,6 +73,28 @@ def test_deck_labelled_by_subspecialty_and_day_still_splits_per_station() -> Non
     assert "Uveitis - Friday" in blocks[3].text
 
 
+def test_a_station_opening_with_summary_of_station_is_not_swallowed() -> None:
+    """2017 Semester 2 opens stations 4 and 5 with "Summary of Station", not
+    "Summary of Case" - neither prior marker matched, so both were merged into
+    station 3's block and the paper ingested as 16 stations of 18.
+    """
+    pages = COVER + [
+        p for n in range(1, 4) for p in _numbered_station(n)
+    ] + [
+        "Summary of Station\n5 year old male with esotropia\n"
+        "Aim of the Station\nExamine a paediatric patient\n"
+        "Paediatrics – Station 04",
+        "Findings\nAccommodative esotropia\nPaediatrics – Station 04",
+    ] + [
+        p for n in range(5, 7) for p in _numbered_station(n)
+    ]
+    kind, blocks = segment(_deck(pages))
+
+    assert kind == "osce"
+    assert [b.number for b in blocks] == [1, 2, 3, 4, 5, 6]
+    assert "esotropia" in blocks[3].text
+
+
 def test_a_station_opening_across_two_slides_is_not_split_in_two() -> None:
     pages = COVER + [
         "Summary of Case\n62F with a red eye\nCornea - Thursday",

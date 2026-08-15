@@ -34,7 +34,17 @@ STATION_RE = re.compile(r"\bstation\s*0*(\d{1,2})([A-Za-z])?\b", re.IGNORECASE)
 # footer and some label them only by subspecialty and day, so this — not the
 # station number — is what reliably marks where one station ends and the next
 # begins.
-CASE_START_RE = re.compile(r"aim\s+of\s+the\s+station|summary\s+of\s+case", re.IGNORECASE)
+#
+# "Summary of station" is a fourth spelling, not a typo of the other two. 2017
+# Semester 2 opens nine stations with "SUMMARY OF CASE" and two - 4 and 5 -
+# with "SUMMARY OF STATION" only; neither prior pattern matched, so both were
+# swallowed into station 3's block and the paper ingested as sixteen stations
+# of eighteen, the exact failure this function's own docstring already
+# describes for a different wording gap.
+CASE_START_RE = re.compile(
+    r"aim\s+of\s+the\s+station|summary\s+of\s+case|summary\s+of\s+station",
+    re.IGNORECASE,
+)
 
 # A station's opening runs over two slides often enough that its summary and its
 # aim can land on different pages. Starts this close together are one station -
