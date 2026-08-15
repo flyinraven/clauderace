@@ -782,7 +782,19 @@ def preview_station(station_id: int, admin: AdminUser, db: DbSession) -> dict[st
                 "shown_at": "start",
             }
             for f in sorted(station.figures, key=lambda f: f.position)
-            if f.image_id and f.id not in _all_bound_ids(station.prompts or [])
+            # An image, or the protocol's last resort - the examiner's words
+            # standing in for a photograph that could not be found. Requiring
+            # image_id alone made this preview report "no image at all" for
+            # station 361, which had none, but did have an approved
+            # description of the lesion the candidate would actually read.
+            # `visible_figure` in helpers.py already knows this rule; kept as
+            # its own filter here because the admin view also wants
+            # unapproved figures and their status, which the candidate-facing
+            # one deliberately withholds.
+            if (
+                (f.image_id or (f.described_findings and f.described_findings_approved))
+                and f.id not in _all_bound_ids(station.prompts or [])
+            )
         ],
         # Why a candidate could not answer this station in full, if anything.
         # The same judgement the audit and the sourcing selection use, so the

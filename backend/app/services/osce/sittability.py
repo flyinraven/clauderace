@@ -348,8 +348,8 @@ _ANTERIOR_RE = re.compile(
     re.IGNORECASE,
 )
 _POSTERIOR_RE = re.compile(
-    r"\bposterior\s+segment\b|\bfundus\b|\bretina\b|\boptic\s+(?:nerve|disc)\b|"
-    r"\bmacula\b|\bvitreous\b",
+    r"\bposterior\s+segment\b|\bposterior\s+pole\b|\bfundus\b|\bretina\b|"
+    r"\boptic\s+(?:nerve|disc)\b|\bmacula\b|\bvitreous\b",
     re.IGNORECASE,
 )
 _ANTERIOR_MODALITIES = {"external", "slit_lamp"}

@@ -1188,7 +1188,12 @@ PRESENTS_INVESTIGATION_RE = re.compile(
     # named them, because this regex only ever recognised imaging.
     r"blood\s+(?:test|examination|count)\w*|laboratory\s+report\w*|"
     r"lab\s+report\w*|pathology\s+report\w*|serology\s+result\w*|"
-    r"biopsy\s+report\w*|quantiferon\w*)",
+    r"biopsy\s+report\w*|quantiferon\w*)"
+    # "Please examine the right periocular region in this photograph" makes
+    # the same promise as "Here is a photograph" but from the middle of the
+    # sentence, where the lead-in phrases above never look. Station 361 had
+    # no image at all and this wording sailed past every check built so far.
+    r"|\bin\s+(?:this|these)\s+(?:photograph|image)\w*\b",
     re.IGNORECASE,
 )
 

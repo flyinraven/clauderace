@@ -45,6 +45,8 @@ interface PreviewFigure {
   id: number
   image_id: number | null
   caption: string | null
+  described_findings: string | null
+  described_findings_approved: boolean
   is_approved: boolean
   verification_status: string
 }
@@ -52,6 +54,34 @@ interface PreviewFigure {
 /** The station's clinical image, as the candidate would be shown it. */
 function PreviewFigureView({ figure }: { figure: PreviewFigure }) {
   const { url, error } = useImage(figure.image_id)
+
+  // The protocol's last resort: no photograph could be found, so the
+  // examiner states the findings instead - a real, marked view, not an
+  // empty one. Rendering the image frame here sat on "Loading image…"
+  // forever, and this preview reported the station as having no image at
+  // all when the candidate would actually read this text.
+  if (!figure.image_id) {
+    return (
+      <figure className="overflow-hidden rounded-md border border-slate-200 bg-white">
+        {figure.described_findings ? (
+          <div className="p-3">
+            <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+              On examination
+            </p>
+            <p className="mt-0.5 text-sm text-slate-700">{figure.described_findings}</p>
+            {!figure.described_findings_approved && (
+              <p className="mt-1 text-xs font-medium text-amber-700">
+                not approved — the candidate will not see this
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="p-4 text-xs text-slate-500">No image, and no words either.</div>
+        )}
+      </figure>
+    )
+  }
+
   return (
     <figure className="overflow-hidden rounded-md border border-slate-200 bg-white">
       {url ? (
