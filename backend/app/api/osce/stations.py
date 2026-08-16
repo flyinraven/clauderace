@@ -583,6 +583,61 @@ def add_station_figure(
     return {"figure_id": figure.id, "job_id": job_id}
 
 
+class PromptWording(BaseModel):
+    label: str
+    text: str = Field(min_length=1)
+
+
+class SetPromptWordingRequest(BaseModel):
+    prompts: list[PromptWording] = Field(min_length=1)
+
+
+@router.put("/stations/{station_id}/prompts")
+def set_prompt_wording(
+    station_id: int, payload: SetPromptWordingRequest, admin: AdminUser, db: DbSession
+) -> dict[str, Any]:
+    """Rewrite what the examiner says, by hand and without the model.
+
+    The papers from 2011 print the questions the real candidates were asked, and
+    those are better than anything generated from the rubric: generation reads
+    the recorded findings as context and hands them back in the question, so a
+    station whose paper says "please examine this patient's anterior segments"
+    was asking "this patient's left eye is aphakic, with a patent peripheral
+    iridotomy [...] what do these findings tell you?" - every mark for eliciting
+    a sign given away in the asking. `POST /stations/build-prompts` is the only
+    other way to change wording and it would regenerate the same fault at the
+    cost of a model call per station.
+
+    Wording only. Marks, timings, rubric and figure bindings are left exactly as
+    they are: the rubric is what the marking runs against, so moving it here
+    would silently change what a sitting scores.
+    """
+    station = db.get(OsceStation, station_id)
+    if station is None:
+        raise HTTPException(status_code=404, detail="Station not found")
+    if not station.prompts:
+        raise HTTPException(status_code=400, detail="Station has no prompts to reword")
+
+    by_label = {str(p.get("label")): p for p in station.prompts}
+    unknown = [p.label for p in payload.prompts if p.label not in by_label]
+    if unknown:
+        # Refused wholesale rather than partly applied: a caller that has the
+        # labels wrong has the mapping wrong, and half-rewritten prompts are
+        # harder to spot than none.
+        raise HTTPException(
+            status_code=400,
+            detail=f"Station has no prompt(s) labelled {', '.join(sorted(unknown))}",
+        )
+
+    changed = [p.label for p in payload.prompts if by_label[p.label].get("text") != p.text]
+    for item in payload.prompts:
+        by_label[item.label]["text"] = item.text
+
+    flag_modified(station, "prompts")
+    db.commit()
+    return {"station_id": station.id, "reworded": changed}
+
+
 @router.delete("/figures/{figure_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_figure(figure_id: int, admin: AdminUser, db: DbSession) -> None:
     """Remove a figure entirely, rather than just detaching its image.
