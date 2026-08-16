@@ -62,6 +62,20 @@ MIN_DIMENSION_PX = 100
 # Banners are extremely wide relative to their height.
 MAX_ASPECT_RATIO = 4.0
 MIN_SIZE_BYTES = 4 * 1024
+# Figures are printed at press resolution and displayed in a browser, so the
+# tail end of that detail is never seen. Capping the long edge is what keeps the
+# extraction peak off the container's memory limit: a 4000x3000 fundus photo is
+# four times the pixels of the same photo at this cap.
+#
+# 2000 rather than something tighter because a candidate zooms into these. It
+# leaves a visual field chart's decibel numerals and an OCT report's small print
+# legible at full magnification, and it is still above the long edge of every
+# figure the reports actually embed at anything under press resolution - so a
+# figure that is already a sensible size is passed through untouched.
+MAX_DIMENSION_PX = 2000
+# Re-encoding costs CPU and can only lose detail, so it is worth doing only on
+# images big enough for the saving to matter.
+DOWNSCALE_ABOVE_BYTES = 256 * 1024
 # Anything sitting entirely inside these bands of the page is running header or
 # footer - a college crest, a page rule, an examiner-report watermark. A
 # clinical photograph is never printed in the top eighth of the page with text
@@ -156,6 +170,66 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def downscale_oversized(
+    blob: bytes, content_type: str, width: int, height: int
+) -> tuple[bytes, str, int, int]:
+    """Shrink a figure to `MAX_DIMENSION_PX` on its long edge, if it exceeds it.
+
+    Returns the bytes to keep and their content type and pixel size, which are
+    the originals whenever shrinking would not help - an image already within
+    the cap, one too small to be worth re-encoding, or one where the re-encode
+    came out no smaller than what it replaced. Nothing here is allowed to lose a
+    figure: an image the decoder cannot read is passed through untouched.
+
+    `width` and `height` are the caller's already-known dimensions, taken on
+    trust rather than re-derived, because the fallback for an unreadable header
+    is 0x0 and a figure recorded as 0x0 is later discarded as a logo.
+
+    The format is preserved rather than normalised to JPEG. Visual field charts
+    and OCT reports arrive as PNG line art, and JPEG's ringing around high
+    contrast edges is exactly what makes a decibel value ambiguous.
+    """
+    if max(width, height) <= MAX_DIMENSION_PX or len(blob) < DOWNSCALE_ABOVE_BYTES:
+        return blob, content_type, width, height
+
+    try:
+        from PIL import Image as PILImage
+
+        with PILImage.open(io.BytesIO(blob)) as im:
+            fmt = im.format or ""
+            im = im.copy()
+            scale = MAX_DIMENSION_PX / max(im.width, im.height)
+            target = (max(1, round(im.width * scale)), max(1, round(im.height * scale)))
+            im = im.resize(target, PILImage.LANCZOS)
+
+            buffer = io.BytesIO()
+            if fmt == "JPEG":
+                # CMYK separations come out of print-ready PDFs and are not what
+                # a browser will show.
+                if im.mode not in ("RGB", "L"):
+                    im = im.convert("RGB")
+                im.save(buffer, format="JPEG", quality=88, optimize=True)
+                new_type = "image/jpeg"
+            else:
+                im.save(buffer, format="PNG", optimize=True)
+                new_type = "image/png"
+            shrunk = buffer.getvalue()
+    except Exception:  # noqa: BLE001 - an unreadable figure is kept, not dropped
+        logger.debug("Could not downscale a %s image of %d bytes", content_type, len(blob))
+        return blob, content_type, width, height
+
+    if len(shrunk) >= len(blob):
+        # PNG line art sometimes re-encodes larger than it started. Keeping the
+        # original is both smaller and lossless.
+        return blob, content_type, width, height
+
+    logger.debug(
+        "Downscaled a figure from %dx%d (%d KB) to %dx%d (%d KB)",
+        width, height, len(blob) // 1024, target[0], target[1], len(shrunk) // 1024,
+    )
+    return shrunk, new_type, target[0], target[1]
+
+
 # --- Dispatch -------------------------------------------------------------
 def extract_document(data: bytes, filename: str, content_type: str) -> ExtractedDocument:
     name = (filename or "").lower()
@@ -201,15 +275,29 @@ def extract_pdf(data: bytes) -> ExtractedDocument:
                 except Exception:  # noqa: BLE001 - skip unreadable image objects
                     logger.debug("Could not extract image xref %s", xref)
                     continue
-                blob = info["image"]
+                # Shrunk here, where the bytes first appear, rather than on the
+                # way to the database: everything downstream - the whole
+                # document's worth of figures held at once, the block cache that
+                # pins them for the length of the job - holds whatever this
+                # decides to keep.
+                blob, content_type, width, height = downscale_oversized(
+                    info["image"],
+                    f"image/{'jpeg' if info['ext'] == 'jpg' else info['ext']}",
+                    info.get("width", 0),
+                    info.get("height", 0),
+                )
+                # Hashed after shrinking, so the template-detection and
+                # duplicate checks compare like with like. Re-encoding is
+                # deterministic, so a letterhead repeated on ninety pages still
+                # collapses to one hash.
                 digest = sha256_bytes(blob)
                 hash_pages.setdefault(digest, set()).add(page_number)
                 images.append(
                     ExtractedImage(
                         data=blob,
-                        content_type=f"image/{'jpeg' if info['ext'] == 'jpg' else info['ext']}",
-                        width=info.get("width", 0),
-                        height=info.get("height", 0),
+                        content_type=content_type,
+                        width=width,
+                        height=height,
                         page_number=page_number,
                         sha256=digest,
                         bbox=placements.get(xref),
@@ -357,17 +445,23 @@ def extract_docx(data: bytes) -> ExtractedDocument:
             blob = rel.target_part.blob
         except Exception:  # noqa: BLE001
             continue
-        digest = sha256_bytes(blob)
-        if digest in seen or len(blob) < MIN_SIZE_BYTES:
+        if len(blob) < MIN_SIZE_BYTES:
             continue
-        seen.add(digest)
         width, height = _image_dimensions(blob)
         if min(width, height) < MIN_DIMENSION_PX:
             continue
+        blob, content_type, width, height = downscale_oversized(
+            blob, _content_type_for(rel.target_part.partname), width, height
+        )
+        # Hashed after shrinking, for the same reason as the PDF path.
+        digest = sha256_bytes(blob)
+        if digest in seen:
+            continue
+        seen.add(digest)
         images.append(
             ExtractedImage(
                 data=blob,
-                content_type=_content_type_for(rel.target_part.partname),
+                content_type=content_type,
                 width=width,
                 height=height,
                 page_number=1,
