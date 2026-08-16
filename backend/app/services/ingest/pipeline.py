@@ -465,6 +465,7 @@ def _attach_figures(
                 caption=spec.get("caption") or image.caption,
             )
         )
+        image.data = b""
 
     # Captions the model saw in the text but for which no image was extracted -
     # kept so an administrator can source one manually or via image search.
@@ -575,6 +576,11 @@ def _attach_station_figures(
                 is_approved=True,
             )
         )
+        # The bytes are safely in `record` now. `block` lives in _BLOCK_CACHE
+        # for the whole ingest job - a 178-page paper's worth of full-resolution
+        # photos would otherwise all sit in memory at once, most of them for
+        # blocks already written.
+        extracted.data = b""
 
 
 JOB_RECOVER_DROPPED_STATION = "recover_dropped_station"
