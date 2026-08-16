@@ -168,12 +168,20 @@ def describe_findings(
                 task="model_answer",
                 system=DESCRIBE_SYSTEM,
                 user=user,
-                # Enough for the description AND whatever the model thinks
-                # first. At 320 the reply was cut off mid-JSON and every station
-                # came back "Could not describe findings" - a parse failure
-                # reported as the model declining, which is why 47 stations
-                # looked like refusals.
-                max_tokens=900,
+                # No ceiling of its own: this uses the configured
+                # `ai.max_tokens`, which is what the truncation error tells an
+                # administrator to raise.
+                #
+                # It has been guessed at twice now. At 320 the reply was cut off
+                # mid-JSON and every station came back "Could not describe
+                # findings" - a parse failure reported as the model declining,
+                # which is why 47 stations looked like refusals. 900 was the
+                # next guess and did the same thing to 60 stations in a day,
+                # because the reply has to cover every rubric point and a
+                # station with many of them needs more room than any fixed
+                # number set here can anticipate. Output is billed on what the
+                # model actually writes, so a ceiling it does not reach costs
+                # nothing.
                 temperature=0.0,
             )
         except (AIError, ValueError, AttributeError) as exc:
