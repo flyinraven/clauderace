@@ -55,6 +55,48 @@ CASE_START_RE = re.compile(
 # 16 were built.
 CASE_START_MIN_GAP = 2
 
+# The 2011 reports are the two that head each station with its subspecialty and
+# a duration instead of a number or a case summary - "CATARACT" over "9mins",
+# "Strabismus" over "9 min". Nothing else in the archive is written that way,
+# and 2011 Semester 1 ingested as zero stations because of it: no station
+# number, no "summary of case", so both routes found nothing and the classifier
+# called the document unknown.
+#
+# The paper's own words for a subspecialty are not the bank's. It says RETINA,
+# CORNEA, OCULO-PLASTICS and STRABISMUS where the bank says Vitreoretinal,
+# Cornea & External Eye, Oculoplastics & Orbit and Ocular Motility.
+SUBSPECIALTY_HEADINGS = {
+    "cataract": "Cataract",
+    "cornea": "Cornea & External Eye",
+    "cornea & external eye": "Cornea & External Eye",
+    "external eye": "Cornea & External Eye",
+    "glaucoma": "Glaucoma",
+    "neuro-ophthalmology": "Neuro-ophthalmology",
+    "neuro ophthalmology": "Neuro-ophthalmology",
+    "neurophthalmology": "Neuro-ophthalmology",
+    "ocular inflammation": "Ocular Inflammation",
+    "uveitis": "Ocular Inflammation",
+    "ocular motility": "Ocular Motility",
+    "strabismus": "Ocular Motility",
+    "oculoplastics": "Oculoplastics & Orbit",
+    "oculo-plastics": "Oculoplastics & Orbit",
+    "oculoplastic": "Oculoplastics & Orbit",
+    "orbit": "Oculoplastics & Orbit",
+    "paediatrics": "Paediatrics",
+    "paediatric": "Paediatrics",
+    "pediatrics": "Paediatrics",
+    "vitreoretinal": "Vitreoretinal",
+    "retina": "Vitreoretinal",
+    "medical retina": "Vitreoretinal",
+}
+# Searched anywhere in the line, not anchored to its start: five of the twenty
+# headings in 2011 Semester 1 carry the duration mid-line - "QUESTIONS 9mins",
+# "2 CASES- 4mins each", "Station 2 4mins". Anchoring found fifteen of twenty.
+STATION_DURATION_RE = re.compile(r"\b\d{1,2}\s*min", re.IGNORECASE)
+# How far below the heading the duration may sit before the pair stops being a
+# heading and starts being a coincidence.
+HEADING_DURATION_LINES = 2
+
 # Page furniture to drop before handing text to the model.
 NOISE_RE = re.compile(
     r"^\s*(?:page\s+\d+\s+of\s+\d+|RACE\s+(?:OSCE|Written).*|"
@@ -108,6 +150,14 @@ def detect_document_kind(doc: ExtractedDocument) -> str:
         return "osce"
     if seq_hits >= 2:
         return "written"
+    # Last, so a paper that identifies itself either traditional way is never
+    # read this way instead. A report headed only by subspecialty and duration
+    # would otherwise be classified unknown and ingest as nothing at all, which
+    # is what 2011 Semester 1 did: no station numbers, no case summaries, and
+    # the upload finished in under a second having created zero stations.
+    heading_hits = sum(1 for page in doc.pages if subspecialty_heading(page.text))
+    if heading_hits >= 4:
+        return "osce"
     return "unknown"
 
 
@@ -204,6 +254,21 @@ def segment_osce(doc: ExtractedDocument) -> list[Block]:
     # the deck names its own stations that reliably, believe the deck: it can
     # only produce more blocks than the case route by having found stations the
     # case route ran together.
+    # Only consulted when the traditional routes have between them found almost
+    # nothing, and only believed when it finds several times more. 2011
+    # Semester 1 has four stray "Station 2" lines inside its case text, enough
+    # for the numbering route to return two blocks for an eighteen station
+    # paper and to shut this route out if mere emptiness were the test.
+    #
+    # No paper that segments correctly today comes near this: their case and
+    # numbering routes return one block per station, and their pages carry no
+    # bare subspecialty heading over a duration for this to find.
+    traditional = max(len(by_case), len(by_number))
+    if traditional < 4:
+        by_subspecialty = _segment_osce_by_subspecialty(doc)
+        if len(by_subspecialty) > traditional and len(by_subspecialty) >= 4:
+            return by_subspecialty
+
     if len(by_number) > len(by_case) and _numbering_is_trustworthy(by_number):
         return by_number
     if len(by_case) >= 2:
@@ -247,6 +312,63 @@ def _numbering_is_trustworthy(blocks: list[Block]) -> bool:
     # itself reliably enough to override the case markers.
     numbers = sorted({n for n, _ in labels})
     return numbers == list(range(1, len(numbers) + 1))
+
+
+def subspecialty_heading(text: str) -> str | None:
+    """The subspecialty this page is headed by, if it is headed by one at all.
+
+    A line that is nothing but a subspecialty name, with a duration on one of
+    the next couple of lines. Both halves are required: the name alone matches
+    body text that happens to mention glaucoma, and a duration alone appears
+    throughout a report that times every station.
+    """
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for position, line in enumerate(lines[:6]):
+        key = re.sub(r"[^a-z& -]", "", line.lower()).strip()
+        if key not in SUBSPECIALTY_HEADINGS:
+            continue
+        following = lines[position + 1: position + 1 + HEADING_DURATION_LINES]
+        if any(STATION_DURATION_RE.search(other) for other in following):
+            return SUBSPECIALTY_HEADINGS[key]
+    return None
+
+
+def _segment_osce_by_subspecialty(doc: ExtractedDocument) -> list[Block]:
+    """One block per station, cut where a subspecialty heading opens one.
+
+    The last resort, and only ever that: it runs when neither the case markers
+    nor the station numbering found anything, which in the whole archive means
+    the two 2011 reports. Every other paper is cut the traditional way and must
+    stay that way - this route knows only which subspecialty a station belongs
+    to, where the others know which station it is.
+    """
+    starts = [page.number for page in doc.pages if subspecialty_heading(page.text)]
+    if not starts:
+        return []
+
+    blocks: list[Block] = []
+    for position, start in enumerate(starts):
+        end = starts[position + 1] - 1 if position + 1 < len(starts) else doc.page_count
+        pages = [page for page in doc.pages if start <= page.number <= end]
+        if not pages:
+            continue
+        text = "\n".join("\n".join(_clean_lines(page.text)) for page in pages).strip()
+        page_numbers = [page.number for page in pages]
+        blocks.append(
+            Block(
+                kind="OSCE",
+                # Numbered by the order they are printed in. The report gives no
+                # number of its own, and the subspecialty repeats - three
+                # glaucoma stations in 2011 Semester 1 - so the position is the
+                # only thing that tells them apart.
+                number=position + 1,
+                suffix=None,
+                text=text,
+                page_numbers=page_numbers,
+                images=_images_for_pages(doc, page_numbers),
+            )
+        )
+    return blocks
 
 
 def _segment_osce_by_case(doc: ExtractedDocument) -> list[Block]:
