@@ -96,6 +96,8 @@ STATION_DURATION_RE = re.compile(r"\b\d{1,2}\s*min", re.IGNORECASE)
 # How far below the heading the duration may sit before the pair stops being a
 # heading and starts being a coincidence.
 HEADING_DURATION_LINES = 2
+# A heading is a heading, not a sentence that opens with one.
+HEADING_MAX_CHARS = 40
 
 # Page furniture to drop before handing text to the model.
 NOISE_RE = re.compile(
@@ -325,11 +327,26 @@ def subspecialty_heading(text: str) -> str | None:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     for position, line in enumerate(lines[:6]):
         key = re.sub(r"[^a-z& -]", "", line.lower()).strip()
-        if key not in SUBSPECIALTY_HEADINGS:
+        name = SUBSPECIALTY_HEADINGS.get(key)
+        if name is None and len(line) <= HEADING_MAX_CHARS:
+            # A heading that qualifies itself - "CORNEA / REFRACTIVE Sx" - is
+            # still a heading. Without this the refractive surgery station was
+            # swallowed by the glaucoma station above it, and one block held
+            # two cases. Length-capped so it cannot match a sentence that
+            # happens to open with the name of a subspecialty.
+            name = next(
+                (
+                    value
+                    for prefix, value in SUBSPECIALTY_HEADINGS.items()
+                    if key.startswith(f"{prefix} ")
+                ),
+                None,
+            )
+        if name is None:
             continue
         following = lines[position + 1: position + 1 + HEADING_DURATION_LINES]
         if any(STATION_DURATION_RE.search(other) for other in following):
-            return SUBSPECIALTY_HEADINGS[key]
+            return name
     return None
 
 

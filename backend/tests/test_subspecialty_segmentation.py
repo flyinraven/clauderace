@@ -108,3 +108,16 @@ def test_a_few_stray_station_lines_do_not_shut_the_route_out() -> None:
     _, blocks = segment(doc, None)
 
     assert len(blocks) == 5
+
+
+def test_a_heading_that_qualifies_itself_is_still_a_heading() -> None:
+    """"CORNEA / REFRACTIVE Sx" opens its own station. Missing it merged the
+    refractive surgery case into the glaucoma station above it."""
+    assert subspecialty_heading("CORNEA / REFRACTIVE Sx\nSTATION 1  4 minutes\n...") \
+        == "Cornea & External Eye"
+
+
+def test_a_sentence_opening_with_a_subspecialty_is_not_a_heading() -> None:
+    """The length cap is what keeps the prefix match from cutting up prose."""
+    long_line = "Glaucoma is suggested here by the disc appearance and the field loss"
+    assert subspecialty_heading(f"{long_line}\n9 mins\n...") is None
