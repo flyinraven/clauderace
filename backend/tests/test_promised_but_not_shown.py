@@ -97,3 +97,36 @@ def test_naming_a_finding_without_handing_anything_over_is_not_flagged() -> None
     )
 
     assert "promises_what_is_not_shown" not in _kinds(station)
+
+
+# --- what the bank-wide scan turned up ------------------------------------
+# Run over all 589 stations, this check flagged two. Both were the checker
+# being wrong, which is the more useful result: a false positive sends a
+# reviewer to a station that is already correct, and doing that at scale is
+# how a checker stops being read.
+def test_an_orbscan_is_not_a_missing_ultrasound() -> None:
+    """Station 359. `b.?scan` unanchored matched the "bscan" inside Orbscan,
+    reporting a keratoconus station shown its corneal topography as though an
+    ultrasound were absent."""
+    station = _station(
+        "Here are the Orbscan images from 2015 and 2019 for the right eye. "
+        "Describe what they show and what has changed.",
+        [_image("Corneal topography of the right eye")],
+    )
+
+    assert "promises_what_is_not_shown" not in _kinds(station)
+
+
+def test_disc_findings_in_words_answer_a_question_asking_for_disc_photographs() -> None:
+    """Station 469. The fields are shown and the discs are described; the
+    description says "optic disc", not "disc photograph"."""
+    station = _station(
+        "Here are this patient's optic disc photographs and visual fields. "
+        "Describe what they show.",
+        [
+            _image("Visual field test of the left eye"),
+            _described("The right optic disc shows a cup-to-disc ratio of 0.9."),
+        ],
+    )
+
+    assert "promises_what_is_not_shown" not in _kinds(station)

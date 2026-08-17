@@ -51,10 +51,19 @@ _MODALITY_WORDS: dict[str, re.Pattern[str]] = {
     "angiogram": re.compile(r"angiogra|\bFFA\b|\bICG\b", re.I),
     "visual field": re.compile(r"visual field|humphrey|perimetr", re.I),
     "slit lamp view": re.compile(r"slit.?lamp", re.I),
-    "fundus photograph": re.compile(r"fundus|retinal photograph|disc photograph", re.I),
+    # "optic disc" and not only "disc photograph": a station whose disc findings
+    # are stated in words says "the right optic disc shows a cup-to-disc ratio
+    # of 0.9", which answers "here are the optic disc photographs" and must not
+    # be flagged for wording the description does not happen to use.
+    "fundus photograph": re.compile(
+        r"fundus|retinal photograph|optic disc|disc photograph", re.I
+    ),
     "scan": re.compile(r"\bMRI\b|\bCT\b|\bMRA\b", re.I),
-    "topography": re.compile(r"topograph", re.I),
-    "ultrasound": re.compile(r"ultrasound|b.?scan", re.I),
+    # Orbscan is a topographer, and an unanchored `b.?scan` matched the "bscan"
+    # inside it - reporting a keratoconus station shown its corneal topography
+    # as though it were missing an ultrasound.
+    "topography": re.compile(r"topograph|orbscan|pentacam", re.I),
+    "ultrasound": re.compile(r"ultrasound|\bb.?scan\b", re.I),
     "gonioscopy": re.compile(r"gonioscop", re.I),
 }
 # Only where the question is handing something over. "The diagnosis is
