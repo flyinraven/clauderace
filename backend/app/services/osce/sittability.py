@@ -35,6 +35,37 @@ SETTLED_MATCH_CONFIDENCE = 0.78
 
 _MISSING_NOTE_RE = re.compile(r"\[Does NOT show:\s*(.+?)\]", re.S)
 
+# What a question says it is handing over, against what the station is actually
+# showing. This is the fault that survived every other check in this module:
+# nothing here compares the words of a question to the captions of its figures,
+# so a station could say "here is a slit lamp view of the right eye" over a
+# fundus photograph and report itself sittable. Station 605 did exactly that,
+# 604 asked for an OCT above two fundus photographs, and 656 promised the fundus
+# photographs of both eyes with no figure at all. Each was found by reading, one
+# station at a time; none was flagged.
+#
+# Keyed on the modality a candidate would be looking for. Deliberately coarse:
+# it reports a station worth reading, not a verdict.
+_MODALITY_WORDS: dict[str, re.Pattern[str]] = {
+    "OCT": re.compile(r"\bOCT\b|optical coherence", re.I),
+    "angiogram": re.compile(r"angiogra|\bFFA\b|\bICG\b", re.I),
+    "visual field": re.compile(r"visual field|humphrey|perimetr", re.I),
+    "slit lamp view": re.compile(r"slit.?lamp", re.I),
+    "fundus photograph": re.compile(r"fundus|retinal photograph|disc photograph", re.I),
+    "scan": re.compile(r"\bMRI\b|\bCT\b|\bMRA\b", re.I),
+    "topography": re.compile(r"topograph", re.I),
+    "ultrasound": re.compile(r"ultrasound|b.?scan", re.I),
+    "gonioscopy": re.compile(r"gonioscop", re.I),
+}
+# Only where the question is handing something over. "The diagnosis is
+# craniopharyngioma with optic atrophy and visual field defects, how would you
+# manage him" names a field defect without claiming a chart is on screen, and
+# flagging it wasted a search on a station that was already correct.
+_HANDS_OVER_RE = re.compile(
+    r"here (is|are)\b|these are\b|this is (a|an|the)\b|shown (here|below)\b",
+    re.I,
+)
+
 
 @dataclass(frozen=True)
 class Fault:
@@ -120,6 +151,50 @@ def answers_a_view(figure: OsceFigure) -> bool:
     )
 
 
+def _promised_but_not_shown(
+    station: OsceStation, opening: list[OsceFigure]
+) -> list[Fault]:
+    """Questions naming a modality the station is not showing.
+
+    Read against the captions of every figure the candidate can reach, not just
+    the ones this question binds: a station that opens on its OCT answers a
+    question that says "here is the OCT" without owning a binding of its own.
+
+    A figure with no image but an approved description is counted as showing
+    what it describes. Sourcing fails often, the findings are then stated in
+    words, and the reconcile pass rewrites the question to match - a station
+    that has been through that is correct, and flagging it would send the
+    reviewer back to a station already settled.
+    """
+    reachable: list[str] = []
+    for figure in station.figures:
+        if figure.image_id:
+            reachable.append(figure.caption or figure.wanted_description or "")
+        elif figure.described_findings and figure.described_findings_approved:
+            reachable.append(figure.described_findings)
+    shown = " ; ".join(reachable)
+
+    faults: list[Fault] = []
+    for prompt in station.prompts or []:
+        text = str(prompt.get("text") or "")
+        if not _HANDS_OVER_RE.search(text):
+            continue
+        for name, pattern in _MODALITY_WORDS.items():
+            if pattern.search(text) and not pattern.search(shown):
+                faults.append(Fault(
+                    "promises_what_is_not_shown",
+                    f"question {prompt.get('label') or '?'} hands over a "
+                    f"{name} the station is not showing",
+                    # The question's own words are what a search needs, and
+                    # they are the only record of what the station meant to
+                    # show. Where no image can be found the description pass
+                    # states the findings instead, which is equally an answer.
+                    sourcing_hint=text[:200],
+                ))
+                break
+    return faults
+
+
 def station_faults(station: OsceStation) -> list[Fault]:
     """Every reason this station's marks cannot currently be earned."""
     faults: list[Fault] = []
@@ -188,6 +263,9 @@ def station_faults(station: OsceStation) -> list[Fault]:
                 f"{label} is not approved, so nothing is shown for it",
                 fixable_by_sourcing=False,
             ))
+
+    # --- What each question says it is showing ---------------------------
+    faults.extend(_promised_but_not_shown(station, opening))
 
     # --- What each question asks the candidate to read -------------------
     for prompt in station.prompts or []:

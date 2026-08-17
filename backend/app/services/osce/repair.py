@@ -66,6 +66,13 @@ REMEDIES: dict[str, str] = {
     "answers_itself": "unleak",
     "missing_side": "source",
     "missing_structure": "source",
+    # The question hands over a modality the station is not showing. Sourcing
+    # gets one attempt at the thing it names, and where that finds nothing the
+    # reconcile pass restates the question as what the candidate can actually
+    # answer from - which is how "here is a slit lamp view of the right eye"
+    # over a fundus photograph should have been closed, instead of reaching a
+    # sitting and being found by hand.
+    "promises_what_is_not_shown": "bind_then_source_then_reconcile",
 }
 
 

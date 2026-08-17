@@ -132,6 +132,13 @@ export default function OsceResult() {
           <h1 className="mt-1 text-xl font-semibold text-slate-900">
             {stationName && <span className="text-slate-500">{stationName} · </span>}
             {data.station.title ?? data.station.subspecialty ?? 'OSCE station'}
+            {/* The bank's own id, as the circuit list already prints it. It is
+                what a station is called when reporting one, and the paper's
+                numbering repeats across years - three stations are "station
+                11" - so the printed number alone does not identify it. */}
+            <span className="ml-2 font-mono text-sm font-normal text-slate-400">
+              #{data.station.id}
+            </span>
           </h1>
           <p className="text-sm text-slate-500">{data.station.subspecialty}</p>
         </div>
