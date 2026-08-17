@@ -538,6 +538,11 @@ def sitting_result(session_id: int, user: CurrentUser, db: DbSession) -> dict[st
             "station_number": station.station_number,
             "station_label": station.station_label,
             "exam_period": station.exam_period,
+            # Whether there is a paper to name at all. A generated station has
+            # no number and no semester, and the result page was heading those
+            # "station #53" - an internal row id presented as though it were
+            # the college's own numbering.
+            "source": station.source,
             "subspecialty": station.subspecialty,
             "title": station.title,
             "diagnosis": station.diagnosis,

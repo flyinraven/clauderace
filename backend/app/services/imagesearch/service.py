@@ -37,6 +37,16 @@ JOB_ATTACH_IMAGES = "attach_images"
 QUOTA_SETTING_KEY = "imagesearch.usage"
 MIN_DIMENSION_PX = 250
 MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024
+# The byte cap above says nothing about what an image costs once it is decoded,
+# and decoded is how it is held: a well-compressed 3 MB JPEG at 10000x8000 is
+# 240 MB as an RGB bitmap. Sourcing runs inside the API process on a container
+# with well under a gigabyte, opens several candidates per figure and holds the
+# best one across two search sweeps, so a handful of those is an OOM kill - and
+# the kills come in clusters during the sourcing leg, not during extraction.
+#
+# Matched to the cap the ingested figures already get, for the same reason: a
+# candidate zooms into these, and beyond this nothing more is visible on screen.
+MAX_SOURCED_DIMENSION_PX = 2000
 ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
 
@@ -174,6 +184,18 @@ def download_candidate(candidate: ImageCandidate) -> tuple[bytes, str, int, int]
 
     if min(width, height) < MIN_DIMENSION_PX:
         return None
+
+    if max(width, height) > MAX_SOURCED_DIMENSION_PX:
+        # Shrunk here, before anything else holds it. `Image.open` has only read
+        # the header at this point, so the dimensions are known without paying
+        # to decode the whole thing, and everything downstream - verification,
+        # the blind description, the row that gets stored - carries whatever
+        # this returns.
+        from app.services.ingest.extract import downscale_oversized
+
+        data, content_type, width, height = downscale_oversized(
+            data, content_type, width, height
+        )
 
     return data, content_type, width, height
 

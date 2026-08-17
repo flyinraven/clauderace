@@ -41,6 +41,7 @@ interface Payload {
     station_number: number | null
     station_label: string | null
     exam_period: string | null
+    source: string | null
     subspecialty: string | null
     title: string | null
     diagnosis: string | null
@@ -97,8 +98,16 @@ export default function OsceResult() {
   const result = data.result
   // How the paper names it, so a station can be found in the report it came
   // from - "2024 Semester 1 station 13" rather than "Neuro-ophthalmology".
-  const printed = data.station.station_label ?? data.station.station_number ?? `#${data.station.id}`
-  const stationName = `${data.station.exam_period ? `${data.station.exam_period} ` : ''}station ${printed}`
+  //
+  // A generated station has neither a number nor a semester, and falling back
+  // to the row id headed one "station #53", which reads like the college's own
+  // numbering and is not findable in any paper. Say what it is instead.
+  const printed = data.station.station_label ?? data.station.station_number
+  const stationName = data.station.source === 'generated' || (!printed && !data.station.exam_period)
+    ? 'Generated station'
+    : [data.station.exam_period, printed ? `station ${printed}` : null]
+        .filter(Boolean)
+        .join(' · ')
 
   const regrade = async () => {
     setRegrading(true)
