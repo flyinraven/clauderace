@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 from app.api.deps import DbSession, load_owned
 from app.models import OsceSession
@@ -45,6 +46,74 @@ def _clock(sitting: OsceSession):
     )
 
 
+# Words that carry no clinical weight, so overlap between two sentences built
+# only from these means nothing.
+_EMPTY = frozenset("""the a an and or of in on for with to this that these those his her their its
+is are was were be been being as at by from into over under not no any all both each patient
+eye eyes left right bilateral there here also well""".split())
+
+
+def _content(text: str) -> set[str]:
+    """Comparable words. Decimals and fractions survive whole - "6/4.8" and
+    "0.5" are findings - but a sentence-final full stop is not part of the
+    word, and leaving it attached made "eye." fail to match "eye", which
+    dropped a stated intraocular pressure the examiner is meant to give."""
+    out = set()
+    for word in re.findall(r"[a-z0-9/.]{3,}", (text or "").lower()):
+        word = word.strip(".")
+        # A light plural so "Intraocular pressures are 14 and 17" still counts
+        # as the "Intraocular pressure Right 14 mmHg" the station handed over.
+        # Only above four letters: "lash" must not become "las" and start
+        # matching things it has nothing to do with.
+        if len(word) > 4 and word.endswith("s") and not word.endswith("ss"):
+            word = word[:-1]
+        if len(word) >= 3 and word not in _EMPTY:
+            out.add(word)
+    return out
+
+
+def _given_only(figure) -> str | None:
+    """The half of a spoken description the examiner is allowed to hand over.
+
+    `described_findings` was written as the last resort for a figure with no
+    image: the examiner says what the investigation showed. When an image did
+    arrive it is neither - it is the answer, printed under the picture that was
+    supposed to be read for it. Station 623 showed a nine-gaze montage and
+    below it "There is a left hypertropia of 10 prism diopters... a positive
+    3-step test... mild left inferior oblique overaction... an abnormal head
+    posture", which is question A's four critical marks in the examiner's own
+    words. 461 figures across 228 stations were doing this.
+
+    Not all of it is a leak. A real examiner states the acuity and the pressure
+    and expects the candidate to elicit the signs, which is the split the
+    station already carries as `findings_given` and `findings_elicited`. So the
+    sentences grounded in `findings_given` stay and the rest go, rather than
+    blanking the panel and taking the acuities away with it.
+
+    Where the station never recorded a split, nothing is grounded and the whole
+    panel goes. That is the safe direction: the image is still on screen, so no
+    candidate is left with nothing to read.
+    """
+    described = figure.described_findings or ""
+    station = figure.station
+    given = _content(getattr(station, "findings_given", None) or "")
+    if not given:
+        return None
+    kept = []
+    for sentence in re.split(r"(?<=[.!?])\s+", described):
+        words = _content(sentence)
+        if not words:
+            continue
+        # Grounded means the sentence says nothing the station did not already
+        # hand over - every content word of it appears in `findings_given`.
+        # Tolerating a single stray word was tried and is too loose: "There is
+        # lash ptosis." differs from a given history of "progressive ptosis" by
+        # the one word "lash", and that word is the three-mark critical item.
+        if not (words - given):
+            kept.append(sentence.strip())
+    return " ".join(kept) or None
+
+
 def visible_figure(figure) -> dict[str, Any] | None:
     """One figure as the candidate may see it, or None if they may not.
 
@@ -68,6 +137,11 @@ def visible_figure(figure) -> dict[str, Any] | None:
     described = (
         figure.described_findings if figure.described_findings_approved else None
     )
+    # A picture and the findings printed under it is the answer given away.
+    # See `_given_only`: the examiner keeps what he would really state and
+    # stops speaking the signs the candidate is being marked on finding.
+    if shows_image and described:
+        described = _given_only(figure)
     if not shows_image and not described:
         return None
     return {
