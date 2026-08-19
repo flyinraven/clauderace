@@ -73,6 +73,14 @@ REMEDIES: dict[str, str] = {
     # over a fundus photograph should have been closed, instead of reaching a
     # sitting and being found by hand.
     "promises_what_is_not_shown": "bind_then_source_then_reconcile",
+    # Both need a person. A stem that gives away its own rubric is fixed by
+    # rewording, and the automated rewording is a model call that fires on
+    # enough well-formed questions to spend on stations already right; an
+    # unmarked question is fixed by moving marks off a sibling, and inventing
+    # them would change what the paper is out of. Both are in
+    # NOT_WORTH_SPENDING_ALONE so neither pulls a station into a paid run.
+    "stem_gives_away_rubric": "human",
+    "unmarked_question": "human",
 }
 
 
@@ -277,7 +285,11 @@ def handle_repair_stations(ctx: JobContext) -> bool:
 # 58 of the 78 searches in the first repair run for no station made answerable.
 # They stay in `station_faults` - the audit should still say so - and a station
 # being searched for some other reason may still be improved by the pass.
-NOT_WORTH_SPENDING_ALONE = {"representative_only"}
+NOT_WORTH_SPENDING_ALONE = {
+    "representative_only",
+    "stem_gives_away_rubric",
+    "unmarked_question",
+}
 
 
 def stations_needing_repair(db: Session, skip: set[int] | None = None) -> list[int]:

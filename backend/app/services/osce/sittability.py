@@ -345,9 +345,130 @@ def station_faults(station: OsceStation) -> list[Fault]:
 
     faults.extend(_wrong_eye(station))
     faults.extend(_answers_itself(station))
+    faults.extend(_stem_gives_away_rubric(station))
+    faults.extend(_unmarked_question(station))
     faults.extend(_missing_side(station))
     faults.extend(_missing_structure(station))
     return faults
+
+
+# Words too common to mean anything when two sentences share them.
+_COMMON = frozenset("""the a an and or of in on for with to this that these those his her their its
+is are was were be been being as at by from into over under not no non any all both each other others
+patient patients eye eyes left right bilateral both given show shows showing shown present presence
+noting note notes appropriate relevant key including include includes e.g eg such well also would
+could you your candidate identify identifies identified recognise recognises recognised recognize
+recognizes state states stated describe describes described discuss discusses discussed mention
+mentions mentioned correctly accurately significant various further other""".split())
+
+# A rubric item that pays for the candidate SAYING something. Only these can be
+# stolen by a stem - "Discusses appropriate management" cannot be handed over
+# by naming the condition.
+_MARKS_AN_UTTERANCE = re.compile(
+    r"^\s*(?:correctly\s+|accurately\s+)?"
+    r"(identif\w*|recognis\w*|recogniz\w*|notes?|noting|states?|describ\w*|"
+    r"comments?|detects?|appreciat\w*|picks? up)", re.IGNORECASE)
+
+
+def _content_words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z]{4,}", (text or "").lower()) if w not in _COMMON}
+
+
+def _asserted(text: str) -> str:
+    """The part of a question the examiner states, as opposed to asks.
+
+    This is the whole distinction. "What are the criteria for ROP screening?"
+    against an item reading "States the criteria for ROP screening" shares
+    every word and gives away nothing - a question has to name its own subject.
+    "On slit lamp examination, this patient has fine inferior KPs, a low grade
+    anterior chamber reaction, a PSC cataract, and vitreous cells and debris.
+    What do these findings suggest?" shares the same words and hands over 6.5
+    critical marks, because it says them rather than asking for them.
+
+    So only the declarative sentences count, and within a sentence only what
+    comes before the interrogative turns.
+    """
+    out = []
+    for sentence in re.split(r"(?<=[.!?])\s+", text or ""):
+        if sentence.rstrip().endswith("?"):
+            # Keep any clause before the question word: "Given the findings on
+            # the MRI, how would you distinguish..." asserts the first half.
+            split = re.split(
+                r"(what|which|how|why|when|where|who|tell me|give me|please)",
+                sentence, maxsplit=1, flags=re.IGNORECASE)
+            if len(split) > 1 and split[0].strip():
+                out.append(split[0])
+            continue
+        out.append(sentence)
+    return " ".join(out)
+
+
+def _stem_gives_away_rubric(station: OsceStation) -> list[Fault]:
+    """A question that states what its own rubric pays for hearing.
+
+    `_answers_itself` was written for this and reaches only part of it: it
+    tests the stem against the station's DIAGNOSIS, and against a verb list -
+    "shows", "reveals", "there is". Station 467 said "this patient HAS fine
+    inferior KPs..." and walked through untouched, keeping 6.5 critical marks
+    nobody could earn. The diagnosis is not the only thing a stem can give
+    away, and no list of verbs will ever be complete.
+
+    Comparing the stem to the rubric needs neither. If a question asserts the
+    words an item pays for, the mark is gone, whatever verb carried it.
+
+    Never `fixable_by_sourcing`: no image fixes a sentence. It is also listed
+    in `NOT_WORTH_SPENDING_ALONE`, because the automated repair for a leak is a
+    model rewrite and this fault fires on enough well-formed questions that
+    letting it drive one would spend on stations that are already right. A
+    person reads it and rewords it - the same route as `not_approved`.
+    """
+    faults: list[Fault] = []
+    for prompt in station.prompts or []:
+        asserted = _content_words(_asserted(str(prompt.get("text") or "")))
+        if not asserted:
+            continue
+        for item in prompt.get("rubric") or []:
+            text = str(item.get("text") or "")
+            if not _MARKS_AN_UTTERANCE.search(text):
+                continue
+            # The parenthetical stays. It carries the answer, and dropping it
+            # made "long-term complications of retinal vasculitis (e.g.
+            # neovascularisation...)" look stolen because the stem named the
+            # topic, which every question does.
+            key = _content_words(_MARKS_AN_UTTERANCE.sub("", text, count=1))
+            if len(key) < 2:
+                continue
+            if len(key & asserted) / len(key) >= 0.7:
+                faults.append(Fault(
+                    "stem_gives_away_rubric",
+                    f"question {prompt.get('label') or '?'} states what its own "
+                    f"{item.get('marks')}-mark item pays for: {text[:60]!r}",
+                    fixable_by_sourcing=False,
+                ))
+    return faults
+
+
+def _unmarked_question(station: OsceStation) -> list[Fault]:
+    """A question carrying no rubric at all.
+
+    The station's marks are fully allocated to its other questions, so this one
+    cannot score however well it is answered, and the candidate is told so
+    afterwards - "This question carries no marks" - having spent sixty to a
+    hundred and twenty seconds of a nine-minute station on it.
+
+    Only a person can fix it, by moving marks from a sibling item. Inventing
+    them would change what the paper is out of.
+    """
+    return [
+        Fault(
+            "unmarked_question",
+            f"question {prompt.get('label') or '?'} carries no marks, and takes "
+            f"{prompt.get('seconds') or '?'}s of the station",
+            fixable_by_sourcing=False,
+        )
+        for prompt in station.prompts or []
+        if not (prompt.get("rubric") or [])
+    ]
 
 
 _BOTH_RE = re.compile(r"\bboth\s+eyes\b|\bbilateral(?:ly)?\b", re.IGNORECASE)
