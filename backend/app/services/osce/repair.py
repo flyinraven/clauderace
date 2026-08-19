@@ -81,6 +81,10 @@ REMEDIES: dict[str, str] = {
     # NOT_WORTH_SPENDING_ALONE so neither pulls a station into a paid run.
     "stem_gives_away_rubric": "human",
     "unmarked_question": "human",
+    # Not sourcing. Searching is what produced the wrong images in the first
+    # place, and nothing about this fault makes the next search better than the
+    # last one. Recorded so it is known; a person decides.
+    "no_view_of_the_patient": "human",
 }
 
 
@@ -289,6 +293,7 @@ NOT_WORTH_SPENDING_ALONE = {
     "representative_only",
     "stem_gives_away_rubric",
     "unmarked_question",
+    "no_view_of_the_patient",
 }
 
 

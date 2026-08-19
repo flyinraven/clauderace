@@ -347,6 +347,7 @@ def station_faults(station: OsceStation) -> list[Fault]:
     faults.extend(_answers_itself(station))
     faults.extend(_stem_gives_away_rubric(station))
     faults.extend(_unmarked_question(station))
+    faults.extend(_no_view_of_the_patient(station))
     faults.extend(_missing_side(station))
     faults.extend(_missing_structure(station))
     return faults
@@ -469,6 +470,65 @@ def _unmarked_question(station: OsceStation) -> list[Fault]:
         for prompt in station.prompts or []
         if not (prompt.get("rubric") or [])
     ]
+
+
+# What can only be judged by looking at the patient: the face, the lids, the
+# eyes from outside. No scan and no printout answers any of it.
+_NEEDS_THE_PATIENT = re.compile(
+    r"cranial nerve|facial (?:nerve|weakness|palsy)|head posture|ocular motility|"
+    r"eye movements|positions of gaze|ptosis|eyelid|lid position|proptosis|"
+    r"strabismus|squint|cover test|enophthalmos|exophthalmos|globe position",
+    re.IGNORECASE)
+
+# A picture of the patient rather than of an investigation.
+_IS_THE_PATIENT = re.compile(
+    r"external photograph|clinical photograph|face|nine position|positions of gaze|"
+    r"external appearance|photograph of both eyes|slit lamp photograph",
+    re.IGNORECASE)
+
+
+def _no_view_of_the_patient(station: OsceStation) -> list[Fault]:
+    """Marked on examining the patient, with only investigations on screen.
+
+    Station 90 pays 7.5 of its 20 marks for examining the cranial nerves and
+    naming the 5th, 7th, 8th and 12th palsies, and shows one close-up of a
+    cornea - no face, no lid position, no tongue. The candidate scored 2.5.
+    Thirty-seven never-sat stations are like this, five of them with all 20
+    marks resting on an examination the screen cannot support: an orbit
+    station that says "please examine the orbits" over a coronal CT.
+
+    Deliberately NOT `fixable_by_sourcing`, and listed in
+    NOT_WORTH_SPENDING_ALONE. Searching is what produced the bank's wrong
+    images - a blank image approved at 100% confidence, whole stations sourced
+    on the one-word query "Glaucoma" - and nothing about this fault makes the
+    next search better than the last. It is recorded so it is known, and a
+    person decides.
+    """
+    pictures = [f for f in station.figures if f.image_id and f.is_approved]
+    if not pictures:
+        # No image at all is `no_opening_image`'s business, not this one.
+        return []
+    if any(_IS_THE_PATIENT.search(f.caption or "") for f in pictures):
+        return []
+    at_stake = 0.0
+    labels = []
+    for prompt in station.prompts or []:
+        rubric = prompt.get("rubric") or []
+        asks = _NEEDS_THE_PATIENT.search(str(prompt.get("text") or "")) or any(
+            _NEEDS_THE_PATIENT.search(str(r.get("text") or "")) for r in rubric)
+        if not asks:
+            continue
+        at_stake += sum(float(r.get("marks") or 0) for r in rubric)
+        labels.append(str(prompt.get("label") or "?"))
+    if at_stake < 4:
+        return []
+    return [Fault(
+        "no_view_of_the_patient",
+        f"question(s) {', '.join(labels)} are marked on examining the patient "
+        f"({at_stake:g} marks) and the screen shows only "
+        f"{(pictures[0].caption or 'an investigation')[:40]!r}",
+        fixable_by_sourcing=False,
+    )]
 
 
 _BOTH_RE = re.compile(r"\bboth\s+eyes\b|\bbilateral(?:ly)?\b", re.IGNORECASE)

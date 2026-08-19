@@ -150,3 +150,57 @@ def test_neither_kind_can_start_a_run_that_spends():
     for kind in ("stem_gives_away_rubric", "unmarked_question"):
         assert REMEDIES[kind] == "human"
         assert kind in NOT_WORTH_SPENDING_ALONE
+
+
+def test_a_station_marked_on_examining_the_patient_needs_a_view_of_them(db):
+    """Station 90 paid 7.5 of 20 marks for examining the cranial nerves and
+    naming the 5th, 7th, 8th and 12th palsies, and showed one close-up of a
+    cornea. The candidate scored 2.5. Thirty-seven never-sat stations are like
+    this - an orbit station saying "please examine the orbits" over a coronal
+    CT - five of them with all 20 marks resting on it."""
+    from app.models import Image, OsceFigure
+
+    station = make_station(db)
+    image = Image(sha256="c" * 64, content_type="image/jpeg", data=b"j",
+                  size_bytes=1, origin="pdf")
+    db.add(image)
+    db.flush()
+    db.add(OsceFigure(station_id=station.id, position=0, image_id=image.id,
+                      is_approved=True, caption="Coronal CT scan of the orbits"))
+    station.prompts = [{"label": "A", "step": 1, "seconds": 180,
+                        "text": "Please examine the orbits and eyelids.",
+                        "rubric": [{"text": "Identifies the proptosis and ptosis.",
+                                    "marks": 20, "is_critical": True}]}]
+    station.total_marks = 20
+    db.flush()
+    db.refresh(station)
+    assert "no_view_of_the_patient" in _kinds(station)
+
+
+def test_a_photograph_of_the_patient_settles_it(db):
+    """The same station with an external photograph is fine, and a station
+    with no image at all is `no_opening_image`'s business, not this one."""
+    from app.models import Image, OsceFigure
+
+    station = make_station(db)
+    image = Image(sha256="d" * 64, content_type="image/jpeg", data=b"j",
+                  size_bytes=1, origin="pdf")
+    db.add(image)
+    db.flush()
+    db.add(OsceFigure(station_id=station.id, position=0, image_id=image.id,
+                      is_approved=True, caption="External photograph of both eyes"))
+    station.prompts = [{"label": "A", "step": 1, "seconds": 180,
+                        "text": "Please examine the orbits and eyelids.",
+                        "rubric": [{"text": "Identifies the proptosis and ptosis.",
+                                    "marks": 20, "is_critical": True}]}]
+    station.total_marks = 20
+    db.flush()
+    db.refresh(station)
+    assert "no_view_of_the_patient" not in _kinds(station)
+
+
+def test_this_fault_can_never_start_a_search():
+    """Searching is what produced the wrong images. Nothing about this fault
+    makes the next search better than the last, so it goes to a person."""
+    assert REMEDIES["no_view_of_the_patient"] == "human"
+    assert "no_view_of_the_patient" in NOT_WORTH_SPENDING_ALONE
