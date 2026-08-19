@@ -204,3 +204,28 @@ def test_this_fault_can_never_start_a_search():
     makes the next search better than the last, so it goes to a person."""
     assert REMEDIES["no_view_of_the_patient"] == "human"
     assert "no_view_of_the_patient" in NOT_WORTH_SPENDING_ALONE
+
+
+def test_a_preamble_mentioning_both_eyes_is_not_asking_for_both(db):
+    """Station 616: "This young lady has reduced vision of 6/36 in both eyes.
+    Please examine the right fundus." It asks for one eye and says which. The
+    checker matched the acuity preamble, and the repair that followed rewrote
+    the acuity into "reduced vision of 6/36 the right eye"."""
+    from app.models import Image, OsceFigure
+
+    station = make_station(db)
+    image = Image(sha256="e" * 64, content_type="image/jpeg", data=b"j",
+                  size_bytes=1, origin="pdf")
+    db.add(image)
+    db.flush()
+    db.add(OsceFigure(station_id=station.id, position=0, image_id=image.id,
+                      is_approved=True, caption="Fundus photograph of the right eye"))
+    station.prompts = [{"label": "A", "step": 1, "seconds": 180,
+                        "text": "This young lady has reduced vision of 6/36 in "
+                                "both eyes. Please examine the right fundus.",
+                        "rubric": [{"text": "Describes the macular atrophy.",
+                                    "marks": 20, "is_critical": True}]}]
+    station.total_marks = 20
+    db.flush()
+    db.refresh(station)
+    assert "missing_side" not in _kinds(station)

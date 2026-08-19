@@ -600,6 +600,14 @@ def _missing_side(station: OsceStation) -> list[Fault]:
         # about the kind of image opening_figures actually holds.
         if not re.search(r"\bexamin\w*\b", text, re.IGNORECASE):
             continue
+        # And the examine-instruction itself must be the thing asking for both.
+        # Station 616 reads "This young lady has reduced vision of 6/36 in both
+        # eyes. Please examine the right fundus" - it asks for one eye and says
+        # which; only the acuity preamble mentions both. Flagging it invited a
+        # repair that rewrote the acuity into "reduced vision of 6/36 the right
+        # eye".
+        if re.search(r"\bexamin\w*[^.?!]*\b(?:left|right)\b", text, re.IGNORECASE):
+            continue
         faults.append(Fault(
             "missing_side",
             f"question {prompt.get('label') or '?'} asks to examine both eyes, "
