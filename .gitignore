@@ -43,3 +43,5 @@ scratch/
 
 # Database dumps - 30 MB each, and they contain everything.
 backups/
+
+station_review.json
