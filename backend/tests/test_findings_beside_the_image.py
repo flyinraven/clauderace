@@ -124,3 +124,56 @@ def test_a_figure_never_disappears_because_its_words_were_removed(db):
     payload = visible_figure(figure)
     assert payload is not None
     assert payload["image_id"] is not None
+
+
+def test_station_90_words_beside_the_photograph_are_still_the_answer(db):
+    """The first fix handled a picture and words on ONE figure. Station 90 put
+    them on two: a slit lamp view of the cornea, and beside it a separate
+    words-only figure reading "There is left ptosis. The left eye has a corneal
+    opacity and lipid keratopathy. The left side of the tongue is atrophic and
+    deviates to the left on protrusion." Question A pays 5 of its 9.5 marks for
+    saying exactly that. 226 figures were doing this."""
+    station = make_station(db)
+    station.findings_given = "He has a history of tarsorrhaphy and lid load."
+    db.flush()
+    # The real station 90: the photograph carries this description too, and
+    # the words-only figure repeats it. That repetition is the test - a
+    # station whose picture cannot show what the words say keeps them.
+    picture = _figure(db, station, (
+        "There is a corneal opacity and lipid keratopathy in the left eye. "
+        "The left side of the tongue is deviated and atrophic. There is left "
+        "ptosis."
+    ))
+    picture.caption = "External photograph of the left eye"
+    words = _figure(db, station, (
+        "There is left ptosis. The left eye has a corneal opacity and lipid "
+        "keratopathy. The left side of the tongue is atrophic."
+    ), with_image=False)
+    station.prompts = [{"label": "A", "step": 1, "seconds": 90,
+                        "text": "Please examine the cranial nerves.",
+                        "rubric": [{"text": "Identifies corneal opacity and lipid "
+                                            "keratopathy.", "marks": 20}]}]
+    db.flush()
+    assert visible_figure(picture) is not None
+    assert visible_figure(words) is None
+
+
+def test_words_a_question_asked_for_are_never_silenced(db):
+    """A words-only figure BOUND to a question is the result of an
+    investigation the candidate asked for. Removing it leaves the question
+    unanswerable, which is the worse failure - so boundness is the test, not
+    whether the station happens to hold pictures."""
+    station = make_station(db)
+    station.findings_given = "62 year old woman"
+    db.flush()
+    _figure(db, station, None).described_findings = None
+    words = _figure(db, station, (
+        "The visual field shows a dense superior arcuate defect respecting "
+        "the horizontal midline."
+    ), with_image=False)
+    station.prompts = [{"label": "C", "step": 3, "seconds": 90,
+                        "figure_ids": [words.id],
+                        "text": "These are her visual fields. What do they show?",
+                        "rubric": [{"text": "Reads the arcuate defect.", "marks": 20}]}]
+    db.flush()
+    assert visible_figure(words)["described_findings"].startswith("The visual field")

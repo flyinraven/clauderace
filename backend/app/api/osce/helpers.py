@@ -114,6 +114,50 @@ def _given_only(figure) -> str | None:
     return " ".join(kept) or None
 
 
+def _already_shown_in_a_picture(figure) -> bool:
+    """Words that only repeat a photograph already on the station.
+
+    Claimed by no question, so they stand in for the view of the patient rather
+    than for an investigation someone asked for - and saying what a picture
+    beside them shows. Station 90 displayed a slit lamp view of the cornea and,
+    next to it, "There is left ptosis. The left eye has a corneal opacity and
+    lipid keratopathy. The left side of the tongue is atrophic and deviates to
+    the left on protrusion", which is 5 of question A's 9.5 marks.
+
+    "Does the station hold any picture at all" was tried first and is too
+    crude. A station can show an OCT of the macula while its words say "the
+    right eye turns inwards" - a motility sign no OCT can carry - and silencing
+    those takes away something no image supplies. So the test is whether a
+    picture on this station actually covers what the words say.
+
+    Where nothing is covered the words stay, and where the station has no
+    picture at all they stay, because a blank station is the worse failure.
+    """
+    station = figure.station
+    if station is None:
+        return False
+    owned = set()
+    for prompt in station.prompts or []:
+        ids = [i for i in (prompt.get("figure_ids") or []) if i]
+        if prompt.get("figure_id"):
+            ids.append(prompt["figure_id"])
+        owned.update(ids)
+    if figure.id in owned:
+        # An investigation a question asked for. Taking its result away leaves
+        # that question unanswerable.
+        return False
+    said = _content(figure.described_findings)
+    if not said:
+        return False
+    for other in station.figures:
+        if other.id == figure.id or not (other.image_id and other.is_approved):
+            continue
+        shown = _content(f"{other.caption or ''} {other.described_findings or ''}")
+        if shown and len(said & shown) / len(said) >= 0.6:
+            return True
+    return False
+
+
 def visible_figure(figure) -> dict[str, Any] | None:
     """One figure as the candidate may see it, or None if they may not.
 
@@ -141,6 +185,20 @@ def visible_figure(figure) -> dict[str, Any] | None:
     # See `_given_only`: the examiner keeps what he would really state and
     # stops speaking the signs the candidate is being marked on finding.
     if shows_image and described:
+        described = _given_only(figure)
+    elif described and _already_shown_in_a_picture(figure):
+        # Words with no picture of their own, belonging to no question, on a
+        # station that does show pictures. That is not the last-resort fallback
+        # this field was built for - it is the examiner reading out the signs
+        # beside the photograph of them. Station 90 showed a slit lamp view of
+        # the cornea and, next to it, "There is left ptosis. The left eye has a
+        # corneal opacity and lipid keratopathy. The left side of the tongue is
+        # atrophic and deviates to the left on protrusion." Question A pays 5 of
+        # its 9.5 marks for saying those things. 226 of these were live.
+        #
+        # A figure BOUND to a question is left alone however it reads: that one
+        # is the result of an investigation the candidate asked for, and taking
+        # it away leaves the question unanswerable.
         described = _given_only(figure)
     if not shows_image and not described:
         return None
