@@ -229,3 +229,32 @@ def test_a_preamble_mentioning_both_eyes_is_not_asking_for_both(db):
     db.flush()
     db.refresh(station)
     assert "missing_side" not in _kinds(station)
+
+
+def test_a_leak_flag_alone_cannot_start_a_paid_run(db):
+    """`answers_itself` is remedied by `unleak`, a model call, and roughly two
+    thirds of what it flags are well-formed - `_diagnosis_phrases` reads
+    word-pairs out of a diagnosis field that routinely lists signs, so naming a
+    sign and asking its cause looks the same as naming the conclusion.
+
+    Loosening the guard was tried and reverted (see
+    test_the_guard_agrees_with_reading_the_question). Instead the flag stops
+    being able to select a station for a paid repair on its own."""
+    from app.services.osce.repair import stations_needing_repair
+
+    station = make_station(db)
+    station.prompts = [{
+        "label": "C", "step": 4, "seconds": 90,
+        "text": "Summarise your findings and give me three differential "
+                "diagnoses for this patient's acute optic neuropathy.",
+        "rubric": [{"text": "Lists NAION as a differential.", "marks": 20}],
+    }]
+    station.total_marks = 20
+    station.diagnosis = "Non-Arteritic Ischemic Optic Neuropathy (NAION)"
+    db.flush()
+    db.refresh(station)
+
+    # Still reported - the audit should say so.
+    assert "answers_itself" in _kinds(station)
+    # But it does not, by itself, buy a model call.
+    assert station.id not in stations_needing_repair(db)

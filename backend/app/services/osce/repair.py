@@ -294,6 +294,25 @@ NOT_WORTH_SPENDING_ALONE = {
     "stem_gives_away_rubric",
     "unmarked_question",
     "no_view_of_the_patient",
+    # Its remedy is `unleak`, which is a model call, and roughly two thirds of
+    # what it flags are well-formed questions. `_diagnosis_phrases` reads
+    # word-pairs out of the diagnosis field, and that field routinely lists
+    # SIGNS as well as the conclusion - "Thyroid eye disease ... with ongoing
+    # proptosis, diplopia, and motility deficits" - so a question naming a sign
+    # and asking what caused it, which is the pattern prompts.py asks for, is
+    # indistinguishable from one naming the conclusion.
+    #
+    # Loosening the guard was tried and reverted: sparing anything that asks
+    # for a differential also spares "give me three differential diagnoses for
+    # multifocal choroiditis", which prompts.py names as a bad question, and
+    # test_the_guard_agrees_with_reading_the_question caught it. The comment on
+    # that test records what the last over-firing cost - 181 good stations
+    # rejected, and a rebuild's spend.
+    #
+    # So the fault stays exactly as strict as it is, and stops being able to
+    # start a paid run on its own. A station with a real image fault beside it
+    # is still repaired, and unleak still fires there.
+    "answers_itself",
 }
 
 
