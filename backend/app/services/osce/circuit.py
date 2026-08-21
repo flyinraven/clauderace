@@ -243,6 +243,15 @@ scores full marks, a long one circling it does not.
 for extra correct material.
 - If the candidate says something clinically dangerous or plainly wrong, award \
 nothing for that rubric point and say so in the comment.
+- You are told what was on the candidate's screen, and you cannot see the \
+images themselves. So you may say the candidate did not NAME what the rubric \
+asked for. You may not say the image does not show what they described, or \
+that their description was inconsistent with it - you have no way to know \
+that, and the rubric was written from the examiners' report rather than from \
+these pictures. Where a candidate has clearly described a real appearance in \
+specific terms and it is not the appearance the rubric names, withhold the \
+mark as usual and add one sentence noting the discrepancy, so a person can \
+check which is wrong. Do not assert that the candidate misread the picture.
 - [inaudible] markers mean the recording failed there, not that the candidate \
 was silent. Do not penalise them specifically, but you can only mark what you \
 can read.
@@ -260,6 +269,44 @@ Return ONLY a JSON object:
 }"""
 
 
+def _on_screen(station: OsceStation, prompt: dict[str, Any]) -> str:
+    """What the candidate could actually look at while answering this question.
+
+    Nothing in the marking chain has ever known this. The rubric comes from the
+    examiners' report, the model answers are written from the diagnosis and
+    findings, and the marker sees neither the pictures nor their captions - so
+    a rubric point describing the classic appearance of the named condition is
+    scored against a candidate who is describing the photograph in front of
+    them.
+
+    Station 309 is the case: its two photographs are the paper's own, and the
+    one on the left shows a dense corneal opacity with a nasal feeder vessel.
+    The candidate said "lipid keratopathy with feeder vessel from nasal
+    aspect", which is what is there. The rubric wanted corneal hydrops, and
+    they scored 0 of 5.5 with a comment telling them they were wrong.
+
+    This cannot make the marker see the image. It can stop it asserting what
+    the image shows.
+    """
+    from app.api.osce.helpers import _bound_figure_ids, visible_figure
+
+    owned = {i for p in (station.prompts or []) for i in _bound_figure_ids(p)}
+    mine = list(_bound_figure_ids(prompt))
+    lines = []
+    for figure in sorted(station.figures, key=lambda f: f.position):
+        # Bound to this question, or claimed by none and so on screen throughout.
+        if figure.id not in mine and figure.id in owned:
+            continue
+        payload = visible_figure(figure)
+        if not payload:
+            continue
+        if payload.get("image_id"):
+            lines.append(f"  - image: {figure.caption or 'an unlabelled image'}")
+        if payload.get("described_findings"):
+            lines.append(f"  - stated by the examiner: {payload['described_findings']}")
+    return "\n".join(lines) or "  (nothing - this question was answered from memory)"
+
+
 def _prompt_for(station: OsceStation, prompt: dict[str, Any], transcript: str) -> str:
     rubric_lines = "\n".join(
         f"  index={i} | {pt.get('marks', 0):g} mark(s) | {pt.get('text', '')}"
@@ -272,6 +319,7 @@ def _prompt_for(station: OsceStation, prompt: dict[str, Any], transcript: str) -
         f"CASE:\n{station.case_summary or '(none)'}\n\n"
         f"PATIENT HISTORY:\n{station.patient_history or '(none)'}\n\n"
         f"EXAMINATION FINDINGS SHOWN TO THE CANDIDATE:\n{station.findings or '(none)'}\n\n"
+        f"ON THE CANDIDATE'S SCREEN FOR THIS QUESTION:\n{_on_screen(station, prompt)}\n\n"
         f"THE QUESTION YOU ASKED:\n{prompt.get('text', '')}\n\n"
         f"RUBRIC FOR THIS QUESTION:\n{rubric_lines or '  (none)'}\n\n"
         f"TRANSCRIPT OF THE CANDIDATE'S SPOKEN ANSWER:\n"
@@ -356,6 +404,26 @@ def grade_prompt(
                 "comment": str(item.get("comment") or "").strip() or None,
                 "is_critical": bool(point.get("is_critical")),
             }
+        )
+
+    # A rubric with marks in it and nothing marked against it is a failure, not
+    # a score. The model returned an object this code could not read - an empty
+    # `breakdown`, or every index out of range - and rounding that to 0.0 wrote
+    # a fail the candidate earned no part of, with no comment to show why.
+    #
+    # It is the same principle `unmarkable_reason` sets out for transcription,
+    # applied one stage later: a wrong mark is worse than a missing one,
+    # because a missing one says so. Station 577 question D took a 699-word
+    # answer on managing intermittent exotropia and recorded 0 of 4.5 with no
+    # breakdown and no feedback; across the bank that was 59 marks.
+    #
+    # Raising leaves the previous grade untouched and lets the job retry or
+    # report, which is what the caller already does with any other bad response.
+    if rubric and not breakdown:
+        raise ValueError(
+            f"OSCE grading returned no usable breakdown for question {label} "
+            f"({len(data.get('breakdown') or [])} item(s) offered, "
+            f"{len(rubric)} rubric point(s))"
         )
 
     grade.awarded_marks = round(min(total, available), 2)
